@@ -4,4 +4,6 @@ version = "0.1.0"
 description = "AlgoForge"
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
-dependencies = []
+dependencies = [
+    "numpy>=2.3.5",
+]
