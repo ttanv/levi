@@ -23,6 +23,7 @@ af.configure(
 )
 
 # Want to use alphaevolve? Then switch to GEPA?
+af.funsearch(evaluate, bp_instances, budget_rollouts=50)
 af.alphaevolve(evaluate, bp_instances, budget_dollars=20)
 af.gepa(evaluate, bp_instances, budget_seconds=600)
 
