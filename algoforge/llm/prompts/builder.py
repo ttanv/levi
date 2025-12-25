@@ -19,6 +19,7 @@ class OutputMode(Enum):
     FULL = "full"
     DIFF = "diff"
     EVOLVE_BLOCK = "evolve_block"
+    STRUCTURED_DIFF = "structured_diff"
 
 
 @dataclass
@@ -58,6 +59,14 @@ class PromptBuilder:
         self._sections: list[PromptSection] = []
         self._output_mode: OutputMode = OutputMode.FULL
 
+    def _add_line_numbers(self, code: str) -> str:
+        """Add line numbers to code for LLM reference."""
+        lines = code.split('\n')
+        numbered = []
+        for i, line in enumerate(lines, start=1):
+            numbered.append(f"{i:4d} | {line}")
+        return '\n'.join(numbered)
+
     def add_section(self, name: str, content: str, priority: int = 50) -> 'PromptBuilder':
         """Add a custom section to the prompt."""
         self._sections.append(PromptSection(name, content, priority))
@@ -71,7 +80,14 @@ class PromptBuilder:
         """Add parent programs as v1, v2, v3, etc."""
         for i, p in enumerate(parents):
             label = f"v{i + 1}"
-            content = f"Score: {p.score}\n```python\n{p.program.code}\n```"
+
+            # Add line numbers for STRUCTURED_DIFF mode
+            if self._output_mode == OutputMode.STRUCTURED_DIFF:
+                code_display = self._add_line_numbers(p.program.code)
+            else:
+                code_display = p.program.code
+
+            content = f"Score: {p.score}\n```python\n{code_display}\n```"
             self._sections.append(PromptSection(label, content, priority + i))
         return self
 
@@ -84,6 +100,19 @@ class PromptBuilder:
         """Set how the LLM should output changes."""
         self._output_mode = mode
         return self
+
+    def get_response_format(self) -> Optional[dict]:
+        """
+        Get JSON schema for structured output based on current mode.
+
+        Returns:
+            JSON schema dict for LiteLLM's response_format parameter, or None
+            if current mode doesn't use structured outputs.
+        """
+        if self._output_mode == OutputMode.STRUCTURED_DIFF:
+            from ..schemas import STRUCTURED_DIFF_SCHEMA
+            return STRUCTURED_DIFF_SCHEMA
+        return None
 
     def build(self) -> str:
         """Build the final prompt string."""
@@ -111,25 +140,25 @@ def your_function(...):
 DO NOT include any explanation, commentary, or text outside the code block.'''
 
         elif self._output_mode == OutputMode.DIFF:
-            return '''Choose ONE format (do NOT mix them):
+            return '''Output your improved code using SEARCH/REPLACE blocks.
 
-OPTION 1 - SEARCH/REPLACE blocks (for small changes):
+FORMAT:
 <<<<<<< SEARCH
-exact code to find
+exact lines to find
 =======
-replacement code
+replacement lines
 >>>>>>> REPLACE
 
-OPTION 2 - Full code block (for large changes):
-```python
-# complete rewritten code here
-```
+RULES:
+1. Make SURGICAL changes - small, focused edits (5-20 lines max per block)
+2. Copy the SEARCH section EXACTLY from the original (including whitespace/indentation)
+3. Use multiple small SEARCH/REPLACE blocks instead of one large block
+4. Start your response immediately with <<<<<<< SEARCH
+5. Do NOT include any explanation or text outside the blocks
+6. Do NOT use ```python code blocks
 
-CRITICAL:
-- Pick ONE format, use it for your ENTIRE response
-- NEVER put ```python inside SEARCH/REPLACE blocks
-- NEVER put <<<<<<< markers inside code blocks
-- Start immediately with <<<<<<< SEARCH or ```python'''
+GOOD: Replace a single function or a few lines
+BAD: Replace the entire file or 100+ lines at once'''
 
         elif self._output_mode == OutputMode.EVOLVE_BLOCK:
             return '''Modify ONLY the code between # EVOLVE-BLOCK START and # EVOLVE-BLOCK END.
@@ -146,6 +175,38 @@ def function(...):
 ```
 
 DO NOT include any explanation outside the code block.'''
+
+        elif self._output_mode == OutputMode.STRUCTURED_DIFF:
+            return '''You will receive code with LINE NUMBERS (format: "  N | code").
+
+Your task: Improve the code by making targeted edits.
+
+CRITICAL RULES:
+1. Line numbers are 1-indexed (first line is 1)
+2. To replace lines 5-7, set start_line=5, end_line=7
+3. To insert before line 3, set start_line=3, end_line=2
+4. To delete lines, set new_content=""
+5. Edits MUST NOT overlap
+6. DO NOT include line numbers in new_content
+
+Return JSON:
+{
+  "summary": "Brief description",
+  "edits": [
+    {
+      "start_line": 5,
+      "end_line": 7,
+      "new_content": "    improved_code()\\n    return result",
+      "explanation": "Why this improves the code"
+    }
+  ]
+}
+
+BEST PRACTICES:
+- Make small, focused edits (surgical, not comprehensive)
+- Preserve indentation in new_content
+- List edits in order by start_line
+- Explain your reasoning'''
 
         return ""
 

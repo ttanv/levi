@@ -339,6 +339,56 @@ class CVTMAPElitesPool:
 
         return self._n_centroids
 
+    @staticmethod
+    def select_most_diverse(
+        behavior_vectors: list[np.ndarray],
+        k: int,
+    ) -> list[int]:
+        """
+        Select k most diverse indices using farthest-first traversal.
+
+        This guarantees maximum spread in behavior space, not just highest scores.
+
+        Args:
+            behavior_vectors: List of behavior vectors
+            k: Number of diverse items to select
+
+        Returns:
+            List of indices of the k most diverse items
+        """
+        n = len(behavior_vectors)
+        if n <= k:
+            return list(range(n))
+
+        behaviors = np.array(behavior_vectors)
+
+        # Normalize for fair distance computation
+        mins = behaviors.min(axis=0)
+        maxs = behaviors.max(axis=0)
+        ranges = maxs - mins
+        ranges[ranges == 0] = 1
+        normalized = (behaviors - mins) / ranges
+
+        # Farthest-first traversal
+        selected = [0]  # Start with first item
+        min_distances = np.full(n, np.inf)
+
+        for _ in range(k - 1):
+            # Update min distances to selected set
+            last_selected = normalized[selected[-1]]
+            for i in range(n):
+                dist = np.linalg.norm(normalized[i] - last_selected)
+                min_distances[i] = min(min_distances[i], dist)
+
+            # Exclude already selected
+            min_distances[selected] = -np.inf
+
+            # Pick farthest from selected set
+            next_idx = int(np.argmax(min_distances))
+            selected.append(next_idx)
+
+        return selected
+
     def _normalize(self, vec: np.ndarray) -> np.ndarray:
         """Normalize a feature vector to [0, 1] range."""
         if self._mins is None:

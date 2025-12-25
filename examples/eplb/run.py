@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-AlphaEvolve on Transaction Scheduling Problem.
+AlphaEvolve on EPLB (Expert Parallelism Load Balancer) Problem.
 """
 
 import asyncio
@@ -14,9 +14,9 @@ import multiprocessing
 ALGOFORGE_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ALGOFORGE_ROOT))
 
-# Add txn_scheduling resources to path
-TXN_RESOURCES = ALGOFORGE_ROOT.parent / "ADRS-Leaderboard" / "problems" / "txn_scheduling" / "resources"
-sys.path.insert(0, str(TXN_RESOURCES))
+# Add eplb resources to path
+EPLB_RESOURCES = ALGOFORGE_ROOT.parent / "ADRS-Leaderboard" / "problems" / "eplb"
+sys.path.insert(0, str(EPLB_RESOURCES))
 
 import algoforge as af
 from algoforge.core import Program, EvaluationResult
@@ -25,7 +25,6 @@ from algoforge.budget import BudgetManager, BudgetExhausted
 from algoforge.llm import LLMClient, LLMConfig, PromptBuilder, ProgramWithScore, OutputMode
 from algoforge.behavior import BehaviorExtractor, GeneralizedBehaviorExtractor
 from algoforge.behavior.extractor import FeatureVector
-from algoforge.behavior.features import compute_code_length, compute_ast_depth, compute_math_operators
 from algoforge.methods.alphaevolve import extract_code
 import re
 import json
@@ -42,58 +41,55 @@ def validate_python_syntax(code: str) -> tuple[bool, str]:
 
 def quick_validate_code(code: str) -> tuple[bool, str]:
     """Quick validation to catch obvious errors before full evaluation."""
-    # Check for missing function definitions
-    if 'def get_random_costs' not in code:
-        return False, "Missing get_random_costs function"
+    # Check for CUDA usage
+    cuda_patterns = ['.cuda()', 'torch.cuda', '.to("cuda")', ".to('cuda')"]
+    for pattern in cuda_patterns:
+        if pattern in code:
+            return False, f"CUDA usage detected: {pattern}"
 
-    if 'def get_best_schedule' not in code:
-        return False, "Missing get_best_schedule function"
+    # Check for missing function definition
+    if 'def rebalance_experts' not in code:
+        return False, "Missing rebalance_experts function"
 
-    # Check for required imports
-    if 'from txn_simulator import Workload' not in code and 'import Workload' not in code:
-        return False, "Missing Workload import"
+    # Check for import torch
+    if 'import torch' not in code:
+        return False, "Missing import torch"
 
-    # Quick execution test to check for basic errors
+    # Quick execution test with small tensors
     try:
-        import random
-        import time as time_module
-        import math
-        import collections
-        import heapq
-
-        # We can't actually run the code without the workload data,
-        # but we can at least compile and exec it to catch import errors
-        namespace = {
-            'time': time_module, 'random': random, 'np': np, 'numpy': np,
-            'collections': collections, 'heapq': heapq, 'math': math,
-            '__builtins__': __builtins__,
-        }
-
-        # Mock the workload imports for validation
-        class MockWorkload:
-            def __init__(self, data):
-                self.num_txns = 100
-                self.txns = [[(0, 0, 0, 10)] for _ in range(100)]
-                self.debug = False
-            def get_opt_seq_cost(self, seq):
-                return len(seq) * 10
-
-        namespace['Workload'] = MockWorkload
-        namespace['WORKLOAD_1'] = {}
-        namespace['WORKLOAD_2'] = {}
-        namespace['WORKLOAD_3'] = {}
-
+        import torch
+        namespace = {'torch': torch}
         exec(code, namespace)
 
-        if 'get_random_costs' not in namespace:
-            return False, "get_random_costs not defined after exec"
-        if 'get_best_schedule' not in namespace:
-            return False, "get_best_schedule not defined after exec"
+        if 'rebalance_experts' not in namespace:
+            return False, "rebalance_experts not defined after exec"
+
+        # Test with small dummy input
+        test_weight = torch.ones(2, 256)  # 2 layers, 256 experts
+        phy2log, log2phy, logcnt = namespace['rebalance_experts'](
+            test_weight, 288, 8, 4, 32
+        )
+
+        # Validate shapes
+        if phy2log.shape != (2, 288):
+            return False, f"phy2log shape {phy2log.shape} != (2, 288)"
+        if logcnt.shape != (2, 256):
+            return False, f"logcnt shape {logcnt.shape} != (2, 256)"
+        if log2phy.shape[0] != 2 or log2phy.shape[1] != 256:
+            return False, f"log2phy shape {log2phy.shape} invalid"
+
+        # Validate logcnt sums to 288
+        sums = logcnt.sum(dim=1)
+        if not torch.all(sums == 288):
+            return False, f"logcnt sums {sums.tolist()} != 288"
+
+        # Validate phy2log values in range
+        if phy2log.min() < 0 or phy2log.max() >= 256:
+            return False, f"phy2log values out of range [0, 255]: min={phy2log.min()}, max={phy2log.max()}"
 
         return True, ""
     except Exception as e:
         return False, f"Quick validation failed: {str(e)[:100]}"
-
 
 def extract_and_validate_code(response: str) -> tuple[str | None, str]:
     """Extract and validate Python code from LLM response. Returns (code, error_msg)."""
@@ -114,16 +110,16 @@ def extract_and_validate_code(response: str) -> tuple[str | None, str]:
     generic_pattern = r'```\s*(.*?)\s*```'
     generic_matches = re.findall(generic_pattern, response, re.DOTALL)
     for match in generic_matches:
-        if 'def get_random_costs' in match or 'def get_best_schedule' in match:
+        if 'def rebalance_experts' in match:
             candidates.append(match.strip())
 
     # Try raw extraction if no code blocks
-    if not candidates and ('def get_random_costs' in response or 'def get_best_schedule' in response):
+    if not candidates and 'def rebalance_experts' in response:
         lines = response.split('\n')
         code_lines = []
         in_code = False
         for line in lines:
-            if 'import ' in line or 'from ' in line or 'def get_' in line:
+            if 'import torch' in line or 'def rebalance_experts' in line:
                 in_code = True
             if in_code:
                 if line.strip().startswith('```'):
@@ -141,7 +137,7 @@ def extract_and_validate_code(response: str) -> tuple[str | None, str]:
             last_error = f"Syntax: {syntax_err}"
             continue
 
-        # Quick validation
+        # Quick validation with small tensors
         is_valid, validation_err = quick_validate_code(candidate)
         if is_valid:
             return candidate, ""
@@ -151,111 +147,11 @@ def extract_and_validate_code(response: str) -> tuple[str | None, str]:
     return None, last_error
 
 
-def extract_replace_block(diff_response: str) -> str | None:
-    """Extract just the REPLACE portion from a malformed diff response."""
-    # Try to find content after ======= and before >>>>>>> REPLACE
-    pattern = r'=======\s*(.*?)\s*>>>>>>> REPLACE'
-    match = re.search(pattern, diff_response, re.DOTALL)
-    if match:
-        replace_content = match.group(1).strip()
-        # Remove prompt artifacts like "# replacement code"
-        lines = replace_content.split('\n')
-        cleaned_lines = [l for l in lines if not l.strip().startswith('# replacement code')
-                         and not l.strip().startswith('# exact code')]
-        return '\n'.join(cleaned_lines).strip()
-    return None
+def extract_code(response: str) -> str | None:
+    """Extract Python code from LLM response. Returns code or None."""
+    code, _ = extract_and_validate_code(response)
+    return code
 
-def apply_diff_debug(original: str, diff_response: str) -> tuple[str | None, str]:
-    """Apply SEARCH/REPLACE diff blocks to original code. Returns (result, debug_info)."""
-    result = original
-    debug_lines = []
-
-    # Primary pattern: standard SEARCH/REPLACE format
-    pattern = r'<<<<<<< SEARCH\s*(.*?)\s*=======\s*(.*?)\s*>>>>>>> REPLACE'
-    matches = re.findall(pattern, diff_response, re.DOTALL)
-
-    if not matches:
-        debug_lines.append(f"No proper SEARCH/REPLACE blocks found")
-
-        # Check if it's a malformed diff (has ======= and >>>>>>> REPLACE but no <<<<<<< SEARCH)
-        if '=======' in diff_response and '>>>>>>> REPLACE' in diff_response:
-            debug_lines.append(f"Detected malformed diff (missing <<<<<<< SEARCH), trying to extract REPLACE block")
-            replace_code = extract_replace_block(diff_response)
-            if replace_code:
-                is_valid, err = validate_python_syntax(replace_code)
-                if is_valid:
-                    debug_lines.append(f"Extracted REPLACE block ({len(replace_code)} chars), syntax valid")
-                    return replace_code, "\n".join(debug_lines)
-                else:
-                    debug_lines.append(f"Extracted REPLACE block has syntax error: {err}")
-
-        # Fallback to extract_code
-        debug_lines.append(f"Falling back to extract_code")
-        extracted = extract_code(diff_response)
-        if extracted:
-            # Validate syntax before accepting
-            is_valid, err = validate_python_syntax(extracted)
-            if is_valid:
-                debug_lines.append(f"extract_code succeeded, got {len(extracted)} chars, syntax valid")
-                return extracted, "\n".join(debug_lines)
-            else:
-                debug_lines.append(f"extract_code got {len(extracted)} chars but syntax error: {err}")
-                # Check if the extracted code contains diff markers (common failure mode)
-                if '=======' in extracted or '>>>>>>> REPLACE' in extracted:
-                    debug_lines.append(f"Extracted code contains diff markers - this is the bug!")
-                return None, "\n".join(debug_lines)
-        else:
-            debug_lines.append(f"extract_code also failed")
-        return None, "\n".join(debug_lines)
-
-    debug_lines.append(f"Found {len(matches)} SEARCH/REPLACE blocks")
-
-    for i, (search, replace) in enumerate(matches):
-        search_stripped = search.strip()
-        replace_stripped = replace.strip()
-
-        debug_lines.append(f"\n--- Block {i+1} ---")
-        debug_lines.append(f"SEARCH (raw, {len(search)} chars): {repr(search[:100])}...")
-        debug_lines.append(f"SEARCH (stripped, {len(search_stripped)} chars): {repr(search_stripped[:100])}...")
-        debug_lines.append(f"REPLACE (stripped, {len(replace_stripped)} chars): {repr(replace_stripped[:100])}...")
-
-        # Check if raw search exists
-        if search in result:
-            debug_lines.append(f"✓ Raw search found in result")
-        else:
-            debug_lines.append(f"✗ Raw search NOT found in result")
-
-        # Check if stripped search exists
-        if search_stripped in result:
-            debug_lines.append(f"✓ Stripped search found in result")
-            result = result.replace(search_stripped, replace_stripped, 1)
-            debug_lines.append(f"Applied replacement")
-        else:
-            debug_lines.append(f"✗ Stripped search NOT found in result")
-            debug_lines.append(f"First 200 chars of result: {repr(result[:200])}")
-
-            # Fallback: If SEARCH doesn't match but we have a valid REPLACE,
-            # just use the REPLACE as full code (if it's a complete program)
-            if 'def get_random_costs' in replace_stripped:
-                is_valid, err = validate_python_syntax(replace_stripped)
-                if is_valid:
-                    debug_lines.append(f"SEARCH mismatch but REPLACE is valid complete code, using it directly")
-                    return replace_stripped, "\n".join(debug_lines)
-                else:
-                    debug_lines.append(f"REPLACE block has syntax error: {err}")
-
-            return None, "\n".join(debug_lines)
-
-    # Validate final result
-    is_valid, err = validate_python_syntax(result)
-    if not is_valid:
-        debug_lines.append(f"Final result has syntax error: {err}")
-        return None, "\n".join(debug_lines)
-
-    return result, "\n".join(debug_lines)
-
-from txn_simulator import Workload
-from workloads import WORKLOAD_1, WORKLOAD_2, WORKLOAD_3
 from prompts import PROBLEM_DESCRIPTION, FUNCTION_SIGNATURE, SEED_PROGRAM, SEED_INSPIRATIONS
 import litellm
 import logging
@@ -341,6 +237,22 @@ litellm.register_model({
         "output_cost_per_token": 0.0000019,  # $1.90/1M output
         "litellm_provider": "openrouter",
     },
+    "openrouter/z-ai/glm-4.5-air": {
+        "max_tokens": 32768,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 32768,
+        "input_cost_per_token": 0.000000104,  # $0.104/1M input
+        "output_cost_per_token": 0.00000068,  # $0.68/1M output
+        "litellm_provider": "openrouter",
+    },
+    "openrouter/openai/gpt-oss-120b": {
+        "max_tokens": 131072,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 131072,
+        "input_cost_per_token": 0.000000039,  # $0.039/1M input
+        "output_cost_per_token": 0.00000019,  # $0.19/1M output
+        "litellm_provider": "openrouter",
+    },
     "openrouter/deepseek/deepseek-v3.2": {
         "max_tokens": 163840,
         "max_input_tokens": 163840,
@@ -359,239 +271,197 @@ litellm.register_model({
     },
 })
 
+# EPLB Constants
+NUM_REPLICAS = 288
+NUM_GROUPS = 8
+NUM_GPUS = 32
+NUM_NODES = 4
+REBALANCE_INTERVAL = 100
+
 # Pre-load workloads (lazy init for multiprocessing)
 _WORKLOADS = None
-_BASELINE = None
-_EFFECTIVE_OPTIMAL = None
 
 
 def _init_workloads():
     """Initialize workloads (called once per process)."""
-    global _WORKLOADS, _BASELINE, _EFFECTIVE_OPTIMAL
+    global _WORKLOADS
     if _WORKLOADS is None:
-        _WORKLOADS = [Workload(WORKLOAD_1), Workload(WORKLOAD_2), Workload(WORKLOAD_3)]
-        _BASELINE = sum(w.get_opt_seq_cost(list(range(w.num_txns))) for w in _WORKLOADS)
-        theoretical_optimal = sum(max(txn[0][3] for txn in w.txns) for w in _WORKLOADS)
-        _EFFECTIVE_OPTIMAL = theoretical_optimal + 0.10 * (_BASELINE - theoretical_optimal)
-    return _WORKLOADS, _BASELINE, _EFFECTIVE_OPTIMAL
+        import json
+        import torch
+        import os
+
+        # Find workload file
+        docker_path = "/datasets/eplb/expert-load.json"
+        local_path = EPLB_RESOURCES.parent.parent / "datasets" / "eplb" / "expert-load.json"
+
+        if os.path.exists(docker_path):
+            workload_path = docker_path
+        elif local_path.exists():
+            workload_path = str(local_path)
+        else:
+            raise FileNotFoundError(f"Workload file not found. Tried: {docker_path}, {local_path}")
+
+        with open(workload_path, "r") as f:
+            data = json.load(f)
+
+        total_len = len(data['load_history'])
+        workloads = []
+        for i in range(0, total_len, REBALANCE_INTERVAL):
+            start = i
+            end = min(start + REBALANCE_INTERVAL, total_len)
+            load = torch.tensor([x['logical_expert_load'] for x in data['load_history'][start:end]]).sum(dim=0)
+            workloads.append(load)
+
+        _WORKLOADS = workloads
+    return _WORKLOADS
 
 
-class ConstraintEnforcingWorkload:
-    """Wrapper around Workload that enforces O(n) constraint on get_opt_seq_cost calls."""
+def simulate_inference(log2phy, logcnt, workload):
+    """Simulate MoE inference and return balancedness scores."""
+    import torch
 
-    # Class-level call counter shared across all instances
-    _total_calls = 0
-    _max_allowed_calls = 0
-    _constraint_violated = False
+    num_layers, num_logical_experts = workload.shape
 
-    @classmethod
-    def reset_counters(cls, max_calls: int):
-        """Reset counters before evaluation."""
-        cls._total_calls = 0
-        cls._max_allowed_calls = max_calls
-        cls._constraint_violated = False
+    # Initialize physical expert load accumulator
+    num_physical_experts = NUM_REPLICAS
+    total_physical_load = torch.zeros(num_layers, num_physical_experts, dtype=torch.float, device=workload.device)
 
-    @classmethod
-    def get_stats(cls):
-        """Get call statistics."""
-        return {
-            "total_calls": cls._total_calls,
-            "max_allowed": cls._max_allowed_calls,
-            "violated": cls._constraint_violated,
-        }
+    # For each logical expert, distribute load to its physical replicas
+    for layer_id in range(num_layers):
+        for logical_id in range(num_logical_experts):
+            logical_load = workload[layer_id][logical_id].item()
+            if logical_load <= 0:
+                continue
 
-    def __init__(self, workload_data, original_workload_class):
-        """Wrap the original workload."""
-        self._inner = original_workload_class(workload_data)
-        self._local_calls = 0
+            num_replicas = int(logcnt[layer_id][logical_id].item())
+            if num_replicas <= 0:
+                continue
 
-    @property
-    def num_txns(self):
-        return self._inner.num_txns
+            physical_ids = log2phy[layer_id][logical_id][:num_replicas]
+            replica_load = logical_load / num_replicas
+            total_physical_load[layer_id, physical_ids] += replica_load
 
-    @property
-    def txns(self):
-        return self._inner.txns
+    # Calculate balancedness
+    total_load = total_physical_load.sum()
+    if total_load == 0:
+        return 0.0, 0.0
 
-    @property
-    def debug(self):
-        return self._inner.debug
+    # Compute expert load
+    expert_layer_avg = total_physical_load.mean(dim=1).sum().item()
+    expert_layer_max = total_physical_load.max(dim=1).values.sum().item()
+    balancedness_expert = expert_layer_avg / expert_layer_max if expert_layer_max > 0 else 0.0
 
-    @debug.setter
-    def debug(self, value):
-        self._inner.debug = value
+    # Compute GPU load
+    gpu_load = total_physical_load.view(num_layers, NUM_GPUS, -1).sum(dim=2)
 
-    def get_opt_seq_cost(self, seq):
-        """Track calls and enforce O(n) constraint."""
-        ConstraintEnforcingWorkload._total_calls += 1
-        self._local_calls += 1
+    layer_avg = gpu_load.mean(dim=1)
+    layer_max = gpu_load.max(dim=1).values
 
-        # Check if we've exceeded the O(n) budget
-        if ConstraintEnforcingWorkload._total_calls > ConstraintEnforcingWorkload._max_allowed_calls:
-            ConstraintEnforcingWorkload._constraint_violated = True
-            raise RuntimeError(
-                f"O(n) CONSTRAINT VIOLATED: get_opt_seq_cost called {ConstraintEnforcingWorkload._total_calls} times, "
-                f"max allowed is {ConstraintEnforcingWorkload._max_allowed_calls} (2*total_txns). "
-                f"Your algorithm must be O(n), not O(n²)."
-            )
+    avg_load = layer_avg.sum().item()
+    max_load = layer_max.sum().item()
 
-        return self._inner.get_opt_seq_cost(seq)
+    balancedness_gpu = avg_load / max_load if max_load > 0 else 0.0
+
+    return balancedness_gpu, balancedness_expert
 
 
 def evaluate_code_in_process(code: str) -> dict:
-    """Execute scheduling code in a subprocess. Must be picklable."""
-    import random
-    import numpy as np
-    import collections
-    import heapq
-    import math
+    """Execute EPLB code in a subprocess. Must be picklable."""
+    import torch
     import time as time_module
 
     # Ensure paths are set up in worker process
     import sys
     from pathlib import Path
     algoforge_root = Path(__file__).resolve().parents[2]
-    txn_resources = algoforge_root.parent / "ADRS-Leaderboard" / "problems" / "txn_scheduling" / "resources"
+    eplb_resources = algoforge_root.parent / "ADRS-Leaderboard" / "problems" / "eplb"
     if str(algoforge_root) not in sys.path:
         sys.path.insert(0, str(algoforge_root))
-    if str(txn_resources) not in sys.path:
-        sys.path.insert(0, str(txn_resources))
+    if str(eplb_resources) not in sys.path:
+        sys.path.insert(0, str(eplb_resources))
 
-    from txn_simulator import Workload as OriginalWorkload
-    from workloads import WORKLOAD_1, WORKLOAD_2, WORKLOAD_3
-
-    workloads, baseline, _ = _init_workloads()
-
-    # Calculate O(n) budget: allow 20*n calls (seed program uses ~10*n for sampling greedy)
-    # Sum actual num_txns from each workload
-    total_txns = sum(w.num_txns for w in workloads)
-    max_calls_budget = 20 * total_txns  # 20*n total across all workloads (conservative for O(n) algo)
-
-    # Reset constraint tracking
-    ConstraintEnforcingWorkload.reset_counters(max_calls_budget)
-
-    # Create a factory that wraps workloads with constraint enforcement
-    def ConstrainedWorkloadFactory(workload_data):
-        return ConstraintEnforcingWorkload(workload_data, OriginalWorkload)
+    workloads = _init_workloads()
 
     namespace = {
-        'Workload': ConstrainedWorkloadFactory, 'WORKLOAD_1': WORKLOAD_1,
-        'WORKLOAD_2': WORKLOAD_2, 'WORKLOAD_3': WORKLOAD_3,
-        'time': time_module, 'random': random, 'np': np, 'numpy': np,
-        'collections': collections, 'heapq': heapq, 'math': math,
+        'torch': torch,
+        'time': time_module,
         '__builtins__': __builtins__,
     }
 
     try:
         exec(code, namespace)
-        if 'get_random_costs' not in namespace:
-            return {"error": "get_random_costs not defined"}
+        if 'rebalance_experts' not in namespace:
+            return {"error": "rebalance_experts not defined"}
 
-        eval_start = time_module.time()
-        makespan, schedules, algo_time = namespace['get_random_costs']()
-        wall_time = time_module.time() - eval_start
+        balancedness_scores_gpu = []
+        balancedness_scores_expert = []
+        times_algorithm = []
 
-        # Get constraint stats
-        constraint_stats = ConstraintEnforcingWorkload.get_stats()
+        for i in range(len(workloads) - 1):
+            start_time = time_module.perf_counter()
+            _, log2phy, logcnt = namespace['rebalance_experts'](
+                workloads[i],
+                NUM_REPLICAS,
+                NUM_GROUPS,
+                NUM_NODES,
+                NUM_GPUS,
+            )
+            end_time_algorithm = time_module.perf_counter()
 
-        # Validate schedules
-        for i, sched in enumerate(schedules):
-            if set(sched) != set(range(workloads[i].num_txns)):
-                return {"error": f"Invalid schedule for workload {i}"}
+            balancedness_gpu, balancedness_expert = simulate_inference(
+                log2phy, logcnt, workloads[i + 1]
+            )
+
+            balancedness_scores_gpu.append(balancedness_gpu)
+            balancedness_scores_expert.append(balancedness_expert)
+            times_algorithm.append(end_time_algorithm - start_time)
+
+        avg_balancedness_gpu = sum(balancedness_scores_gpu) / len(balancedness_scores_gpu)
+        avg_balancedness_expert = sum(balancedness_scores_expert) / len(balancedness_scores_expert)
+        avg_time_algorithm = sum(times_algorithm) / len(times_algorithm)
+
+        # Scoring formula from evaluator
+        balancedness_score = avg_balancedness_gpu * 90
+        speed_raw = 0.002 / avg_time_algorithm if avg_time_algorithm > 0 else 2.0
+        speed_capped = min(speed_raw, 2.0)
+        speed_score = speed_capped * 5
+
+        if avg_time_algorithm > 0.01:  # > 10ms
+            slow_penalty = min(avg_time_algorithm * 20, 20)
+        else:
+            slow_penalty = 0
+
+        score = balancedness_score + speed_score - slow_penalty
 
         return {
-            "makespan": makespan,
-            "algo_time": algo_time,
-            "wall_time": wall_time,
-            "get_opt_seq_cost_calls": constraint_stats["total_calls"],
-            "max_allowed_calls": constraint_stats["max_allowed"],
+            "score": score,
+            "balancedness_gpu": avg_balancedness_gpu,
+            "balancedness_expert": avg_balancedness_expert,
+            "avg_time": avg_time_algorithm,
+            "balancedness_score": balancedness_score,
+            "speed_score": speed_score,
+            "slow_penalty": slow_penalty,
         }
-    except RuntimeError as e:
-        # Catch O(n) constraint violations
-        if "O(n) CONSTRAINT VIOLATED" in str(e):
-            return {"error": str(e)}
-        return {"error": str(e)}
     except Exception as e:
         return {"error": str(e)}
 
 
 # Initialize in main process
-WORKLOADS, BASELINE, EFFECTIVE_OPTIMAL = None, None, None
+WORKLOADS = None
 
 
-def get_code_structure_features(code: str) -> dict[str, float]:
-    """Compute code structure features using algoforge primitives."""
-    import ast
-    try:
-        prog = Program(code=code, metadata={})
-        tree = ast.parse(code)
-        return {
-            'code_length': compute_code_length(prog, tree),
-            'ast_depth': compute_ast_depth(prog, tree),
-            'math_operators': compute_math_operators(prog, tree),
-        }
-    except SyntaxError:
-        return {'code_length': 0.0, 'ast_depth': 0.0, 'math_operators': 0.0}
 
 
-class WorkloadPerfBehaviorExtractor:
-    """Extracts walltime + code structure as behavior dimensions."""
-
-    def __init__(self):
-        # 4 behavior dimensions: walltime + 3 code structure
-        self.features = ['walltime', 'code_length', 'ast_depth', 'math_operators']
-
-    def extract(self, program: Program) -> FeatureVector:
-        """Extract 4-dimensional behavior: walltime + code structure."""
-        import ast
-
-        # Walltime from metadata (normalized: faster = higher score)
-        # Normalize walltime: 60s -> 0, 0s -> 1
-        raw_walltime = program.metadata.get('walltime', 60.0)
-        normalized_walltime = max(0, 1 - raw_walltime / 60.0)
-        values = {
-            'walltime': normalized_walltime,
-        }
-
-        # Code structure features using algoforge primitives
-        try:
-            tree = ast.parse(program.code)
-            values['code_length'] = compute_code_length(program, tree)
-            values['ast_depth'] = compute_ast_depth(program, tree)
-            values['math_operators'] = compute_math_operators(program, tree)
-        except SyntaxError:
-            values['code_length'] = 0.0
-            values['ast_depth'] = 0.0
-            values['math_operators'] = 0.0
-
-        return FeatureVector(values)
-
-
-def compute_score(makespan: float) -> float:
-    """Compute 0-100 raw score using leaderboard formula."""
-    if makespan >= BASELINE:
-        return 0.0
-    if makespan <= EFFECTIVE_OPTIMAL:
-        return 100.0
-    return ((BASELINE - makespan) / (BASELINE - EFFECTIVE_OPTIMAL)) * 100
-
-
-def compute_adjusted_score(raw_score: float, exec_time: float, timeout: float = 300.0) -> float:
-    """Return raw score without time penalty."""
-    return raw_score
-
-
-def score_fn(output: dict, inp: dict, exec_time: float) -> tuple[float, float]:
-    """Score using leaderboard formula. Returns (raw_score, adjusted_score)."""
+def compute_score(output: dict) -> float:
+    """Extract score from evaluation output."""
     if output is None or "error" in output:
-        return 0.0, 0.0
-    makespan = output.get("makespan", BASELINE)
-    wall_time = output.get("wall_time", 60.0)
-    raw_score = compute_score(makespan)
-    adjusted_score = compute_adjusted_score(raw_score, wall_time)
-    return raw_score, adjusted_score
+        return 0.0
+    return output.get("score", 0.0)
 
 
+def score_fn(output: dict, inp: dict, exec_time: float) -> float:
+    """Score using EPLB formula (higher = better)."""
+    return compute_score(output)
 
 
 # State tracking
@@ -655,13 +525,21 @@ def save_state(
 
 
 # Provider routing for specific models
-PROVIDER_ROUTING = {}
+PROVIDER_ROUTING = {
+    "openrouter/z-ai/glm-4.5-air": {
+        "provider": {
+            "order": ["Nebius Token Factory"],
+            "allow_fallbacks": True,
+        }
+    },
+}
 
 
 async def generate_for_island(island_idx: int, prompt: str, model: str, temperature: float) -> dict:
     """Generate code for one island asynchronously."""
     start = time.time()
-    extra = PROVIDER_ROUTING.get(model, {})
+    extra = PROVIDER_ROUTING.get(model, {}).copy() if model in PROVIDER_ROUTING else {}
+
     try:
         response = await litellm.acompletion(
             model=model,
@@ -693,8 +571,8 @@ def main():
     import random
 
     # Initialize workloads in main process
-    global WORKLOADS, BASELINE, EFFECTIVE_OPTIMAL
-    WORKLOADS, BASELINE, EFFECTIVE_OPTIMAL = _init_workloads()
+    global WORKLOADS
+    WORKLOADS = _init_workloads()
 
     # Model configuration: multiple cheap light models for diversity
     LIGHT_MODELS = [
@@ -709,69 +587,63 @@ def main():
     n_inspirations = 1  # Number of inspiration programs to use alongside parent
 
     # Use generalized behavior extractor with standard features
+    # Features: execution_time, primary_score, loop_count, branch_count,
+    #           function_count, loop_nesting_max, early_exit_count
     extractor = GeneralizedBehaviorExtractor(
         feature_set='standard',
         time_key='execution_time',
         score_key='primary_score',
-        max_time=300.0,  # 5 minute max
+        max_time=60.0,
         max_score=100.0,
     )
 
     # Single archive with deferred centroid initialization
     pool = CVTMAPElitesPool(
         behavior_extractor=extractor,
-        n_centroids=50,  # 50 centroids for more diversity
+        n_centroids=50,  # Will be set from data
         subscore_keys=["execution_time"],
         defer_centroids=True,  # Build centroids from initial LLM generations
     )
 
     # Evaluate only the main seed program
-    print(f"Evaluating seed program...", flush=True)
+    print(f"Evaluating seed program...")
 
     seed_output = evaluate_code_in_process(SEED_PROGRAM)
-    seed_raw_score, seed_adj_score = score_fn(seed_output, {}, 0)
-    seed_exec_time = seed_output.get("wall_time", 60.0)
-    best_makespan = seed_output.get("makespan", BASELINE)
-    print(f"  Seed: makespan={best_makespan:.0f}, raw={seed_raw_score:.1f}, adj={seed_adj_score:.1f}, time={seed_exec_time:.1f}s", flush=True)
+    seed_score = score_fn(seed_output, {}, 0)
+    print(f"  Seed: score={seed_score:.1f}, balancedness={seed_output.get('balancedness_gpu', 0):.4f}, time={seed_output.get('avg_time', 0)*1000:.2f}ms")
 
     seed_program = Program(code=SEED_PROGRAM, metadata={
-        "execution_time": seed_exec_time,
-        "primary_score": seed_adj_score,  # Use adjusted score for archive
-        "raw_score": seed_raw_score,
+        "execution_time": seed_output.get("avg_time", 60.0),
+        "primary_score": seed_score,
     })
-    best_score = seed_adj_score
-    best_raw_score = seed_raw_score
+    best_score = seed_score
     best_program = seed_program
 
     # Get sampler names for display
     sampler_names = pool.get_sampler_names()
 
     print(f"{'='*70}")
-    print(f"AlphaEvolve - Transaction Scheduling (Multi-Sampler)")
+    print(f"AlphaEvolve - EPLB (Expert Parallelism Load Balancer)")
     print(f"{'='*70}")
-    print(f"  Baseline makespan:    {BASELINE}")
-    print(f"  Effective optimal:    {EFFECTIVE_OPTIMAL:.0f}")
-    print(f"  Seed makespan:        {best_makespan:.0f} (raw: {best_raw_score:.1f}, adj: {best_score:.1f})")
+    print(f"  Seed score:           {best_score:.1f}")
     print(f"  Budget:               $5.00")
     print(f"  Samplers:             {', '.join(sampler_names)} (UCB runs 3x)")
     print(f"  Light models:         {', '.join(LIGHT_MODELS)}")
     print(f"  Heavy model:          {HEAVY_MODEL} (every gen)")
-    print(f"  Time penalty:         30% max (30s-300s)")
     print(f"{'='*70}\n")
 
     generation = 0
     total_cost = 0.0
 
-    # Create process pool with worker recycling to prevent memory buildup
-    # Workers restart after 5 tasks, releasing accumulated memory back to OS
-    executor = ProcessPoolExecutor(max_workers=n_workers, max_tasks_per_child=5)
+    # Create process pool once (expensive to create)
+    executor = ProcessPoolExecutor(max_workers=n_workers)
 
     async def initialize_archive():
-        """Generate 100 solutions, build centroids from behaviors, then fill archive."""
-        nonlocal total_cost, best_score, best_raw_score, best_program, best_makespan
+        """Generate 60 solutions, build centroids from behaviors, then fill archive."""
+        nonlocal total_cost, best_score, best_program
 
-        n_init = 100  # Initial population - try 100, keep 50 most diverse
-        print(f"\n[Init] Generating {n_init} initial solutions with light models...", flush=True)
+        n_init = 100  # Larger initial population for more archive diversity
+        print(f"\n[Init] Generating {n_init} initial solutions with light models...")
         loop = asyncio.get_event_loop()
 
         # Use seed program plus inspirations
@@ -787,7 +659,7 @@ def main():
             builder.add_section("Problem", PROBLEM_DESCRIPTION, priority=10)
             builder.add_section("Signature", f"```python\n{FUNCTION_SIGNATURE}\n```", priority=20)
             builder.add_parents([ProgramWithScore(parent_prog, None)], priority=30)
-            builder.set_output_mode(OutputMode.FULL)  # Use FULL mode for better extraction
+            builder.set_output_mode(OutputMode.FULL)
             prompts.append(builder.build())
             init_parent_codes.append(parent_prog.code)
 
@@ -797,13 +669,13 @@ def main():
             for i in range(n_init)
         ]
         results = await asyncio.gather(*llm_tasks)
-        print(f"[Init] All {n_init} LLM calls complete", flush=True)
+        print(f"[Init] All {n_init} LLM calls complete")
 
         # Extract code from responses
         candidates = []
         for res in results:
             if "error" in res:
-                print(f"[Init] Candidate {res['island']} ERROR: {res['error'][:50]}", flush=True)
+                print(f"[Init] Candidate {res['island']} ERROR: {res['error'][:50]}")
                 continue
 
             total_cost += res["cost"]
@@ -817,39 +689,37 @@ def main():
                 n_extract_fail = getattr(initialize_archive, 'n_extract_fail', 0) + 1
                 initialize_archive.n_extract_fail = n_extract_fail
                 if n_extract_fail <= 5:  # Show first 5 validation errors
-                    print(f"[Init] Candidate {idx} VALIDATION FAIL ({model.split('/')[-1]}): {validation_error}", flush=True)
+                    print(f"[Init] Candidate {idx} VALIDATION FAIL ({model}): {validation_error}", flush=True)
                 continue
 
             candidates.append({"idx": idx, "code": new_code, "tokens": tokens, "model": model})
 
         print(f"[Init] Evaluating {len(candidates)} candidates...", flush=True)
 
-        # Evaluate with semaphore to ensure timeout starts when task actually runs
+        # Evaluate all in parallel with progress tracking
         eval_map = {}
         completed = 0
-        semaphore = asyncio.Semaphore(4)  # Match executor workers
 
         async def eval_candidate(idx, code):
             nonlocal completed
-            async with semaphore:  # Only start timeout when we acquire semaphore
-                start = time.time()
-                try:
-                    result = await asyncio.wait_for(
-                        loop.run_in_executor(executor, evaluate_code_in_process, code),
-                        timeout=60  # 1 minute timeout for init phase
-                    )
-                    elapsed = time.time() - start
-                    completed += 1
-                    print(f"  [Init Eval] {completed}/{len(candidates)} Candidate {idx} done in {elapsed:.1f}s", flush=True)
-                    return idx, result
-                except asyncio.TimeoutError:
-                    completed += 1
-                    print(f"  [Init Eval] {completed}/{len(candidates)} Candidate {idx} TIMEOUT", flush=True)
-                    return idx, {"error": "Timeout"}
-                except Exception as e:
-                    completed += 1
-                    print(f"  [Init Eval] {completed}/{len(candidates)} Candidate {idx} ERROR: {e}", flush=True)
-                    return idx, {"error": str(e)}
+            start = time.time()
+            try:
+                result = await asyncio.wait_for(
+                    loop.run_in_executor(executor, evaluate_code_in_process, code),
+                    timeout=30
+                )
+                elapsed = time.time() - start
+                completed += 1
+                print(f"  [Init Eval] {completed}/{len(candidates)} Candidate {idx} done in {elapsed:.1f}s", flush=True)
+                return idx, result
+            except asyncio.TimeoutError:
+                completed += 1
+                print(f"  [Init Eval] {completed}/{len(candidates)} Candidate {idx} TIMEOUT", flush=True)
+                return idx, {"error": "Timeout"}
+            except Exception as e:
+                completed += 1
+                print(f"  [Init Eval] {completed}/{len(candidates)} Candidate {idx} ERROR: {e}", flush=True)
+                return idx, {"error": str(e)}
 
         eval_tasks = [eval_candidate(c["idx"], c["code"]) for c in candidates]
         eval_results = await asyncio.gather(*eval_tasks)
@@ -857,7 +727,7 @@ def main():
 
         print(f"[Init] Processing {len(candidates)} candidates...", flush=True)
 
-        # Collect valid programs and their behavior vectors
+        # Collect valid programs and their behavior vectors (4 dimensions)
         valid_programs = []
         behavior_vectors = []
         n_errors = 0
@@ -869,20 +739,18 @@ def main():
                     print(f"[Init] Candidate {cand['idx']} EVAL FAIL: {output['error'][:80]}", flush=True)
                 continue
             if True:  # was: if "error" not in output
-                raw_score, adj_score = score_fn(output, {}, 0)
-                execution_time = output.get("wall_time", 60.0)
+                score = score_fn(output, {}, 0)
+                execution_time = output.get("avg_time", 60.0)
                 valid_programs.append({
                     "code": cand["code"],
-                    "raw_score": raw_score,
-                    "adj_score": adj_score,
+                    "score": score,
                     "output": output,
                     "execution_time": execution_time,
                 })
                 # Extract behavior vector using the extractor
                 temp_prog = Program(code=cand["code"], metadata={
                     "execution_time": execution_time,
-                    "primary_score": adj_score,  # Use adjusted for archive
-                    "raw_score": raw_score,
+                    "primary_score": score,
                 })
                 behavior = extractor.extract(temp_prog)
                 behavior_vectors.append(np.array([behavior[f] for f in extractor.features]))
@@ -897,53 +765,42 @@ def main():
         print(f"[Init] Extracting seed behavior...", flush=True)
         seed_behavior = extractor.extract(seed_program)
         behavior_vectors.append(np.array([seed_behavior[f] for f in extractor.features]))
-        valid_programs.append({
-            "code": seed_program.code,
-            "raw_score": best_raw_score,
-            "adj_score": best_score,
-            "output": {"makespan": best_makespan},
-            "execution_time": seed_program.metadata.get("execution_time", 60.0),
-            "is_seed": True,
-        })
 
-        # Select the 50 most diverse programs using farthest-first traversal
-        n_diverse = 50
-        print(f"[Init] Selecting {n_diverse} most diverse from {len(valid_programs)} programs...", flush=True)
-        diverse_indices = CVTMAPElitesPool.select_most_diverse(behavior_vectors, k=n_diverse)
-        diverse_programs = [valid_programs[i] for i in diverse_indices]
-        diverse_behaviors = [behavior_vectors[i] for i in diverse_indices]
-        print(f"[Init] Selected {len(diverse_indices)} diverse programs", flush=True)
-
-        # Build centroids from the diverse subset
-        print(f"[Init] Building centroids from {len(diverse_behaviors)} diverse behavior vectors...", flush=True)
+        # Build centroids from behavior vectors using k-means (ignoring 5th and 95th percentile outliers)
+        print(f"[Init] Building centroids from {len(behavior_vectors)} behavior vectors...", flush=True)
         n_centroids = pool.set_centroids_from_data(
-            diverse_behaviors,
+            behavior_vectors,
             percentile_low=5.0,
             percentile_high=95.0,
             n_centroids=50,  # k-means will spread 50 centroids across the behavior space
         )
         print(f"[Init] Built {n_centroids} centroids", flush=True)
 
-        # Add only the diverse programs to archive
-        n_accepted = 0
-        for prog in diverse_programs:
+        # Now add seed program to archive
+        seed_result = EvaluationResult(
+            program_id=seed_program.id,
+            scores={'score': best_score},
+            is_valid=True,
+        )
+        pool.add(seed_program, seed_result)
+
+        # Add all valid programs to archive
+        n_accepted = 1  # seed already added
+        for prog in valid_programs:
             child = Program(code=prog["code"], metadata={
                 "execution_time": prog["execution_time"],
-                "primary_score": prog["adj_score"],
-                "raw_score": prog["raw_score"],
+                "primary_score": prog["score"],
             })
             eval_result = EvaluationResult(
                 program_id=child.id,
-                scores={'score': prog["adj_score"]},
+                scores={'score': prog["score"]},
                 is_valid=True,
             )
             if pool.add(child, eval_result):
                 n_accepted += 1
-                if prog["adj_score"] > best_score:
-                    best_score = prog["adj_score"]
-                    best_raw_score = prog["raw_score"]
+                if prog["score"] > best_score:
+                    best_score = prog["score"]
                     best_program = child
-                    best_makespan = prog["output"].get("makespan", BASELINE)
 
         print(f"[Init] Done: {n_accepted} accepted, archive size: {pool.size()}, best: {best_score:.1f}, cost: ${total_cost:.3f}\n", flush=True)
 
@@ -956,13 +813,14 @@ def main():
             total_cost=total_cost,
             extra_info={"phase": "initialization", "candidates_accepted": n_accepted},
         )
-        print(f"[Init] State saved to {STATE_FILE}\n", flush=True)
+        print(f"[Init] State saved to {STATE_FILE}", flush=True)
 
     async def run_generation():
-        nonlocal generation, best_score, best_raw_score, best_program, best_makespan, total_cost
+        nonlocal generation, best_score, best_program, total_cost
 
         print(f"[Evolution] Starting evolution loop...", flush=True)
         loop = asyncio.get_event_loop()
+        timeout_feedback = None
 
         while total_cost < 5.0:
             generation += 1
@@ -996,7 +854,10 @@ def main():
                 builder.add_section("Problem", PROBLEM_DESCRIPTION, priority=10)
                 builder.add_section("Signature", f"```python\n{FUNCTION_SIGNATURE}\n```", priority=20)
                 builder.add_parents([ProgramWithScore(p, None) for p in parents], priority=30)
-                builder.set_output_mode(OutputMode.FULL)  # Use FULL mode for better extraction
+                builder.set_output_mode(OutputMode.FULL)
+
+                if timeout_feedback:
+                    builder.add_section("Critical Feedback", timeout_feedback, priority=5)
 
                 prompts.append(builder.build())
                 sampler_data.append({
@@ -1010,24 +871,25 @@ def main():
 
             # Generate for all samplers in parallel
             n_samplers = len(active_samplers)
-            print(f"[Gen {generation}] LLM calls for {n_samplers} samplers...", flush=True)
+            print(f"[Gen {generation}] LLM calls for {n_samplers} samplers...")
             llm_tasks = [
                 generate_for_island(i, prompts[i], sampler_data[i]["model"], 0.8)
                 for i in range(n_samplers)
             ]
             results = await asyncio.gather(*llm_tasks)
-            print(f"[Gen {generation}] All LLM calls complete", flush=True)
+            print(f"[Gen {generation}] All LLM calls complete")
 
             # Extract code from LLM responses
             candidates = []
             for res in results:
                 if "error" in res:
                     idx = res["island"]
-                    print(f"[Gen {generation}] {sampler_data[idx]['sampler']} ERROR: {res['error'][:50]}", flush=True)
+                    print(f"[Gen {generation}] {sampler_data[idx]['sampler']} ERROR: {res['error'][:50]}")
                     continue
 
                 total_cost += res["cost"]
                 idx = res["island"]
+                parent_code = sampler_data[idx]["parent_code"]
                 tokens = res.get("tokens", 0)
                 sname = sampler_data[idx]["sampler"]
                 model = sampler_data[idx]["model"]
@@ -1048,33 +910,31 @@ def main():
                     "model": model,
                 })
 
-            # Evaluate candidates with semaphore to ensure timeout starts when task runs
-            EVAL_TIMEOUT = 300  # 5 minute timeout for txn scheduling
-            print(f"[Gen {generation}] Evaluating {len(candidates)} candidates...", flush=True)
-            eval_semaphore = asyncio.Semaphore(4)  # Match executor workers
+            # Evaluate candidates
+            EVAL_TIMEOUT = 30
+            print(f"[Gen {generation}] Evaluating {len(candidates)} candidates...")
 
             async def eval_with_timeout(idx, code):
-                async with eval_semaphore:  # Timeout starts when semaphore acquired
-                    start = time.time()
-                    try:
-                        result = await asyncio.wait_for(
-                            loop.run_in_executor(executor, evaluate_code_in_process, code),
-                            timeout=EVAL_TIMEOUT
-                        )
-                        elapsed = time.time() - start
-                        print(f"  [Eval] Candidate {idx} done in {elapsed:.1f}s", flush=True)
-                        return idx, result
-                    except asyncio.TimeoutError:
-                        print(f"  [Eval] Candidate {idx} TIMEOUT after {EVAL_TIMEOUT}s", flush=True)
-                        return idx, {"error": f"Timeout after {EVAL_TIMEOUT}s"}
-                    except Exception as e:
-                        print(f"  [Eval] Candidate {idx} ERROR: {e}", flush=True)
-                        return idx, {"error": str(e)}
+                start = time.time()
+                try:
+                    result = await asyncio.wait_for(
+                        loop.run_in_executor(executor, evaluate_code_in_process, code),
+                        timeout=EVAL_TIMEOUT
+                    )
+                    elapsed = time.time() - start
+                    print(f"  [Eval] Candidate {idx} done in {elapsed:.1f}s")
+                    return idx, result
+                except asyncio.TimeoutError:
+                    print(f"  [Eval] Candidate {idx} TIMEOUT after {EVAL_TIMEOUT}s")
+                    return idx, {"error": f"Timeout after {EVAL_TIMEOUT}s"}
+                except Exception as e:
+                    print(f"  [Eval] Candidate {idx} ERROR: {e}")
+                    return idx, {"error": str(e)}
 
             eval_tasks = [eval_with_timeout(i, c["code"]) for i, c in enumerate(candidates)]
             indexed_results = await asyncio.gather(*eval_tasks)
             eval_results = [r for _, r in sorted(indexed_results, key=lambda x: x[0])]
-            print(f"[Gen {generation}] All evaluations complete", flush=True)
+            print(f"[Gen {generation}] All evaluations complete")
 
             batch_time = time.time() - batch_start
 
@@ -1083,18 +943,16 @@ def main():
                 display_name = cand["sampler"]
                 real_sampler = cand["real_sampler"]
                 tokens = cand["tokens"]
-                raw_score, adj_score = score_fn(output, {}, 0)
-                exec_time = output.get("wall_time", 60.0)
+                score = score_fn(output, {}, 0)
 
                 child_metadata = {
-                    "execution_time": exec_time,
-                    "primary_score": adj_score,  # Use adjusted for archive
-                    "raw_score": raw_score,
+                    "execution_time": output.get("avg_time", 60.0),
+                    "primary_score": score,
                 }
                 child = Program(code=cand["code"], metadata=child_metadata)
                 eval_result = EvaluationResult(
                     program_id=child.id,
-                    scores={'score': adj_score},  # Use adjusted for archive ranking
+                    scores={'score': score},
                     is_valid="error" not in output,
                     error=output.get("error"),
                 )
@@ -1102,26 +960,39 @@ def main():
                 if eval_result.is_valid:
                     accepted = pool.add(child, eval_result)
                     # Update sampler statistics (use real_sampler for stats)
-                    pool.update_sampler(real_sampler, cand["source_cell"], success=accepted, reward=adj_score)
-                    makespan = output.get("makespan", BASELINE)
-                    wall_time = exec_time * 1000  # ms
+                    pool.update_sampler(real_sampler, cand["source_cell"], success=accepted, reward=score)
+                    balancedness = output.get("balancedness_gpu", 0)
+                    avg_time = output.get("avg_time", 0) * 1000  # ms
                     status = "accepted" if accepted else "rejected"
-                    if adj_score > best_score:
-                        best_score, best_raw_score, best_program = adj_score, raw_score, child
-                        best_makespan = makespan
+                    if score > best_score:
+                        best_score, best_program = score, child
                         status = "NEW BEST ★"
-                    # Show both raw and adjusted scores
-                    print(f"[Gen {generation}] {display_name:20s} {status:10s} | mkspan: {makespan:5.0f} | raw: {raw_score:5.1f} | adj: {adj_score:5.1f} | time: {wall_time:6.0f}ms | best: {best_score:5.1f} (raw:{best_raw_score:.1f}) | {tokens}tok | ${total_cost:.3f}", flush=True)
+                    print(f"[Gen {generation}] {display_name:20s} {status:10s} | score: {score:5.1f} | bal: {balancedness:.4f} | time: {avg_time:6.2f}ms | best: {best_score:5.1f} | {tokens}tok | ${total_cost:.3f}")
                 else:
                     pool.update_sampler(real_sampler, cand["source_cell"], success=False)
                     err = eval_result.error[:30] if eval_result.error else "unknown"
-                    print(f"[Gen {generation}] {display_name:20s} INVALID    | {err}...", flush=True)
+                    print(f"[Gen {generation}] {display_name:20s} INVALID    | {err}...")
+                    if "syntax" in (eval_result.error or "").lower():
+                        print(f"{'─'*60}")
+                        print(f"[DEBUG] Code with syntax error:\n{cand['code']}")
+                        print(f"{'─'*60}")
 
             pool.on_generation_complete()
-            print(f"    [Batch {generation} done in {batch_time:.1f}s | {n_samplers} samplers, archive: {pool.size()}]", flush=True)
+            print(f"    [Batch {generation} done in {batch_time:.1f}s | {n_samplers} samplers, archive: {pool.size()}]")
+
+            # Check for timeout feedback
+            n_timeouts = sum(1 for r in eval_results if "error" in r and "Timeout" in r.get("error", ""))
+            if candidates and n_timeouts == len(candidates):
+                timeout_feedback = (
+                    "Note: Previous candidates exceeded the 30s time limit. "
+                    "Consider simpler approaches with lower computational complexity."
+                )
+                print(f"    [FEEDBACK] All {n_timeouts} candidates timed out")
+            else:
+                timeout_feedback = None
 
             if generation % 25 == 0:
-                print(f"{'─'*70}\n[MILESTONE] Best makespan: {best_makespan:.0f} | Score: {best_score:.1f}\n{'─'*70}", flush=True)
+                print(f"{'─'*70}\n[MILESTONE] Best score: {best_score:.1f}\n{'─'*70}")
 
             # Save state after each generation
             save_state(
@@ -1134,6 +1005,7 @@ def main():
                     "phase": "evolution",
                     "batch_time_s": batch_time,
                     "n_samplers": n_samplers,
+                    "n_timeouts": n_timeouts if candidates else 0,
                 },
             )
 
@@ -1147,7 +1019,7 @@ def main():
 
     print(f"\n{'='*70}")
     print(f"Complete | Generations: {generation}")
-    print(f"Best makespan: {best_makespan:.0f} | Raw score: {best_raw_score:.1f} | Adj score: {best_score:.1f}")
+    print(f"Best score: {best_score:.1f}")
     print(f"{'='*70}\n")
 
     out = Path(__file__).parent / "best_solution.py"

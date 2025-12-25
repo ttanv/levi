@@ -43,6 +43,8 @@ class LLMResponse:
     total_tokens: int
     model: str
     cost: float
+    is_structured: bool = False  # Indicates if this is structured output
+    parsed_json: Optional[dict] = None  # Parsed JSON for structured outputs
 
 
 @dataclass
@@ -111,12 +113,21 @@ class LLMClient:
         self,
         prompt: str,
         config: Optional[LLMConfig] = None,
-        model: Optional[str] = None
+        model: Optional[str] = None,
+        response_format: Optional[dict] = None
     ) -> LLMResponse:
         """
         Generate a completion for the given prompt.
 
         If model is not specified, selects from ensemble based on weights.
+
+        Args:
+            prompt: The prompt to send to the LLM
+            config: Optional generation config (temperature, max_tokens, etc.)
+            model: Optional model override (otherwise selects from ensemble)
+            response_format: Optional JSON schema for structured outputs.
+                Format: {"type": "json_schema", "json_schema": {...}}
+                See: https://docs.litellm.ai/docs/completion/json_mode
         """
         self._budget_manager.check_budget()
 
@@ -136,6 +147,13 @@ class LLMClient:
             kwargs["api_key"] = self._api_key
         if self._api_base:
             kwargs["api_base"] = self._api_base
+        if response_format:
+            kwargs["response_format"] = response_format
+            # Enable response-healing for OpenRouter models with structured outputs
+            if actual_model.startswith("openrouter/"):
+                extra_body = kwargs.get("extra_body", {})
+                extra_body["plugins"] = [{"id": "response-healing"}]
+                kwargs["extra_body"] = extra_body
 
         response = litellm.completion(**kwargs)
 
@@ -145,13 +163,28 @@ class LLMClient:
         self._budget_manager.try_consume(ResourceType.LLM_TOKENS, usage.total_tokens)
         self._budget_manager.try_consume(ResourceType.LLM_COST, cost)
 
+        content = response.choices[0].message.content
+
+        # Parse JSON if structured output was requested
+        parsed_json = None
+        is_structured = response_format is not None
+        if is_structured:
+            try:
+                import json
+                parsed_json = json.loads(content)
+            except json.JSONDecodeError:
+                # This shouldn't happen with strict schemas, but handle gracefully
+                is_structured = False
+
         return LLMResponse(
-            content=response.choices[0].message.content,
+            content=content,
             prompt_tokens=usage.prompt_tokens,
             completion_tokens=usage.completion_tokens,
             total_tokens=usage.total_tokens,
             model=actual_model,
             cost=cost,
+            is_structured=is_structured,
+            parsed_json=parsed_json,
         )
 
     def generate_batch(
