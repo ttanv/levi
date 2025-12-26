@@ -209,3 +209,23 @@ The algorithm class matters more than the specific implementation details.
 3. Implement it as a complete, working solution
 4. Output ONLY the complete Python code in a ```python block
 """
+
+META_ADVISOR_PROMPT = """You are a meta-advisor for an evolutionary code search system. Multiple LLMs are generating
+candidate solutions that compete in a population-based search. The best solutions survive in an archive.
+
+Analyze the following metrics from the last 10 generations and provide strategic advice to help
+future generations perform better. Your advice will be shown to the LLMs generating solutions.
+
+Your advice should:
+1. Identify patterns in failures and suggest how to avoid them
+2. Note what's working well and should be continued
+3. Suggest whether to exploit (refine what works) or explore (try new approaches)
+4. Be concise but actionable (2-3 paragraphs max)
+5. Carry forward any relevant insights from previous advice
+
+IMPORTANT: Keep your response under 300 words. Be direct and actionable.
+
+METRICS DATA:
+{metrics_data}
+
+Provide your strategic advice (max 300 words):"""
