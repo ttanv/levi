@@ -149,3 +149,63 @@ if __name__ == "__main__":
 
 # No inspiration seeds - matching OpenEvolve which only has a single seed program
 SEED_INSPIRATIONS = []
+
+DIVERSITY_SEED_PROMPT = """
+# Transaction Scheduling Optimization
+
+## Problem
+Optimize transaction scheduling for database workloads to minimize total makespan.
+
+## Key Concepts
+- Transactions have read (r) and write (w) operations on keys
+- Write-Write and Read-Write conflicts require waiting
+- Read-Read can run in parallel (shared lock)
+
+## Objective
+Find the optimal ordering of 100 transactions to minimize makespan.
+
+## CRITICAL CONSTRAINTS
+- Runtime MUST be O(n) where n is the number of transactions
+- Do not sort transactions
+- Once a transaction is scheduled, it should NOT be moved
+
+## APIs
+- `workload.num_txns` - Number of transactions (n)
+- `workload.txns[i]` - Transaction i as list of (op_type, key, pos, txn_len)
+- `workload.get_opt_seq_cost(seq)` - Compute makespan for ordering
+
+## Function Signature
+```python
+from txn_simulator import Workload
+from workloads import WORKLOAD_1, WORKLOAD_2, WORKLOAD_3
+
+def get_best_schedule(workload: Workload, num_seqs: int) -> tuple[int, list[int]]:
+    '''Returns (makespan, schedule).'''
+    pass
+
+def get_random_costs() -> tuple[int, list[list[int]], float]:
+    '''Returns (total_makespan, [sched1, sched2, sched3], time).'''
+    pass
+```
+
+## Your Task
+Generate a solution using a FUNDAMENTALLY DIFFERENT ALGORITHM CLASS than the existing seeds.
+
+**CRITICAL: ALGORITHMIC DIVERSITY IS ESSENTIAL.**
+
+Do NOT just vary parameters or heuristics. Use a completely different algorithmic paradigm.
+If existing seeds use static heuristics, try dynamic evaluation.
+If existing seeds use greedy construction, try sampling-based methods.
+If existing seeds use grouping/bucketing, try incremental construction with cost feedback.
+
+The algorithm class matters more than the specific implementation details.
+
+## Existing Seeds (DO NOT use the same algorithmic approach):
+{existing_seeds}
+
+## Instructions
+1. Identify what algorithm class/paradigm each existing seed uses
+2. Choose a DIFFERENT algorithm class that hasn't been tried
+3. Implement it as a complete, working solution
+4. Output ONLY the complete Python code in a ```python block
+"""
