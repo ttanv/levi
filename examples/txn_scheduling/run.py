@@ -627,7 +627,7 @@ def main():
 
     async def initialize_archive():
         """Generate diverse seeds with heavy model, then expand with light models."""
-        nonlocal total_cost, best_score, best_program, best_makespan
+        nonlocal total_cost, best_score, best_program, best_makespan, seed_score
 
         loop = asyncio.get_event_loop()
 
@@ -680,13 +680,19 @@ def main():
         # Build prompts: 20 variants for each diverse seed
         prompts = []
         prompt_seed_idx = []  # Track which seed each prompt is for
-        for seed_idx, (seed_code, seed_score) in enumerate(diverse_seeds):
-            seed_prog = Program(code=seed_code, metadata={"score": seed_score})
+        for seed_idx, (seed_code, s_score) in enumerate(diverse_seeds):
+            seed_prog = Program(code=seed_code, metadata={"score": s_score})
+            # Create EvaluationResult for ProgramWithScore
+            seed_eval_result = EvaluationResult(
+                program_id=seed_prog.id,
+                scores={'score': s_score},
+                is_valid=True,
+            )
             for _ in range(n_variants_per_seed):
                 builder = PromptBuilder()
                 builder.add_section("Problem", PROBLEM_DESCRIPTION, priority=10)
                 builder.add_section("Signature", f"```python\n{FUNCTION_SIGNATURE}\n```", priority=20)
-                builder.add_parents([ProgramWithScore(seed_prog, seed_score)], priority=30)
+                builder.add_parents([ProgramWithScore(seed_prog, seed_eval_result)], priority=30)
                 builder.set_output_mode(OutputMode.FULL)
                 prompts.append(builder.build())
                 prompt_seed_idx.append(seed_idx)
