@@ -147,7 +147,7 @@ def extract_and_validate_code(response: str) -> tuple[str | None, str]:
 
 from txn_simulator import Workload
 from workloads import WORKLOAD_1, WORKLOAD_2, WORKLOAD_3
-from prompts import PROBLEM_DESCRIPTION, FUNCTION_SIGNATURE, SEED_PROGRAM, SEED_INSPIRATIONS, DIVERSITY_SEED_PROMPT
+from prompts import PROBLEM_DESCRIPTION, FUNCTION_SIGNATURE, SEED_PROGRAM, SEED_INSPIRATIONS, DIVERSITY_SEED_PROMPT, META_ADVISOR_PROMPT
 import litellm
 import logging
 
@@ -432,6 +432,97 @@ def save_state(
     temp_file.rename(STATE_FILE)
 
 
+def format_metrics_for_llm(
+    metrics: dict,
+    previous_advice: str,
+    best_score: float,
+    top_solutions: list[tuple[float, str]] = None,
+) -> str:
+    """Format metrics data for the LLM to analyze.
+
+    Args:
+        metrics: Dict tracking outcomes over recent generations
+        previous_advice: Previous meta-advice (for continuity)
+        best_score: Current best score achieved
+        top_solutions: List of (score, code_snippet) for top 3 solutions
+
+    Returns:
+        Formatted string with all metrics data
+    """
+    total = metrics.get('total', 0)
+    timeouts = metrics.get('timeouts', 0)
+    error_count = metrics.get('errors', 0)
+    rejections = metrics.get('rejections', 0)
+    acceptances = metrics.get('acceptances', 0)
+    new_bests = metrics.get('new_bests', 0)
+    error_messages = metrics.get('error_messages', set())
+
+    data = f"""Current Best Score: {best_score:.1f}
+
+Outcomes from Last 10 Generations ({total} candidates):
+- Timeouts: {timeouts} (solution took too long to execute)
+- Errors: {error_count} (solution crashed, had bugs, or failed validation)
+- Rejections: {rejections} (solution was valid but didn't beat existing archive entry)
+- Acceptances: {acceptances} (solution was good enough to enter the archive)
+- New Bests: {new_bests} (solution achieved a new highest score)"""
+
+    if error_messages:
+        data += "\n\nErrors encountered:\n"
+        for err in sorted(error_messages):
+            data += f"- {err}\n"
+
+    if top_solutions:
+        data += f"\n\nTop {len(top_solutions)} Solutions in Archive:\n"
+        for i, (score, snippet) in enumerate(top_solutions, 1):
+            data += f"\n### #{i} (Score: {score:.1f})\n```python\n{snippet}\n```\n"
+
+    if previous_advice:
+        data += f"\n\nPrevious Strategic Advice:\n{previous_advice}"
+
+    return data
+
+
+async def generate_meta_advice(
+    metrics: dict,
+    previous_advice: str,
+    best_score: float,
+    top_solutions: list[tuple[float, str]] = None,
+    model: str = None,
+) -> tuple[str, float]:
+    """Use heavy LLM to generate strategic meta-advice from evolution metrics.
+
+    Args:
+        metrics: Dict tracking outcomes over recent generations
+        previous_advice: Previous meta-advice (for continuity)
+        best_score: Current best score achieved
+        top_solutions: List of (score, code_snippet) for top 3 solutions
+        model: LLM model to use for generating advice
+
+    Returns:
+        Tuple of (advice string, cost)
+    """
+    metrics_data = format_metrics_for_llm(metrics, previous_advice, best_score, top_solutions)
+    prompt = META_ADVISOR_PROMPT.format(metrics_data=metrics_data)
+
+    try:
+        response = await litellm.acompletion(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7,
+            max_tokens=500,  # ~300 words max
+            timeout=60,
+        )
+        advice = response.choices[0].message.content.strip()
+        cost = litellm.completion_cost(completion_response=response)
+        return advice, cost
+    except Exception as e:
+        # Fallback to simple formatted advice if LLM fails
+        fallback = f"(Meta-advice generation failed: {str(e)[:50]})\n\n"
+        fallback += f"Best score: {best_score:.1f}. "
+        fallback += f"Last 10 gens: {metrics.get('acceptances', 0)} accepted, {metrics.get('errors', 0)} errors."
+        return fallback, 0.0
+
+
 async def generate_for_island(island_idx: int, prompt: str, model: str, temperature: float) -> dict:
     """Generate code for one island asynchronously."""
     start = time.time()
@@ -477,7 +568,7 @@ def main():
     HEAVY_MODEL = 'openrouter/z-ai/glm-4.7'
 
     n_workers = 4
-    n_inspirations = 1  # Number of inspiration programs to use alongside parent
+    n_inspirations = 2  # Number of inspiration programs to use alongside parent
 
     # Use generalized behavior extractor with standard features
     extractor = GeneralizedBehaviorExtractor(
@@ -540,23 +631,24 @@ def main():
 
         loop = asyncio.get_event_loop()
 
-        # Phase 1: Generate 10 diverse seeds using heavy model (sequential, with context)
-        n_diverse_seeds = 10
+        # Phase 1: Generate 5 diverse seeds using heavy model (sequential, with context)
+        n_diverse_seeds = 5
         print(f"\n[Init Phase 1] Generating {n_diverse_seeds} diverse seeds with heavy model...", flush=True)
 
-        diverse_seeds = [SEED_PROGRAM]  # Start with original seed
+        # Track seeds with their scores: list of (code, score)
+        diverse_seeds = [(SEED_PROGRAM, seed_score)]  # Start with original seed and its score
 
         for i in range(n_diverse_seeds):
-            # Build prompt with all existing seeds in context
+            # Build prompt with all existing seeds and their scores in context
             existing_seeds_text = "\n\n---\n\n".join([
-                f"### Seed {j+1}:\n```python\n{code}\n```"
-                for j, code in enumerate(diverse_seeds)
+                f"### Seed {j+1} (Score: {score:.1f}):\n```python\n{code}\n```"
+                for j, (code, score) in enumerate(diverse_seeds)
             ])
             prompt = DIVERSITY_SEED_PROMPT.format(existing_seeds=existing_seeds_text)
 
             print(f"  [Seed {i+1}/{n_diverse_seeds}] Generating with {len(diverse_seeds)} seeds in context...", flush=True)
 
-            result = await generate_for_island(i, prompt, 'openrouter/google/gemini-2.5-flash-lite', 0.7)
+            result = await generate_for_island(i, prompt, 'openrouter/z-ai/glm-4.7', 0.7)
 
             if "error" in result:
                 print(f"  [Seed {i+1}] ERROR: {result['error'][:50]}", flush=True)
@@ -569,9 +661,9 @@ def main():
                 # Quick eval to verify it works
                 eval_result = await loop.run_in_executor(executor, evaluate_code_in_process, new_code)
                 if "error" not in eval_result:
-                    diverse_seeds.append(new_code)
-                    score = score_fn(eval_result)
-                    print(f"  [Seed {i+1}] OK - score: {score:.1f}, tokens: {result['tokens']}", flush=True)
+                    new_score = score_fn(eval_result)
+                    diverse_seeds.append((new_code, new_score))
+                    print(f"  [Seed {i+1}] OK - score: {new_score:.1f}, tokens: {result['tokens']}", flush=True)
                 else:
                     print(f"  [Seed {i+1}] EVAL FAIL: {eval_result['error'][:50]}", flush=True)
             else:
@@ -579,23 +671,25 @@ def main():
 
         print(f"[Init Phase 1] Generated {len(diverse_seeds)-1} new diverse seeds (total: {len(diverse_seeds)})", flush=True)
 
-        # Phase 2: Generate 50 variants using light models (randomly sample from diverse seeds)
+        # Phase 2: Generate 100 variants using light models (20 per diverse seed)
         import random
-        n_variants = 50
-        print(f"\n[Init Phase 2] Generating {n_variants} variants with light models...", flush=True)
+        n_variants_per_seed = 20
+        n_variants = n_variants_per_seed * len(diverse_seeds)
+        print(f"\n[Init Phase 2] Generating {n_variants} variants ({n_variants_per_seed} per seed) with light models...", flush=True)
 
-        all_seed_programs = [Program(code=c, metadata={}) for c in diverse_seeds]
-
-        # Build prompts sampling randomly from diverse seeds
+        # Build prompts: 20 variants for each diverse seed
         prompts = []
-        for i in range(n_variants):
-            parent_prog = random.choice(all_seed_programs)
-            builder = PromptBuilder()
-            builder.add_section("Problem", PROBLEM_DESCRIPTION, priority=10)
-            builder.add_section("Signature", f"```python\n{FUNCTION_SIGNATURE}\n```", priority=20)
-            builder.add_parents([ProgramWithScore(parent_prog, None)], priority=30)
-            builder.set_output_mode(OutputMode.FULL)
-            prompts.append(builder.build())
+        prompt_seed_idx = []  # Track which seed each prompt is for
+        for seed_idx, (seed_code, seed_score) in enumerate(diverse_seeds):
+            seed_prog = Program(code=seed_code, metadata={"score": seed_score})
+            for _ in range(n_variants_per_seed):
+                builder = PromptBuilder()
+                builder.add_section("Problem", PROBLEM_DESCRIPTION, priority=10)
+                builder.add_section("Signature", f"```python\n{FUNCTION_SIGNATURE}\n```", priority=20)
+                builder.add_parents([ProgramWithScore(seed_prog, seed_score)], priority=30)
+                builder.set_output_mode(OutputMode.FULL)
+                prompts.append(builder.build())
+                prompt_seed_idx.append(seed_idx)
 
         # Make parallel LLM calls (alternate between light models)
         llm_tasks = [
@@ -697,14 +791,13 @@ def main():
 
         # Add all diverse seeds (including original) to valid_programs
         print(f"[Init] Adding {len(diverse_seeds)} diverse seeds to candidates...", flush=True)
-        for seed_code in diverse_seeds:
+        for seed_code, seed_score in diverse_seeds:
             seed_eval = await loop.run_in_executor(executor, evaluate_code_in_process, seed_code)
             if "error" not in seed_eval:
-                seed_score = score_fn(seed_eval)
                 execution_time = seed_eval.get("wall_time", 60.0)
                 valid_programs.append({
                     "code": seed_code,
-                    "score": seed_score,
+                    "score": seed_score,  # Use already computed score
                     "output": seed_eval,
                     "execution_time": execution_time,
                 })
@@ -780,9 +873,60 @@ def main():
         print(f"[Evolution] Starting evolution loop...", flush=True)
         loop = asyncio.get_event_loop()
 
+        # Meta-advice tracking
+        current_meta_advice = ""
+        previous_meta_advice = ""
+        period_metrics = {
+            'total': 0,
+            'timeouts': 0,
+            'errors': 0,
+            'rejections': 0,
+            'acceptances': 0,
+            'new_bests': 0,
+            'error_messages': set(),
+        }
+
         while total_cost < 5.0:
             generation += 1
             batch_start = time.time()
+
+            # Every 10 generations, generate new meta-advice from accumulated metrics
+            if generation > 1 and (generation - 1) % 10 == 0:
+                # Get top 3 solutions from archive
+                top_solutions = []
+                try:
+                    elites = list(pool._elites.values())
+                    elites.sort(key=lambda e: e.result.primary_score, reverse=True)
+                    for elite in elites[:3]:
+                        score = elite.result.primary_score
+                        code = elite.program.code
+                        top_solutions.append((score, code))
+                except Exception:
+                    pass  # If we can't get elites, continue without them
+
+                print(f"[Gen {generation}] Generating meta-advice with heavy model...", flush=True)
+                current_meta_advice, advice_cost = await generate_meta_advice(
+                    metrics=period_metrics,
+                    previous_advice=previous_meta_advice,
+                    best_score=best_score,
+                    top_solutions=top_solutions,
+                    model=HEAVY_MODEL,
+                )
+                total_cost += advice_cost
+                previous_meta_advice = current_meta_advice
+                # Reset metrics for next period
+                period_metrics = {
+                    'total': 0,
+                    'timeouts': 0,
+                    'errors': 0,
+                    'rejections': 0,
+                    'acceptances': 0,
+                    'new_bests': 0,
+                    'error_messages': set(),
+                }
+                print(f"[Gen {generation}] Meta-advice updated (cost: ${advice_cost:.4f})", flush=True)
+                print(f"[Meta-Advice]\n{current_meta_advice}\n", flush=True)
+
             print(f"[Gen {generation}] Starting generation...", flush=True)
 
             # Determine which samplers to use this generation
@@ -813,6 +957,10 @@ def main():
                 builder.add_section("Signature", f"```python\n{FUNCTION_SIGNATURE}\n```", priority=20)
                 builder.add_parents([ProgramWithScore(p, None) for p in parents], priority=30)
                 builder.set_output_mode(OutputMode.FULL)  # Use FULL mode for better extraction
+
+                # Add meta-advice at the end (low priority = appears last)
+                if current_meta_advice:
+                    builder.add_section("Meta-Advice", current_meta_advice, priority=100)
 
                 prompts.append(builder.build())
                 sampler_data.append({
@@ -913,20 +1061,42 @@ def main():
                     error=output.get("error"),
                 )
 
+                # Track metrics for meta-advice
+                period_metrics['total'] += 1
+
                 if eval_result.is_valid:
                     accepted = pool.add(child, eval_result)
                     pool.update_sampler(real_sampler, cand["source_cell"], success=accepted, reward=score)
                     makespan = output.get("makespan", BASELINE)
                     wall_time = exec_time * 1000  # ms
                     status = "accepted" if accepted else "rejected"
+
+                    if accepted:
+                        period_metrics['acceptances'] += 1
+                    else:
+                        period_metrics['rejections'] += 1
+
                     if score > best_score:
                         best_score, best_program = score, child
                         best_makespan = makespan
                         status = "NEW BEST ★"
+                        period_metrics['new_bests'] += 1
+
                     print(f"[Gen {generation}] {display_name:20s} {status:10s} | mkspan: {makespan:5.0f} | score: {score:5.1f} | time: {wall_time:6.0f}ms | best: {best_score:5.1f} | {tokens}tok | ${total_cost:.3f}", flush=True)
                 else:
                     pool.update_sampler(real_sampler, cand["source_cell"], success=False)
                     err = eval_result.error[:30] if eval_result.error else "unknown"
+
+                    # Track timeout vs other errors
+                    if eval_result.error and "timeout" in eval_result.error.lower():
+                        period_metrics['timeouts'] += 1
+                    else:
+                        period_metrics['errors'] += 1
+                        # Add truncated error message to set (avoid duplicates)
+                        if eval_result.error:
+                            err_msg = eval_result.error[:100].strip()
+                            period_metrics['error_messages'].add(err_msg)
+
                     print(f"[Gen {generation}] {display_name:20s} INVALID    | {err}...", flush=True)
 
             pool.on_generation_complete()
