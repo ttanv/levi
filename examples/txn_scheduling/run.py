@@ -8,11 +8,12 @@ import sys
 import time
 from pathlib import Path
 from concurrent.futures import BrokenExecutor
-from algoforge.utils import ResilientProcessPool
 
-# Add algoforge to path
+# Add algoforge to path (must be before algoforge imports)
 ALGOFORGE_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ALGOFORGE_ROOT))
+
+from algoforge.utils import ResilientProcessPool
 
 # Add txn_scheduling resources to path
 TXN_RESOURCES = ALGOFORGE_ROOT.parent / "ADRS-Leaderboard" / "problems" / "txn_scheduling" / "resources"
