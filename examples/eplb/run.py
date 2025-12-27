@@ -583,7 +583,7 @@ def main():
     HEAVY_MODEL = 'openrouter/google/gemini-2.5-flash'   # Better quality for exploration
 
     budget = BudgetManager(max_llm_cost=5.0)
-    n_workers = 4
+    n_workers = 8
     n_inspirations = 1  # Number of inspiration programs to use alongside parent
 
     # Use generalized behavior extractor with standard features

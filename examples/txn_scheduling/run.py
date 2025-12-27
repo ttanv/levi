@@ -567,7 +567,7 @@ def main():
     ]
     HEAVY_MODEL = 'openrouter/z-ai/glm-4.7'
 
-    n_workers = 4
+    n_workers = 8
     n_inspirations = 2  # Number of inspiration programs to use alongside parent
 
     # Use generalized behavior extractor with standard features
@@ -733,7 +733,7 @@ def main():
         # Evaluate with semaphore to ensure timeout starts when task actually runs
         eval_map = {}
         completed = 0
-        semaphore = asyncio.Semaphore(4)  # Match executor workers
+        semaphore = asyncio.Semaphore(8)  # Match executor workers
 
         async def eval_candidate(idx, code):
             nonlocal completed
@@ -1021,7 +1021,7 @@ def main():
             # Evaluate candidates with semaphore to ensure timeout starts when task runs
             EVAL_TIMEOUT = 300  # 5 minute timeout for txn scheduling
             print(f"[Gen {generation}] Evaluating {len(candidates)} candidates...", flush=True)
-            eval_semaphore = asyncio.Semaphore(4)  # Match executor workers
+            eval_semaphore = asyncio.Semaphore(8)  # Match executor workers
 
             async def eval_with_timeout(idx, code):
                 async with eval_semaphore:  # Timeout starts when semaphore acquired
