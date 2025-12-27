@@ -7,7 +7,8 @@ import asyncio
 import sys
 import time
 from pathlib import Path
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import BrokenExecutor
+from algoforge.utils import ResilientProcessPool
 
 # Add algoforge to path
 ALGOFORGE_ROOT = Path(__file__).resolve().parents[2]
@@ -621,9 +622,10 @@ def main():
     generation = 0
     total_cost = 0.0
 
-    # Create process pool with worker recycling to prevent memory buildup
+    # Create resilient process pool with worker recycling to prevent memory buildup
     # Workers restart after 5 tasks, releasing accumulated memory back to OS
-    executor = ProcessPoolExecutor(max_workers=n_workers, max_tasks_per_child=5)
+    # ResilientProcessPool auto-recovers if workers crash (OOM, segfault, etc.)
+    executor = ResilientProcessPool(max_workers=n_workers, max_tasks_per_child=5)
 
     async def initialize_archive():
         """Generate diverse seeds with heavy model, then expand with light models."""
@@ -659,7 +661,11 @@ def main():
 
             if new_code:
                 # Quick eval to verify it works
-                eval_result = await loop.run_in_executor(executor, evaluate_code_in_process, new_code)
+                try:
+                    eval_result = await loop.run_in_executor(executor.executor, evaluate_code_in_process, new_code)
+                except BrokenExecutor:
+                    executor._recreate_executor()
+                    eval_result = {"error": "Pool crashed, recreated"}
                 if "error" not in eval_result:
                     new_score = score_fn(eval_result)
                     diverse_seeds.append((new_code, new_score))
@@ -741,7 +747,7 @@ def main():
                 start = time.time()
                 try:
                     result = await asyncio.wait_for(
-                        loop.run_in_executor(executor, evaluate_code_in_process, code),
+                        loop.run_in_executor(executor.executor, evaluate_code_in_process, code),
                         timeout=60  # 1 minute timeout for init phase
                     )
                     elapsed = time.time() - start
@@ -752,6 +758,12 @@ def main():
                     completed += 1
                     print(f"  [Init Eval] {completed}/{len(candidates)} Candidate {idx} TIMEOUT", flush=True)
                     return idx, {"error": "Timeout"}
+                except BrokenExecutor as e:
+                    # Pool crashed - recreate it and return error for this candidate
+                    executor._recreate_executor()
+                    completed += 1
+                    print(f"  [Init Eval] {completed}/{len(candidates)} Candidate {idx} POOL CRASHED (recreated)", flush=True)
+                    return idx, {"error": "Pool crashed, recreated"}
                 except Exception as e:
                     completed += 1
                     print(f"  [Init Eval] {completed}/{len(candidates)} Candidate {idx} ERROR: {e}", flush=True)
@@ -798,7 +810,11 @@ def main():
         # Add all diverse seeds (including original) to valid_programs
         print(f"[Init] Adding {len(diverse_seeds)} diverse seeds to candidates...", flush=True)
         for seed_code, seed_score in diverse_seeds:
-            seed_eval = await loop.run_in_executor(executor, evaluate_code_in_process, seed_code)
+            try:
+                seed_eval = await loop.run_in_executor(executor.executor, evaluate_code_in_process, seed_code)
+            except BrokenExecutor:
+                executor._recreate_executor()
+                seed_eval = {"error": "Pool crashed, recreated"}
             if "error" not in seed_eval:
                 execution_time = seed_eval.get("wall_time", 60.0)
                 valid_programs.append({
@@ -1028,7 +1044,7 @@ def main():
                     start = time.time()
                     try:
                         result = await asyncio.wait_for(
-                            loop.run_in_executor(executor, evaluate_code_in_process, code),
+                            loop.run_in_executor(executor.executor, evaluate_code_in_process, code),
                             timeout=EVAL_TIMEOUT
                         )
                         elapsed = time.time() - start
@@ -1037,6 +1053,11 @@ def main():
                     except asyncio.TimeoutError:
                         print(f"  [Eval] Candidate {idx} TIMEOUT after {EVAL_TIMEOUT}s", flush=True)
                         return idx, {"error": f"Timeout after {EVAL_TIMEOUT}s"}
+                    except BrokenExecutor as e:
+                        # Pool crashed - recreate it and return error for this candidate
+                        executor._recreate_executor()
+                        print(f"  [Eval] Candidate {idx} POOL CRASHED (recreated)", flush=True)
+                        return idx, {"error": "Pool crashed, recreated"}
                     except Exception as e:
                         print(f"  [Eval] Candidate {idx} ERROR: {e}", flush=True)
                         return idx, {"error": str(e)}
