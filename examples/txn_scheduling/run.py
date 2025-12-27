@@ -565,7 +565,7 @@ def main():
         'openrouter/google/gemini-2.5-flash-lite',       # $0.10/$0.40 per M
         'openrouter/deepseek/deepseek-v3.2',             # $0.26/$0.38 per M
     ]
-    HEAVY_MODEL = 'openrouter/z-ai/glm-4.7'
+    HEAVY_MODEL = 'openrouter/deepseek/deepseek-v3.2'
 
     n_workers = 8
     n_inspirations = 2  # Number of inspiration programs to use alongside parent
