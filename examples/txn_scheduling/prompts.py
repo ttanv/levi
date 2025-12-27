@@ -189,23 +189,24 @@ def get_random_costs() -> tuple[int, list[list[int]], float]:
 ```
 
 ## Your Task
-Generate a solution using a FUNDAMENTALLY DIFFERENT ALGORITHM CLASS than the existing seeds.
+Generate a solution with DIFFERENT BEHAVIORAL CHARACTERISTICS than the existing seeds.
 
-**CRITICAL: ALGORITHMIC DIVERSITY IS ESSENTIAL.**
+**CRITICAL: BEHAVIORAL DIVERSITY IS ESSENTIAL.**
 
-Do NOT just vary parameters or heuristics. Use a completely different algorithmic paradigm.
-If existing seeds use static heuristics, try dynamic evaluation.
-If existing seeds use greedy construction, try sampling-based methods.
-If existing seeds use grouping/bucketing, try incremental construction with cost feedback.
+Focus on creating solutions that exhibit different runtime behaviors:
+- Different execution time profiles (fast approximate vs slower precise)
+- Different memory usage patterns
+- Different tradeoffs between exploration and exploitation
+- Different sensitivity to workload characteristics
 
-The algorithm class matters more than the specific implementation details.
+The goal is behavioral variety in the population, not just different code.
 
-## Existing Seeds (DO NOT use the same algorithmic approach):
+## Existing Seeds (aim for different behavioral characteristics):
 {existing_seeds}
 
 ## Instructions
-1. Identify what algorithm class/paradigm each existing seed uses
-2. Choose a DIFFERENT algorithm class that hasn't been tried
+1. Review the existing seeds and consider their likely runtime behavior
+2. Design a solution that would behave differently (e.g., different speed/quality tradeoff)
 3. Implement it as a complete, working solution
 4. Output ONLY the complete Python code in a ```python block
 """
