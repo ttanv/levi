@@ -93,6 +93,12 @@ class ResilientProcessPool:
             self._recreation_count += 1
             print(f"  [ResilientPool] Recreated executor (recreation #{self._recreation_count})", flush=True)
 
+            # Add recovery delay - give system time to reclaim memory
+            # This prevents rapid recreation cycles that can exhaust resources
+            import time
+            delay = min(1.0 * self._recreation_count, 5.0)  # Up to 5 seconds
+            time.sleep(delay)
+
     async def run(
         self,
         loop: asyncio.AbstractEventLoop,

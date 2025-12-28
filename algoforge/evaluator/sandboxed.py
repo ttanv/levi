@@ -105,8 +105,32 @@ class SandboxedEvaluator:
         elapsed = time.time() - start_time
 
         if process.is_alive():
+            # First try graceful termination (SIGTERM)
             process.terminate()
-            process.join()
+            process.join(timeout=1.0)  # Give it 1 second to terminate gracefully
+
+            # If still alive, force kill (SIGKILL) - prevents zombie processes
+            if process.is_alive():
+                process.kill()
+                process.join(timeout=1.0)
+
+            # Clean up process resources
+            process.close()
+
+            # Clean up queue to prevent resource leaks
+            try:
+                queue.close()
+                queue.join_thread()
+            except Exception:
+                pass
+
+            # Track consecutive timeouts for backpressure
+            self._consecutive_timeouts = getattr(self, '_consecutive_timeouts', 0) + 1
+            if self._consecutive_timeouts >= 3:
+                # Backpressure: add small delay when timeouts cascade
+                import time as time_mod
+                time_mod.sleep(0.5 * min(self._consecutive_timeouts - 2, 5))
+
             self._budget_manager.try_consume(ResourceType.EVALUATIONS, 1)
             return EvaluationResult(
                 program_id=program.id,
@@ -116,6 +140,20 @@ class SandboxedEvaluator:
             )
 
         if queue.empty():
+            # Clean up process and queue resources
+            try:
+                process.close()
+            except Exception:
+                pass
+            try:
+                queue.close()
+                queue.join_thread()
+            except Exception:
+                pass
+
+            # Track as a timeout-like failure for backpressure
+            self._consecutive_timeouts = getattr(self, '_consecutive_timeouts', 0) + 1
+
             self._budget_manager.try_consume(ResourceType.EVALUATIONS, 1)
             return EvaluationResult(
                 program_id=program.id,
@@ -125,9 +163,23 @@ class SandboxedEvaluator:
             )
 
         status, result = queue.get()
+
+        # Clean up process and queue resources (successful completion)
+        try:
+            process.close()
+        except Exception:
+            pass
+        try:
+            queue.close()
+            queue.join_thread()
+        except Exception:
+            pass
+
         self._budget_manager.try_consume(ResourceType.EVALUATIONS, 1)
 
         if status == 'error':
+            # Still an error, but process completed - mild backpressure
+            self._consecutive_timeouts = max(0, getattr(self, '_consecutive_timeouts', 0) - 1)
             return EvaluationResult(
                 program_id=program.id,
                 is_valid=False,
@@ -164,6 +216,9 @@ class SandboxedEvaluator:
                 r = result[str(i)]
                 trace_lines.append(f"Input {i}: {inp} -> {r['output']} ({r['exec_time']:.4f}s)")
             traces = "\n".join(trace_lines)
+
+        # Reset consecutive timeout counter on successful evaluation
+        self._consecutive_timeouts = 0
 
         return EvaluationResult(
             program_id=program.id,
