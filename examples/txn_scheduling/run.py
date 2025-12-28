@@ -876,9 +876,9 @@ def main():
                 prompts.append(builder.build())
                 prompt_seed_idx.append(seed_idx)
 
-        # Make parallel LLM calls (alternate between light models)
+        # Make parallel LLM calls (use flash lite for init)
         llm_tasks = [
-            generate_for_island(i, prompts[i], LIGHT_MODELS[i % len(LIGHT_MODELS)], 0.8)
+            generate_for_island(i, prompts[i], 'openrouter/google/gemini-2.5-flash-lite', 0.8)
             for i in range(n_variants)
         ]
         results = await asyncio.gather(*llm_tasks)
