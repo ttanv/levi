@@ -928,8 +928,13 @@ def main():
 
         # Queues for pipeline
         sampler_queue = asyncio.Queue()      # Sampler configs to process
-        eval_queue = asyncio.Queue(maxsize=16)  # Candidates awaiting evaluation
+        eval_queue = asyncio.Queue()         # Candidates awaiting evaluation (unbounded, gated by semaphore)
         result_queue = asyncio.Queue()       # Evaluated results
+
+        # Semaphore to limit total in-flight work (eval running + queued + LLM generating)
+        # This blocks BEFORE LLM call, not after, so we don't waste money
+        # 8 eval processes + 4 buffer = 12 max concurrent candidates
+        pipeline_capacity = asyncio.Semaphore(N_EVAL_PROCESSES + 4)
 
         # Shared state with lock
         state_lock = asyncio.Lock()
@@ -990,6 +995,8 @@ def main():
             """Pull sampler config, sample from pool, generate LLM response, push to eval queue."""
             import random as rand
             while not stop_event.is_set():
+                slot_acquired = False
+                slot_transferred = False
                 try:
                     # Get next sampler config (with timeout to check stop)
                     try:
@@ -999,11 +1006,16 @@ def main():
                     except asyncio.TimeoutError:
                         continue
 
+                    # Acquire pipeline slot BEFORE LLM call to avoid wasted API costs
+                    # This blocks if too many candidates are in-flight (eval + queued)
+                    await pipeline_capacity.acquire()
+                    slot_acquired = True
+
                     # Check budget before starting
                     async with state_lock:
                         if state['total_cost'] >= BUDGET_USD:
                             stop_event.set()
-                            break
+                            break  # slot released in finally
                         state['llm_in_flight'] += 1
                         current_meta_advice = state['current_meta_advice']
 
@@ -1033,7 +1045,7 @@ def main():
 
                     if "error" in result:
                         print(f"[LLM-{worker_id}] {display_name} ERROR: {result['error'][:50]}", flush=True)
-                        continue
+                        continue  # slot released in finally
 
                     # Track cost
                     async with state_lock:
@@ -1045,9 +1057,11 @@ def main():
                     new_code, validation_error = extract_and_validate_code(result["content"])
                     if not new_code:
                         print(f"[LLM-{worker_id}] {display_name} VALIDATION FAIL: {validation_error}", flush=True)
-                        continue
+                        continue  # slot released in finally
 
-                    # Push to eval queue
+                    # Push to eval queue (slot transfers to eval, released after eval completes)
+                    # Use shield to ensure put completes even if cancelled during transfer
+                    # This prevents race condition where put succeeds but slot_transferred not set
                     candidate = {
                         "sampler": display_name,
                         "real_sampler": real_sampler,
@@ -1056,13 +1070,33 @@ def main():
                         "source_cell": source_cell,
                         "model": model,
                     }
-                    await eval_queue.put(candidate)
+                    try:
+                        await asyncio.shield(eval_queue.put(candidate))
+                        slot_transferred = True  # Eval now owns the slot
+                    except asyncio.CancelledError:
+                        # Put completed (due to shield) but we're being cancelled
+                        # Mark slot as transferred before re-raising
+                        slot_transferred = True
+                        async with state_lock:
+                            if state['llm_in_flight'] > 0:
+                                state['llm_in_flight'] -= 1
+                        raise
 
+                except asyncio.CancelledError:
+                    # Handle cancellation gracefully - don't log as error
+                    async with state_lock:
+                        if state['llm_in_flight'] > 0:
+                            state['llm_in_flight'] -= 1
+                    raise  # Re-raise to properly cancel the task
                 except Exception as e:
                     print(f"[LLM-{worker_id}] Unexpected error: {e}", flush=True)
                     async with state_lock:
                         if state['llm_in_flight'] > 0:
                             state['llm_in_flight'] -= 1
+                finally:
+                    # Release slot if we acquired it but didn't transfer to eval
+                    if slot_acquired and not slot_transferred:
+                        pipeline_capacity.release()
 
         async def eval_dispatcher():
             """
@@ -1074,36 +1108,60 @@ def main():
 
             async def run_eval(candidate):
                 """Run single evaluation with semaphore-limited concurrency."""
-                async with eval_semaphore:
-                    async with state_lock:
-                        state['eval_in_flight'] += 1
+                output = None
+                elapsed = 0
+                try:
+                    async with eval_semaphore:
+                        async with state_lock:
+                            state['eval_in_flight'] += 1
 
-                    start = time.time()
-                    try:
-                        output = await asyncio.wait_for(
-                            loop.run_in_executor(executor.executor, evaluate_code_in_process, candidate["code"]),
-                            timeout=EVAL_TIMEOUT
-                        )
-                        elapsed = time.time() - start
-                    except asyncio.TimeoutError:
-                        output = {"error": f"Timeout after {EVAL_TIMEOUT}s"}
-                        elapsed = EVAL_TIMEOUT
-                    except BrokenExecutor:
-                        executor._recreate_executor()
-                        output = {"error": "Pool crashed, recreated"}
-                        elapsed = time.time() - start
-                    except Exception as e:
-                        output = {"error": str(e)}
-                        elapsed = time.time() - start
+                        start = time.time()
+                        try:
+                            output = await asyncio.wait_for(
+                                loop.run_in_executor(executor.executor, evaluate_code_in_process, candidate["code"]),
+                                timeout=EVAL_TIMEOUT
+                            )
+                            elapsed = time.time() - start
+                        except asyncio.TimeoutError:
+                            output = {"error": f"Timeout after {EVAL_TIMEOUT}s"}
+                            elapsed = EVAL_TIMEOUT
+                        except BrokenExecutor:
+                            executor._recreate_executor()
+                            output = {"error": "Pool crashed, recreated"}
+                            elapsed = time.time() - start
+                        except asyncio.CancelledError:
+                            output = {"error": "Evaluation cancelled"}
+                            elapsed = time.time() - start
+                            raise  # Re-raise to propagate cancellation
+                        except Exception as e:
+                            output = {"error": str(e)}
+                            elapsed = time.time() - start
+                        finally:
+                            # Always release pipeline slot and update state
+                            async with state_lock:
+                                state['eval_in_flight'] -= 1
+                            pipeline_capacity.release()
 
-                    async with state_lock:
-                        state['eval_in_flight'] -= 1
-
-                    await result_queue.put({
-                        "candidate": candidate,
-                        "output": output,
-                        "elapsed": elapsed,
-                    })
+                        await result_queue.put({
+                            "candidate": candidate,
+                            "output": output,
+                            "elapsed": elapsed,
+                        })
+                except asyncio.CancelledError:
+                    # If cancelled, still try to push result if we have one
+                    if output is not None:
+                        try:
+                            await asyncio.shield(result_queue.put({
+                                "candidate": candidate,
+                                "output": output,
+                                "elapsed": elapsed,
+                            }))
+                        except Exception:
+                            pass
+                    raise
+                except Exception as e:
+                    # Log unexpected errors that would otherwise be silently lost
+                    print(f"[Eval] Unexpected error in run_eval: {e}", flush=True)
 
             while not stop_event.is_set() or not eval_queue.empty():
                 try:
@@ -1114,12 +1172,21 @@ def main():
                     task.add_done_callback(pending_evals.discard)
                 except asyncio.TimeoutError:
                     continue
+                except asyncio.CancelledError:
+                    # If cancelled, break the loop and wait for pending evals
+                    break
                 except Exception as e:
                     print(f"[EvalDispatch] Unexpected error: {e}", flush=True)
 
-            # Wait for all pending evals to complete
+            # Wait for all pending evals to complete (with timeout to avoid hanging)
             if pending_evals:
-                await asyncio.gather(*pending_evals, return_exceptions=True)
+                try:
+                    await asyncio.wait_for(
+                        asyncio.gather(*pending_evals, return_exceptions=True),
+                        timeout=EVAL_TIMEOUT + 10  # Give extra time beyond individual eval timeout
+                    )
+                except asyncio.TimeoutError:
+                    print(f"[EvalDispatch] Pending evals didn't complete in time, continuing...", flush=True)
 
         async def result_processor():
             """Process evaluation results, update archive, trigger meta-advice."""
@@ -1223,6 +1290,10 @@ def main():
                             )
                         last_save_time = time.time()
 
+                except asyncio.CancelledError:
+                    # If cancelled, do final save and re-raise
+                    print(f"[ResultProc] Cancelled, saving final state...", flush=True)
+                    break
                 except Exception as e:
                     print(f"[ResultProc] Unexpected error: {e}", flush=True)
 
@@ -1236,52 +1307,60 @@ def main():
 
         async def generate_and_update_meta_advice(eval_count: int):
             """Generate meta-advice asynchronously and update shared state."""
-            async with state_lock:
-                metrics_copy = dict(state['period_metrics'])
-                metrics_copy['error_messages'] = set(metrics_copy['error_messages'])
-                prev_advice = state['previous_meta_advice']
-                current_best = state['best_score']
-                current_cost = state['total_cost']
-
-            # Get top 3 solutions from archive
-            top_solutions = []
             try:
-                elites = list(pool._elites.values())
-                elites.sort(key=lambda e: e.result.primary_score, reverse=True)
-                for elite in elites[:3]:
-                    top_solutions.append((elite.result.primary_score, elite.program.code))
-            except Exception:
-                pass
+                async with state_lock:
+                    metrics_copy = dict(state['period_metrics'])
+                    # Create independent copy of the set to avoid race conditions
+                    metrics_copy['error_messages'] = set(state['period_metrics']['error_messages'])
+                    prev_advice = state['previous_meta_advice']
+                    current_best = state['best_score']
+                    current_cost = state['total_cost']
 
-            progress_pct = (current_cost / BUDGET_USD) * 100
-            print(f"\n[Meta-Advice] Generating at eval #{eval_count} ({progress_pct:.0f}% budget)...", flush=True)
+                # Get top 3 solutions from archive
+                top_solutions = []
+                try:
+                    elites = list(pool._elites.values())
+                    elites.sort(key=lambda e: e.result.primary_score, reverse=True)
+                    for elite in elites[:3]:
+                        top_solutions.append((elite.result.primary_score, elite.program.code))
+                except Exception:
+                    pass
 
-            advice, advice_cost = await generate_meta_advice(
-                metrics=metrics_copy,
-                previous_advice=prev_advice,
-                best_score=current_best,
-                top_solutions=top_solutions,
-                model=HEAVY_MODEL,
-                progress_pct=progress_pct,
-            )
+                progress_pct = (current_cost / BUDGET_USD) * 100
+                print(f"\n[Meta-Advice] Generating at eval #{eval_count} ({progress_pct:.0f}% budget)...", flush=True)
 
-            async with state_lock:
-                state['total_cost'] += advice_cost
-                state['previous_meta_advice'] = advice
-                state['current_meta_advice'] = advice
-                # Reset period metrics
-                state['period_metrics'] = {
-                    'total': 0,
-                    'timeouts': 0,
-                    'errors': 0,
-                    'rejections': 0,
-                    'acceptances': 0,
-                    'new_bests': 0,
-                    'error_messages': set(),
-                }
+                advice, advice_cost = await generate_meta_advice(
+                    metrics=metrics_copy,
+                    previous_advice=prev_advice,
+                    best_score=current_best,
+                    top_solutions=top_solutions,
+                    model=HEAVY_MODEL,
+                    progress_pct=progress_pct,
+                )
 
-            print(f"[Meta-Advice] Updated (cost: ${advice_cost:.4f})", flush=True)
-            print(f"[Meta-Advice]\n{advice}\n", flush=True)
+                async with state_lock:
+                    state['total_cost'] += advice_cost
+                    state['previous_meta_advice'] = advice
+                    state['current_meta_advice'] = advice
+                    # Reset period metrics
+                    state['period_metrics'] = {
+                        'total': 0,
+                        'timeouts': 0,
+                        'errors': 0,
+                        'rejections': 0,
+                        'acceptances': 0,
+                        'new_bests': 0,
+                        'error_messages': set(),
+                    }
+
+                print(f"[Meta-Advice] Updated (cost: ${advice_cost:.4f})", flush=True)
+                print(f"[Meta-Advice]\n{advice}\n", flush=True)
+            except asyncio.CancelledError:
+                print(f"[Meta-Advice] Cancelled at eval #{eval_count}", flush=True)
+                raise
+            except Exception as e:
+                # Log unexpected errors that would otherwise be silently lost
+                print(f"[Meta-Advice] Unexpected error at eval #{eval_count}: {e}", flush=True)
 
         async def status_monitor():
             """Periodically print pipeline status."""
@@ -1317,22 +1396,38 @@ def main():
         except asyncio.CancelledError:
             pass
 
-        # Cancel LLM workers (they'll finish current calls)
+        # Cancel LLM workers with timeout (they might be stuck on API calls)
         for task in llm_tasks:
             task.cancel()
-        await asyncio.gather(*llm_tasks, return_exceptions=True)
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(*llm_tasks, return_exceptions=True),
+                timeout=10.0  # Give 10s for LLM calls to cancel gracefully
+            )
+        except asyncio.TimeoutError:
+            print("[Pipeline] LLM workers didn't cancel in time, continuing...", flush=True)
 
         # Wait for eval dispatcher to drain (it waits for pending evals internally)
         await eval_task
 
-        # Wait for result queue to drain
-        while not result_queue.empty():
-            await asyncio.sleep(0.5)
+        # Wait for result processor to naturally drain (stop_event is set, it will exit
+        # when result_queue is empty). Give it reasonable time to finish.
+        try:
+            await asyncio.wait_for(processor_task, timeout=30.0)
+        except asyncio.TimeoutError:
+            print("[Pipeline] Result processor didn't finish in time, cancelling...", flush=True)
+            processor_task.cancel()
+            try:
+                await processor_task
+            except asyncio.CancelledError:
+                pass
 
-        # Cancel remaining tasks
-        processor_task.cancel()
+        # Cancel monitor
         monitor_task.cancel()
-        await asyncio.gather(processor_task, monitor_task, return_exceptions=True)
+        try:
+            await monitor_task
+        except asyncio.CancelledError:
+            pass
 
         # Final state update
         async with state_lock:
