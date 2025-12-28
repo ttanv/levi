@@ -850,13 +850,13 @@ def main():
 
         print(f"[Init Phase 1] Generated {len(diverse_seeds)-1} new diverse seeds (total: {len(diverse_seeds)})", flush=True)
 
-        # Phase 2: Generate 100 variants using light models (20 per diverse seed)
+        # Phase 2: Generate 150 variants using light models (25 per diverse seed)
         import random
-        n_variants_per_seed = 20
+        n_variants_per_seed = 25
         n_variants = n_variants_per_seed * len(diverse_seeds)
         print(f"\n[Init Phase 2] Generating {n_variants} variants ({n_variants_per_seed} per seed) with light models...", flush=True)
 
-        # Build prompts: 20 variants for each diverse seed
+        # Build prompts: 25 variants for each diverse seed
         prompts = []
         prompt_seed_idx = []  # Track which seed each prompt is for
         for seed_idx, (seed_code, s_score) in enumerate(diverse_seeds):
@@ -1011,34 +1011,20 @@ def main():
 
         print(f"[Init] Total valid programs: {len(valid_programs)}", flush=True)
 
-        # Select top 50 scoring programs
-        valid_programs.sort(key=lambda x: x["score"], reverse=True)
-        top_programs = valid_programs[:50]
-        print(f"[Init] Selected top {len(top_programs)} programs by score", flush=True)
-
-        # Rebuild behavior vectors for top programs
-        top_behaviors = []
-        for prog in top_programs:
-            output = prog.get("output", {})
-            temp_prog = Program(code=prog["code"], metadata={
-                "execution_time": prog["execution_time"],
-                "primary_score": prog["score"],
-                "workload_1_score": output.get("workload_1_score", 0.0),
-                "workload_2_score": output.get("workload_2_score", 0.0),
-                "workload_3_score": output.get("workload_3_score", 0.0),
-            })
-            behavior = extractor.extract(temp_prog)
-            top_behaviors.append(np.array([behavior[f] for f in extractor.features]))
-
-        # Build centroids from top programs
-        print(f"[Init] Building centroids from {len(top_behaviors)} behavior vectors...", flush=True)
+        # Build centroids from ALL valid programs' behavior vectors (for better CVT coverage)
+        print(f"[Init] Building centroids from {len(behavior_vectors)} behavior vectors (all surviving programs)...", flush=True)
         n_centroids = pool.set_centroids_from_data(
-            top_behaviors,
+            behavior_vectors,
             percentile_low=5.0,
             percentile_high=95.0,
             n_centroids=50,
         )
         print(f"[Init] Built {n_centroids} centroids", flush=True)
+
+        # Select top 50 scoring programs to populate the archive
+        valid_programs.sort(key=lambda x: x["score"], reverse=True)
+        top_programs = valid_programs[:50]
+        print(f"[Init] Selected top {len(top_programs)} programs to populate archive", flush=True)
 
         # Add top programs to archive
         n_accepted = 0
