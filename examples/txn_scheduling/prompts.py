@@ -38,8 +38,8 @@ def get_best_schedule(workload: Workload, num_seqs: int) -> tuple[int, list[int]
     '''Returns (makespan, schedule).'''
     pass
 
-def get_random_costs() -> tuple[int, list[list[int]], float]:
-    '''Returns (total_makespan, [sched1, sched2, sched3], time).'''
+def get_random_costs() -> tuple[int, list[list[int]], list[int], float]:
+    '''Returns (total_makespan, [sched1, sched2, sched3], [cost1, cost2, cost3], time).'''
     pass
 """
 
@@ -139,12 +139,12 @@ def get_random_costs():
     makespan3, schedule3 = get_best_schedule(workload3, 10)
     cost3 = workload3.get_opt_seq_cost(schedule3)
     print(cost1, cost2, cost3)
-    return cost1 + cost2 + cost3, [schedule1, schedule2, schedule3], time.time() - start_time
+    return cost1 + cost2 + cost3, [schedule1, schedule2, schedule3], [cost1, cost2, cost3], time.time() - start_time
 
 
 if __name__ == "__main__":
-    makespan, schedule, time = get_random_costs()
-    print(f"Makespan: {makespan}, Time: {time}")
+    makespan, schedule, costs, elapsed = get_random_costs()
+    print(f"Makespan: {makespan}, Costs: {costs}, Time: {elapsed}")
 '''
 
 # No inspiration seeds - matching OpenEvolve which only has a single seed program
@@ -183,8 +183,8 @@ def get_best_schedule(workload: Workload, num_seqs: int) -> tuple[int, list[int]
     '''Returns (makespan, schedule).'''
     pass
 
-def get_random_costs() -> tuple[int, list[list[int]], float]:
-    '''Returns (total_makespan, [sched1, sched2, sched3], time).'''
+def get_random_costs() -> tuple[int, list[list[int]], list[int], float]:
+    '''Returns (total_makespan, [sched1, sched2, sched3], [cost1, cost2, cost3], time).'''
     pass
 ```
 

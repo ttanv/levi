@@ -22,10 +22,122 @@ sys.path.insert(0, str(TXN_RESOURCES))
 from algoforge.core import Program, EvaluationResult
 from algoforge.pool import CVTMAPElitesPool
 from algoforge.llm import PromptBuilder, ProgramWithScore, OutputMode
-from algoforge.behavior import GeneralizedBehaviorExtractor
+from algoforge.behavior.extractor import FeatureVector
+import ast
 import re
 import json
 import numpy as np
+
+
+class TxnSchedulingBehaviorExtractor:
+    """
+    Custom behavior extractor for transaction scheduling with z-score normalization.
+
+    Features (all normalized to ~[0, 1] via sigmoid of z-score):
+    - execution_time: Wall clock time
+    - loop_count: Number of for/while loops
+    - branch_count: Number of if/elif/else branches
+    - math_operators: Count of math ops (+, -, *, /, etc.)
+    - workload_1_score: Performance on WORKLOAD_1 (already 0-1)
+    - workload_2_score: Performance on WORKLOAD_2 (already 0-1)
+    - workload_3_score: Performance on WORKLOAD_3 (already 0-1)
+    """
+
+    def __init__(self, max_time: float = 200.0):
+        self.features = [
+            'execution_time',
+            'loop_count',
+            'branch_count',
+            'math_operators',
+            'workload_1_score',
+            'workload_2_score',
+            'workload_3_score',
+        ]
+        self.max_time = max_time
+
+        # Running statistics for z-score normalization (Welford's online algorithm)
+        # Keys: feature names that need z-score normalization
+        self._zscore_features = ['loop_count', 'branch_count', 'math_operators']
+        self._count = 0
+        self._mean = {f: 0.0 for f in self._zscore_features}
+        self._M2 = {f: 0.0 for f in self._zscore_features}  # Sum of squared differences
+
+    def _update_stats(self, feature: str, value: float):
+        """Update running mean and variance using Welford's algorithm."""
+        self._count += 1
+        delta = value - self._mean[feature]
+        self._mean[feature] += delta / self._count
+        delta2 = value - self._mean[feature]
+        self._M2[feature] += delta * delta2
+
+    def _get_std(self, feature: str) -> float:
+        """Get current standard deviation for a feature."""
+        if self._count < 2:
+            return 1.0  # Avoid division by zero
+        variance = self._M2[feature] / (self._count - 1)
+        return max(np.sqrt(variance), 0.1)  # Min std of 0.1 to avoid extreme z-scores
+
+    def _zscore_to_01(self, z: float) -> float:
+        """Convert z-score to [0, 1] using sigmoid."""
+        # Sigmoid: 1 / (1 + exp(-z))
+        # Clamp z to avoid overflow
+        z = max(-10, min(10, z))
+        return 1.0 / (1.0 + np.exp(-z))
+
+    def extract(self, program: Program) -> FeatureVector:
+        """Extract behavioral features from a program."""
+        code = program.code
+        metadata = program.metadata or {}
+        values = {}
+
+        # Parse AST once for static features
+        try:
+            tree = ast.parse(code)
+        except SyntaxError:
+            return FeatureVector({f: 0.5 for f in self.features})
+
+        # === Dynamic features (from evaluation metadata) ===
+
+        # execution_time: normalize using max_time (0 = max_time, 1 = instant)
+        raw_time = metadata.get('execution_time', self.max_time)
+        values['execution_time'] = max(0.0, 1.0 - raw_time / self.max_time)
+
+        # Per-workload scores: already 0-1 normalized
+        values['workload_1_score'] = metadata.get('workload_1_score', 0.0)
+        values['workload_2_score'] = metadata.get('workload_2_score', 0.0)
+        values['workload_3_score'] = metadata.get('workload_3_score', 0.0)
+
+        # === Static features (from code analysis, z-score normalized) ===
+
+        # Count loops
+        loop_count = sum(1 for node in ast.walk(tree)
+                        if isinstance(node, (ast.For, ast.While)))
+
+        # Count branches
+        branch_count = sum(1 for node in ast.walk(tree)
+                          if isinstance(node, ast.If))
+
+        # Count math operators
+        math_ops = sum(1 for node in ast.walk(tree)
+                      if isinstance(node, (ast.BinOp, ast.UnaryOp, ast.AugAssign)))
+
+        # Update running statistics
+        raw_values = {
+            'loop_count': float(loop_count),
+            'branch_count': float(branch_count),
+            'math_operators': float(math_ops),
+        }
+
+        for feature in self._zscore_features:
+            self._update_stats(feature, raw_values[feature])
+
+        # Apply z-score normalization with sigmoid
+        for feature in self._zscore_features:
+            raw = raw_values[feature]
+            z = (raw - self._mean[feature]) / self._get_std(feature)
+            values[feature] = self._zscore_to_01(z)
+
+        return FeatureVector(values)
 
 def validate_python_syntax(code: str) -> tuple[bool, str]:
     """Check if code is valid Python syntax. Returns (is_valid, error_message)."""
@@ -200,17 +312,30 @@ litellm.register_model({
 _WORKLOADS = None
 _BASELINE = None
 _EFFECTIVE_OPTIMAL = None
+_PER_WORKLOAD_BASELINES = None
+_PER_WORKLOAD_OPTIMALS = None
 
 
 def _init_workloads():
     """Initialize workloads (called once per process)."""
-    global _WORKLOADS, _BASELINE, _EFFECTIVE_OPTIMAL
+    global _WORKLOADS, _BASELINE, _EFFECTIVE_OPTIMAL, _PER_WORKLOAD_BASELINES, _PER_WORKLOAD_OPTIMALS
     if _WORKLOADS is None:
         _WORKLOADS = [Workload(WORKLOAD_1), Workload(WORKLOAD_2), Workload(WORKLOAD_3)]
-        _BASELINE = sum(w.get_opt_seq_cost(list(range(w.num_txns))) for w in _WORKLOADS)
-        theoretical_optimal = sum(max(txn[0][3] for txn in w.txns) for w in _WORKLOADS)
-        _EFFECTIVE_OPTIMAL = theoretical_optimal + 0.10 * (_BASELINE - theoretical_optimal)
-    return _WORKLOADS, _BASELINE, _EFFECTIVE_OPTIMAL
+
+        # Per-workload baselines and optimals
+        _PER_WORKLOAD_BASELINES = []
+        _PER_WORKLOAD_OPTIMALS = []
+        for w in _WORKLOADS:
+            baseline = w.get_opt_seq_cost(list(range(w.num_txns)))
+            theoretical_optimal = max(txn[0][3] for txn in w.txns)
+            effective_optimal = theoretical_optimal + 0.10 * (baseline - theoretical_optimal)
+            _PER_WORKLOAD_BASELINES.append(baseline)
+            _PER_WORKLOAD_OPTIMALS.append(effective_optimal)
+
+        # Aggregate baselines
+        _BASELINE = sum(_PER_WORKLOAD_BASELINES)
+        _EFFECTIVE_OPTIMAL = sum(_PER_WORKLOAD_OPTIMALS)
+    return _WORKLOADS, _BASELINE, _EFFECTIVE_OPTIMAL, _PER_WORKLOAD_BASELINES, _PER_WORKLOAD_OPTIMALS
 
 
 class ConstraintEnforcingWorkload:
@@ -275,6 +400,15 @@ class ConstraintEnforcingWorkload:
         return self._inner.get_opt_seq_cost(seq)
 
 
+def compute_workload_score(makespan: float, baseline: float, effective_optimal: float) -> float:
+    """Compute 0-1 normalized score for a single workload."""
+    if makespan >= baseline:
+        return 0.0
+    if makespan <= effective_optimal:
+        return 1.0
+    return (baseline - makespan) / (baseline - effective_optimal)
+
+
 def evaluate_code_in_process(code: str) -> dict:
     """Execute scheduling code in a subprocess. Must be picklable."""
     import random
@@ -297,7 +431,7 @@ def evaluate_code_in_process(code: str) -> dict:
     from txn_simulator import Workload as OriginalWorkload
     from workloads import WORKLOAD_1, WORKLOAD_2, WORKLOAD_3
 
-    workloads, baseline, _ = _init_workloads()
+    workloads, baseline, _, per_workload_baselines, per_workload_optimals = _init_workloads()
 
     # Calculate O(n) budget: allow 20*n calls (seed program uses ~10*n for sampling greedy)
     # Sum actual num_txns from each workload
@@ -325,8 +459,16 @@ def evaluate_code_in_process(code: str) -> dict:
             return {"error": "get_random_costs not defined"}
 
         eval_start = time_module.time()
-        makespan, schedules, algo_time = namespace['get_random_costs']()
+        result = namespace['get_random_costs']()
         wall_time = time_module.time() - eval_start
+
+        # Handle both old (3-tuple) and new (4-tuple) return formats
+        if len(result) == 4:
+            makespan, schedules, per_workload_makespans, algo_time = result
+        else:
+            # Legacy format without per-workload costs
+            makespan, schedules, algo_time = result
+            per_workload_makespans = None
 
         # Get constraint stats
         constraint_stats = ConstraintEnforcingWorkload.get_stats()
@@ -336,12 +478,34 @@ def evaluate_code_in_process(code: str) -> dict:
             if set(sched) != set(range(workloads[i].num_txns)):
                 return {"error": f"Invalid schedule for workload {i}"}
 
+        # Compute per-workload scores from returned makespans (no recomputation!)
+        per_workload_scores = []
+        if per_workload_makespans is not None:
+            for i, wl_makespan in enumerate(per_workload_makespans):
+                wl_score = compute_workload_score(
+                    wl_makespan,
+                    per_workload_baselines[i],
+                    per_workload_optimals[i]
+                )
+                per_workload_scores.append(wl_score)
+        else:
+            # Fallback: set scores to 0 if not provided (legacy code)
+            per_workload_makespans = [0, 0, 0]
+            per_workload_scores = [0.0, 0.0, 0.0]
+
         return {
             "makespan": makespan,
             "algo_time": algo_time,
             "wall_time": wall_time,
             "get_opt_seq_cost_calls": constraint_stats["total_calls"],
             "max_allowed_calls": constraint_stats["max_allowed"],
+            # Per-workload metrics
+            "workload_1_makespan": per_workload_makespans[0],
+            "workload_2_makespan": per_workload_makespans[1],
+            "workload_3_makespan": per_workload_makespans[2],
+            "workload_1_score": per_workload_scores[0],  # 0-1 normalized
+            "workload_2_score": per_workload_scores[1],  # 0-1 normalized
+            "workload_3_score": per_workload_scores[2],  # 0-1 normalized
         }
     except RuntimeError as e:
         # Catch O(n) constraint violations
@@ -568,7 +732,7 @@ def main():
 
     # Initialize workloads in main process
     global WORKLOADS, BASELINE, EFFECTIVE_OPTIMAL
-    WORKLOADS, BASELINE, EFFECTIVE_OPTIMAL = _init_workloads()
+    WORKLOADS, BASELINE, EFFECTIVE_OPTIMAL, _, _ = _init_workloads()
 
     # Model configuration: multiple cheap light models for diversity
     LIGHT_MODELS = [
@@ -581,14 +745,10 @@ def main():
     n_workers = 8
     n_inspirations = 2  # Number of inspiration programs to use alongside parent
 
-    # Use generalized behavior extractor with standard features
-    extractor = GeneralizedBehaviorExtractor(
-        feature_set='standard',
-        time_key='execution_time',
-        score_key='primary_score',
-        max_time=200.0,  # 5 minute max
-        max_score=100.0,
-    )
+    # Use custom behavior extractor with z-score normalization for static features
+    # Features: execution_time, loop_count, branch_count, math_operators,
+    #           workload_1_score, workload_2_score, workload_3_score
+    extractor = TxnSchedulingBehaviorExtractor(max_time=200.0)
 
     # Single archive with deferred centroid initialization
     pool = CVTMAPElitesPool(
@@ -610,6 +770,9 @@ def main():
     seed_program = Program(code=SEED_PROGRAM, metadata={
         "execution_time": seed_exec_time,
         "primary_score": seed_score,
+        "workload_1_score": seed_output.get("workload_1_score", 0.0),
+        "workload_2_score": seed_output.get("workload_2_score", 0.0),
+        "workload_3_score": seed_output.get("workload_3_score", 0.0),
     })
     best_score = seed_score
     best_program = seed_program
@@ -807,6 +970,9 @@ def main():
             temp_prog = Program(code=cand["code"], metadata={
                 "execution_time": execution_time,
                 "primary_score": score,
+                "workload_1_score": output.get("workload_1_score", 0.0),
+                "workload_2_score": output.get("workload_2_score", 0.0),
+                "workload_3_score": output.get("workload_3_score", 0.0),
             })
             behavior = extractor.extract(temp_prog)
             behavior_vectors.append(np.array([behavior[f] for f in extractor.features]))
@@ -836,6 +1002,9 @@ def main():
                 temp_prog = Program(code=seed_code, metadata={
                     "execution_time": execution_time,
                     "primary_score": seed_score,
+                    "workload_1_score": seed_eval.get("workload_1_score", 0.0),
+                    "workload_2_score": seed_eval.get("workload_2_score", 0.0),
+                    "workload_3_score": seed_eval.get("workload_3_score", 0.0),
                 })
                 behavior = extractor.extract(temp_prog)
                 behavior_vectors.append(np.array([behavior[f] for f in extractor.features]))
@@ -850,9 +1019,13 @@ def main():
         # Rebuild behavior vectors for top programs
         top_behaviors = []
         for prog in top_programs:
+            output = prog.get("output", {})
             temp_prog = Program(code=prog["code"], metadata={
                 "execution_time": prog["execution_time"],
                 "primary_score": prog["score"],
+                "workload_1_score": output.get("workload_1_score", 0.0),
+                "workload_2_score": output.get("workload_2_score", 0.0),
+                "workload_3_score": output.get("workload_3_score", 0.0),
             })
             behavior = extractor.extract(temp_prog)
             top_behaviors.append(np.array([behavior[f] for f in extractor.features]))
@@ -870,9 +1043,13 @@ def main():
         # Add top programs to archive
         n_accepted = 0
         for prog in top_programs:
+            output = prog.get("output", {})
             child = Program(code=prog["code"], metadata={
                 "execution_time": prog["execution_time"],
                 "primary_score": prog["score"],
+                "workload_1_score": output.get("workload_1_score", 0.0),
+                "workload_2_score": output.get("workload_2_score", 0.0),
+                "workload_3_score": output.get("workload_3_score", 0.0),
             })
             eval_result = EvaluationResult(
                 program_id=child.id,
@@ -1216,6 +1393,9 @@ def main():
                     child = Program(code=candidate["code"], metadata={
                         "execution_time": exec_time,
                         "primary_score": score,
+                        "workload_1_score": output.get("workload_1_score", 0.0),
+                        "workload_2_score": output.get("workload_2_score", 0.0),
+                        "workload_3_score": output.get("workload_3_score", 0.0),
                     })
                     eval_result = EvaluationResult(
                         program_id=child.id,
