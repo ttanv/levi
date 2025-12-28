@@ -1434,9 +1434,9 @@ def main():
 
                         print(f"[Eval #{eval_count:4d}] {display_name:20s} INVALID    | {err}...", flush=True)
 
-                    # Trigger meta-advice every N evals
-                    if eval_count > 0 and eval_count % META_ADVICE_INTERVAL == 0:
-                        asyncio.create_task(generate_and_update_meta_advice(eval_count))
+                    # Trigger meta-advice every N evals (disabled)
+                    # if eval_count > 0 and eval_count % META_ADVICE_INTERVAL == 0:
+                    #     asyncio.create_task(generate_and_update_meta_advice(eval_count))
 
                     # Save state periodically (every 30 seconds)
                     if time.time() - last_save_time > 30:
