@@ -374,6 +374,9 @@ def score_fn(output: dict) -> float:
 
 
 
+# Budget
+BUDGET_USD = 3.0
+
 # State tracking
 STATE_FILE = Path(__file__).parent / "evolution_state.json"
 
@@ -620,7 +623,7 @@ def main():
     print(f"  Baseline makespan:    {BASELINE}")
     print(f"  Effective optimal:    {EFFECTIVE_OPTIMAL:.0f}")
     print(f"  Seed makespan:        {best_makespan:.0f} (score: {best_score:.1f})")
-    print(f"  Budget:               $5.00")
+    print(f"  Budget:               ${BUDGET_USD:.2f}")
     print(f"  Samplers:             {', '.join(sampler_names)} (UCB runs 3x)")
     print(f"  Light models:         {', '.join(LIGHT_MODELS)}")
     print(f"  Heavy model:          {HEAVY_MODEL} (every gen)")
@@ -998,7 +1001,7 @@ def main():
 
                     # Check budget before starting
                     async with state_lock:
-                        if state['total_cost'] >= 5.0:
+                        if state['total_cost'] >= BUDGET_USD:
                             stop_event.set()
                             break
                         state['llm_in_flight'] += 1
@@ -1035,7 +1038,7 @@ def main():
                     # Track cost
                     async with state_lock:
                         state['total_cost'] += result["cost"]
-                        if state['total_cost'] >= 5.0:
+                        if state['total_cost'] >= BUDGET_USD:
                             stop_event.set()
 
                     # Extract code
@@ -1250,7 +1253,7 @@ def main():
             except Exception:
                 pass
 
-            progress_pct = (current_cost / 5.0) * 100
+            progress_pct = (current_cost / BUDGET_USD) * 100
             print(f"\n[Meta-Advice] Generating at eval #{eval_count} ({progress_pct:.0f}% budget)...", flush=True)
 
             advice, advice_cost = await generate_meta_advice(
@@ -1285,7 +1288,7 @@ def main():
             while not stop_event.is_set():
                 await asyncio.sleep(30)
                 async with state_lock:
-                    print(f"\n[Status] Cost: ${state['total_cost']:.3f}/5.00 | Evals: {state['eval_count']} | "
+                    print(f"\n[Status] Cost: ${state['total_cost']:.3f}/{BUDGET_USD:.2f} | Evals: {state['eval_count']} | "
                           f"LLM in-flight: {state['llm_in_flight']} | Eval in-flight: {state['eval_in_flight']} | "
                           f"Archive: {pool.size()} | Best: {state['best_score']:.1f}\n", flush=True)
 
@@ -1302,7 +1305,7 @@ def main():
         while not stop_event.is_set():
             await asyncio.sleep(1.0)
             async with state_lock:
-                if state['total_cost'] >= 5.0:
+                if state['total_cost'] >= BUDGET_USD:
                     stop_event.set()
 
         print(f"\n[Pipeline] Budget exhausted, draining queues...", flush=True)
