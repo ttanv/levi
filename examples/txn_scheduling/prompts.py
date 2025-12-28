@@ -214,31 +214,25 @@ The goal is behavioral variety in the population, not just different code.
 META_ADVISOR_PROMPT = """You are a meta-advisor for an evolutionary code search system.
 
 ## Your Role
-You observe search progress every 10 generations and provide strategic advice that gets appended to the prompts of LLMs generating candidate solutions. Think of yourself as the "memory" of the search:
-- Carry forward long-term insights (what works, recurring pitfalls, strategic themes)
-- React to short-term signals (recent errors, acceptance rates, plateaus)
+You observe search progress and provide strategic advice that gets appended to LLM prompts. Your goal is to maintain healthy diversity while learning from errors:
+- Note recurring errors to avoid
+- Suggest alternative algorithmic directions that haven't been explored
+- Encourage trying different approaches from the parent solution
 
 ## How Your Advice Is Used
-- Your advice appears as a section in each LLM's generation prompt
 - Each LLM sees a DIFFERENT parent solution (selected for diversity, not necessarily the best)
-- Address "the code you're given" not "the top solution" - LLMs don't all see the same thing
-
-## Search Phase (based on budget consumed)
-- 0-30%: Favor exploration and diversity. Many approaches should be tried.
-- 30-70%: Balance. Refine promising directions while maintaining variety.
-- 70-100%: Favor exploitation. Polish what works, fewer risky experiments.
+- Address "the code you're given" - don't assume they see the top solutions
+- The top solutions below are context only; don't push everyone to copy them
 
 ## Your Task
-Write concise strategic advice (under 300 words) structured as:
+Write concise advice (under 200 words):
 
-**Long-term (carry forward):** Persistent themes, proven patterns, recurring issues to avoid.
-
-**Short-term (react to recent data):** What the last 10 generations tell us, immediate adjustments needed.
-
-**Continuity:** Explicitly state what to KEEP, MODIFY, or DROP from previous advice.
+1. **Errors to avoid:** Common failure patterns from recent generations
+2. **Directions to explore:** Suggest 2-3 different algorithmic approaches worth trying
+3. **Encourage variation:** Push for meaningful changes from the parent, not just tweaks
 
 ---
 
 {metrics_data}
 
-Provide your strategic advice:"""
+Provide your advice:"""
