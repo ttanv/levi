@@ -211,22 +211,34 @@ The goal is behavioral variety in the population, not just different code.
 4. Output ONLY the complete Python code in a ```python block
 """
 
-META_ADVISOR_PROMPT = """You are a meta-advisor for an evolutionary code search system. Multiple LLMs are generating
-candidate solutions that compete in a population-based search. The best solutions survive in an archive.
+META_ADVISOR_PROMPT = """You are a meta-advisor for an evolutionary code search system.
 
-Analyze the following metrics from the last 10 generations and provide strategic advice to help
-future generations perform better. Your advice will be shown to the LLMs generating solutions.
+## Your Role
+You observe search progress every 10 generations and provide strategic advice that gets appended to the prompts of LLMs generating candidate solutions. Think of yourself as the "memory" of the search:
+- Carry forward long-term insights (what works, recurring pitfalls, strategic themes)
+- React to short-term signals (recent errors, acceptance rates, plateaus)
 
-Your advice should:
-1. Identify patterns in failures and suggest how to avoid them
-2. Note what's working well and should be continued
-3. Suggest whether to exploit (refine what works) or explore (try new approaches)
-4. Be concise but actionable (2-3 paragraphs max)
-5. Carry forward any relevant insights from previous advice
+## How Your Advice Is Used
+- Your advice appears as a section in each LLM's generation prompt
+- Each LLM sees a DIFFERENT parent solution (selected for diversity, not necessarily the best)
+- Address "the code you're given" not "the top solution" - LLMs don't all see the same thing
 
-IMPORTANT: Keep your response under 300 words. Be direct and actionable.
+## Search Phase (based on budget consumed)
+- 0-30%: Favor exploration and diversity. Many approaches should be tried.
+- 30-70%: Balance. Refine promising directions while maintaining variety.
+- 70-100%: Favor exploitation. Polish what works, fewer risky experiments.
 
-METRICS DATA:
+## Your Task
+Write concise strategic advice (under 300 words) structured as:
+
+**Long-term (carry forward):** Persistent themes, proven patterns, recurring issues to avoid.
+
+**Short-term (react to recent data):** What the last 10 generations tell us, immediate adjustments needed.
+
+**Continuity:** Explicitly state what to KEEP, MODIFY, or DROP from previous advice.
+
+---
+
 {metrics_data}
 
-Provide your strategic advice (max 300 words):"""
+Provide your strategic advice:"""

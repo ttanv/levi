@@ -439,6 +439,7 @@ def format_metrics_for_llm(
     previous_advice: str,
     best_score: float,
     top_solutions: list[tuple[float, str]] = None,
+    progress_pct: float = 0.0,
 ) -> str:
     """Format metrics data for the LLM to analyze.
 
@@ -447,6 +448,7 @@ def format_metrics_for_llm(
         previous_advice: Previous meta-advice (for continuity)
         best_score: Current best score achieved
         top_solutions: List of (score, code_snippet) for top 3 solutions
+        progress_pct: Percentage of budget consumed (0-100)
 
     Returns:
         Formatted string with all metrics data
@@ -459,27 +461,29 @@ def format_metrics_for_llm(
     new_bests = metrics.get('new_bests', 0)
     error_messages = metrics.get('error_messages', set())
 
-    data = f"""Current Best Score: {best_score:.1f}
+    data = f"""## Progress: {progress_pct:.0f}% of budget consumed
 
-Outcomes from Last 10 Generations ({total} candidates):
-- Timeouts: {timeouts} (solution took too long to execute)
-- Errors: {error_count} (solution crashed, had bugs, or failed validation)
-- Rejections: {rejections} (solution was valid but didn't beat existing archive entry)
-- Acceptances: {acceptances} (solution was good enough to enter the archive)
-- New Bests: {new_bests} (solution achieved a new highest score)"""
+## Current Best Score: {best_score:.1f}
+
+## Last 10 Generations ({total} candidates):
+- Acceptances: {acceptances} (improved archive)
+- Rejections: {rejections} (valid but didn't improve)
+- Errors: {error_count} (crashed/invalid)
+- Timeouts: {timeouts}
+- New Bests: {new_bests}"""
 
     if error_messages:
-        data += "\n\nErrors encountered:\n"
+        data += "\n\n## Errors Encountered:\n"
         for err in sorted(error_messages):
             data += f"- {err}\n"
 
     if top_solutions:
-        data += f"\n\nTop {len(top_solutions)} Solutions in Archive:\n"
+        data += f"\n\n## Top {len(top_solutions)} Solutions:\n"
         for i, (score, snippet) in enumerate(top_solutions, 1):
             data += f"\n### #{i} (Score: {score:.1f})\n```python\n{snippet}\n```\n"
 
     if previous_advice:
-        data += f"\n\nPrevious Strategic Advice:\n{previous_advice}"
+        data += f"\n\n## Previous Advice:\n{previous_advice}"
 
     return data
 
@@ -490,6 +494,7 @@ async def generate_meta_advice(
     best_score: float,
     top_solutions: list[tuple[float, str]] = None,
     model: str = None,
+    progress_pct: float = 0.0,
 ) -> tuple[str, float]:
     """Use heavy LLM to generate strategic meta-advice from evolution metrics.
 
@@ -499,11 +504,12 @@ async def generate_meta_advice(
         best_score: Current best score achieved
         top_solutions: List of (score, code_snippet) for top 3 solutions
         model: LLM model to use for generating advice
+        progress_pct: Percentage of budget consumed (0-100)
 
     Returns:
         Tuple of (advice string, cost)
     """
-    metrics_data = format_metrics_for_llm(metrics, previous_advice, best_score, top_solutions)
+    metrics_data = format_metrics_for_llm(metrics, previous_advice, best_score, top_solutions, progress_pct)
     prompt = META_ADVISOR_PROMPT.format(metrics_data=metrics_data)
 
     try:
@@ -890,55 +896,378 @@ def main():
         )
         print(f"[Init] State saved to {STATE_FILE}\n", flush=True)
 
-    async def run_generation():
+    async def run_pipeline():
+        """
+        Producer-consumer pipeline for async LLM sampling and evaluation.
+
+        Architecture:
+        - Sampler Queue: Yields (display_name, real_sampler, model) in fair distribution
+        - LLM Producers: Pull from sampler queue, generate code, push to eval queue
+        - Eval Consumers: Pull from eval queue, evaluate in process pool, push to result queue
+        - Result Processor: Update archive, track metrics, trigger meta-advice every 50 evals
+        """
         nonlocal generation, best_score, best_program, best_makespan, total_cost
 
-        print(f"[Evolution] Starting evolution loop...", flush=True)
+        print(f"[Pipeline] Starting async evolution pipeline...", flush=True)
         loop = asyncio.get_event_loop()
 
-        # Meta-advice tracking
-        current_meta_advice = ""
-        previous_meta_advice = ""
-        period_metrics = {
-            'total': 0,
-            'timeouts': 0,
-            'errors': 0,
-            'rejections': 0,
-            'acceptances': 0,
-            'new_bests': 0,
-            'error_messages': set(),
+        # Configuration for 8-core machine
+        # LLM: I/O bound (10-30s) - just need enough async tasks to keep eval fed
+        # Eval: CPU bound (1-300s) - need 8 processes for 8 cores
+        #
+        # Math: At avg 60s eval time, 8 workers process ~8 evals/min
+        #       At avg 20s LLM time, need ~3 concurrent LLM calls to match
+        #       Use 8 for buffer (they're just async, no CPU cost)
+        N_LLM_WORKERS = 8       # Concurrent async LLM calls (I/O bound)
+        N_EVAL_PROCESSES = 8    # Process pool size (CPU bound, matches cores)
+        EVAL_TIMEOUT = 300      # 5 minute timeout
+        META_ADVICE_INTERVAL = 50  # Generate meta-advice every N evals
+
+        # Queues for pipeline
+        sampler_queue = asyncio.Queue()      # Sampler configs to process
+        eval_queue = asyncio.Queue(maxsize=16)  # Candidates awaiting evaluation
+        result_queue = asyncio.Queue()       # Evaluated results
+
+        # Shared state with lock
+        state_lock = asyncio.Lock()
+        state = {
+            'total_cost': total_cost,
+            'eval_count': 0,
+            'best_score': best_score,
+            'best_program': best_program,
+            'best_makespan': best_makespan,
+            'current_meta_advice': '',
+            'previous_meta_advice': '',
+            'period_metrics': {
+                'total': 0,
+                'timeouts': 0,
+                'errors': 0,
+                'rejections': 0,
+                'acceptances': 0,
+                'new_bests': 0,
+                'error_messages': set(),
+            },
+            'llm_in_flight': 0,
+            'eval_in_flight': 0,
         }
 
-        while total_cost < 5.0:
-            generation += 1
-            batch_start = time.time()
+        # Stop signal
+        stop_event = asyncio.Event()
 
-            # Every 10 generations, generate new meta-advice from accumulated metrics
-            if generation > 1 and (generation - 1) % 10 == 0:
-                # Get top 3 solutions from archive
-                top_solutions = []
+        def get_sampler_cycle():
+            """Generate one cycle of sampler configs with fair distribution."""
+            import random as rand
+            configs = []
+            for name in sampler_names:
+                sampler = pool.get_sampler(name)
+                if sampler.model_type == "heavy":
+                    configs.append((name, name, HEAVY_MODEL))
+                elif name == "ucb":
+                    # 3x UCB with different light models
+                    for ucb_idx in range(3):
+                        configs.append((f"ucb_{ucb_idx}", "ucb", rand.choice(LIGHT_MODELS)))
+                else:
+                    configs.append((name, name, rand.choice(LIGHT_MODELS)))
+            return configs
+
+        async def sampler_feeder():
+            """Continuously feed sampler configs to the queue."""
+            cycle_num = 0
+            while not stop_event.is_set():
+                cycle_num += 1
+                configs = get_sampler_cycle()
+                for config in configs:
+                    if stop_event.is_set():
+                        break
+                    await sampler_queue.put(config)
+                # Small delay between cycles to allow checking stop
+                await asyncio.sleep(0.1)
+
+        async def llm_producer(worker_id: int):
+            """Pull sampler config, sample from pool, generate LLM response, push to eval queue."""
+            import random as rand
+            while not stop_event.is_set():
                 try:
-                    elites = list(pool._elites.values())
-                    elites.sort(key=lambda e: e.result.primary_score, reverse=True)
-                    for elite in elites[:3]:
-                        score = elite.result.primary_score
-                        code = elite.program.code
-                        top_solutions.append((score, code))
-                except Exception:
-                    pass  # If we can't get elites, continue without them
+                    # Get next sampler config (with timeout to check stop)
+                    try:
+                        display_name, real_sampler, model = await asyncio.wait_for(
+                            sampler_queue.get(), timeout=2.0
+                        )
+                    except asyncio.TimeoutError:
+                        continue
 
-                print(f"[Gen {generation}] Generating meta-advice with heavy model...", flush=True)
-                current_meta_advice, advice_cost = await generate_meta_advice(
-                    metrics=period_metrics,
-                    previous_advice=previous_meta_advice,
-                    best_score=best_score,
-                    top_solutions=top_solutions,
-                    model=HEAVY_MODEL,
-                )
-                total_cost += advice_cost
-                previous_meta_advice = current_meta_advice
-                # Reset metrics for next period
-                period_metrics = {
+                    # Check budget before starting
+                    async with state_lock:
+                        if state['total_cost'] >= 5.0:
+                            stop_event.set()
+                            break
+                        state['llm_in_flight'] += 1
+                        current_meta_advice = state['current_meta_advice']
+
+                    # Sample from pool (thread-safe read)
+                    sample = pool.sample(real_sampler, n_parents=1 + n_inspirations)
+                    inspirations = [p for p in sample.inspirations if rand.random() < 0.8]
+                    parents = [sample.parent] + inspirations
+                    source_cell = sample.metadata.get("source_cell", 0)
+
+                    # Build prompt
+                    builder = PromptBuilder()
+                    builder.add_section("Problem", PROBLEM_DESCRIPTION, priority=10)
+                    builder.add_section("Signature", f"```python\n{FUNCTION_SIGNATURE}\n```", priority=20)
+                    builder.add_parents([ProgramWithScore(p, None) for p in parents], priority=30)
+                    builder.set_output_mode(OutputMode.FULL)
+
+                    if current_meta_advice and rand.random() < 0.8:
+                        builder.add_section("Meta-Advice", current_meta_advice, priority=100)
+
+                    prompt = builder.build()
+
+                    # Generate
+                    result = await generate_for_island(worker_id, prompt, model, 0.8)
+
+                    async with state_lock:
+                        state['llm_in_flight'] -= 1
+
+                    if "error" in result:
+                        print(f"[LLM-{worker_id}] {display_name} ERROR: {result['error'][:50]}", flush=True)
+                        continue
+
+                    # Track cost
+                    async with state_lock:
+                        state['total_cost'] += result["cost"]
+                        if state['total_cost'] >= 5.0:
+                            stop_event.set()
+
+                    # Extract code
+                    new_code, validation_error = extract_and_validate_code(result["content"])
+                    if not new_code:
+                        print(f"[LLM-{worker_id}] {display_name} VALIDATION FAIL: {validation_error}", flush=True)
+                        continue
+
+                    # Push to eval queue
+                    candidate = {
+                        "sampler": display_name,
+                        "real_sampler": real_sampler,
+                        "code": new_code,
+                        "tokens": result.get("tokens", 0),
+                        "source_cell": source_cell,
+                        "model": model,
+                    }
+                    await eval_queue.put(candidate)
+
+                except Exception as e:
+                    print(f"[LLM-{worker_id}] Unexpected error: {e}", flush=True)
+                    async with state_lock:
+                        if state['llm_in_flight'] > 0:
+                            state['llm_in_flight'] -= 1
+
+        async def eval_dispatcher():
+            """
+            Single dispatcher that pulls from eval queue and spawns eval tasks.
+            Uses semaphore to limit concurrent process pool submissions to N_EVAL_PROCESSES.
+            """
+            eval_semaphore = asyncio.Semaphore(N_EVAL_PROCESSES)
+            pending_evals = set()  # Track in-flight eval tasks
+
+            async def run_eval(candidate):
+                """Run single evaluation with semaphore-limited concurrency."""
+                async with eval_semaphore:
+                    async with state_lock:
+                        state['eval_in_flight'] += 1
+
+                    start = time.time()
+                    try:
+                        output = await asyncio.wait_for(
+                            loop.run_in_executor(executor.executor, evaluate_code_in_process, candidate["code"]),
+                            timeout=EVAL_TIMEOUT
+                        )
+                        elapsed = time.time() - start
+                    except asyncio.TimeoutError:
+                        output = {"error": f"Timeout after {EVAL_TIMEOUT}s"}
+                        elapsed = EVAL_TIMEOUT
+                    except BrokenExecutor:
+                        executor._recreate_executor()
+                        output = {"error": "Pool crashed, recreated"}
+                        elapsed = time.time() - start
+                    except Exception as e:
+                        output = {"error": str(e)}
+                        elapsed = time.time() - start
+
+                    async with state_lock:
+                        state['eval_in_flight'] -= 1
+
+                    await result_queue.put({
+                        "candidate": candidate,
+                        "output": output,
+                        "elapsed": elapsed,
+                    })
+
+            while not stop_event.is_set() or not eval_queue.empty():
+                try:
+                    candidate = await asyncio.wait_for(eval_queue.get(), timeout=2.0)
+                    # Spawn eval task (semaphore limits actual concurrency)
+                    task = asyncio.create_task(run_eval(candidate))
+                    pending_evals.add(task)
+                    task.add_done_callback(pending_evals.discard)
+                except asyncio.TimeoutError:
+                    continue
+                except Exception as e:
+                    print(f"[EvalDispatch] Unexpected error: {e}", flush=True)
+
+            # Wait for all pending evals to complete
+            if pending_evals:
+                await asyncio.gather(*pending_evals, return_exceptions=True)
+
+        async def result_processor():
+            """Process evaluation results, update archive, trigger meta-advice."""
+            nonlocal generation, best_score, best_program, best_makespan, total_cost
+
+            last_save_time = time.time()
+
+            while not stop_event.is_set() or not result_queue.empty():
+                try:
+                    # Get next result
+                    try:
+                        item = await asyncio.wait_for(result_queue.get(), timeout=1.0)
+                    except asyncio.TimeoutError:
+                        continue
+
+                    candidate = item["candidate"]
+                    output = item["output"]
+                    elapsed = item["elapsed"]
+
+                    display_name = candidate["sampler"]
+                    real_sampler = candidate["real_sampler"]
+                    tokens = candidate["tokens"]
+
+                    score = score_fn(output)
+                    exec_time = output.get("wall_time", 60.0)
+
+                    child = Program(code=candidate["code"], metadata={
+                        "execution_time": exec_time,
+                        "primary_score": score,
+                    })
+                    eval_result = EvaluationResult(
+                        program_id=child.id,
+                        scores={'score': score},
+                        is_valid="error" not in output,
+                        error=output.get("error"),
+                    )
+
+                    async with state_lock:
+                        state['eval_count'] += 1
+                        state['period_metrics']['total'] += 1
+                        eval_count = state['eval_count']
+                        current_cost = state['total_cost']
+
+                    if eval_result.is_valid:
+                        accepted = pool.add(child, eval_result)
+                        pool.update_sampler(real_sampler, candidate["source_cell"], success=accepted, reward=score)
+                        makespan = output.get("makespan", BASELINE)
+                        wall_time = exec_time * 1000
+
+                        async with state_lock:
+                            if accepted:
+                                state['period_metrics']['acceptances'] += 1
+                            else:
+                                state['period_metrics']['rejections'] += 1
+
+                            status = "accepted" if accepted else "rejected"
+                            if score > state['best_score']:
+                                state['best_score'] = score
+                                state['best_program'] = child
+                                state['best_makespan'] = makespan
+                                best_score = score
+                                best_program = child
+                                best_makespan = makespan
+                                status = "NEW BEST ★"
+                                state['period_metrics']['new_bests'] += 1
+
+                        print(f"[Eval #{eval_count:4d}] {display_name:20s} {status:10s} | mkspan: {makespan:5.0f} | score: {score:5.1f} | time: {wall_time:6.0f}ms | best: {best_score:5.1f} | {tokens}tok | ${current_cost:.3f}", flush=True)
+                    else:
+                        pool.update_sampler(real_sampler, candidate["source_cell"], success=False)
+                        err = eval_result.error[:30] if eval_result.error else "unknown"
+
+                        async with state_lock:
+                            if eval_result.error and "timeout" in eval_result.error.lower():
+                                state['period_metrics']['timeouts'] += 1
+                            else:
+                                state['period_metrics']['errors'] += 1
+                                if eval_result.error:
+                                    state['period_metrics']['error_messages'].add(eval_result.error[:100].strip())
+
+                        print(f"[Eval #{eval_count:4d}] {display_name:20s} INVALID    | {err}...", flush=True)
+
+                    # Trigger meta-advice every N evals
+                    if eval_count > 0 and eval_count % META_ADVICE_INTERVAL == 0:
+                        asyncio.create_task(generate_and_update_meta_advice(eval_count))
+
+                    # Save state periodically (every 30 seconds)
+                    if time.time() - last_save_time > 30:
+                        async with state_lock:
+                            save_state(
+                                generation=eval_count,
+                                pool=pool,
+                                best_score=state['best_score'],
+                                best_program=state['best_program'],
+                                total_cost=state['total_cost'],
+                                extra_info={
+                                    "phase": "pipeline",
+                                    "eval_count": eval_count,
+                                    "llm_in_flight": state['llm_in_flight'],
+                                    "eval_in_flight": state['eval_in_flight'],
+                                },
+                            )
+                        last_save_time = time.time()
+
+                except Exception as e:
+                    print(f"[ResultProc] Unexpected error: {e}", flush=True)
+
+            # Final save
+            async with state_lock:
+                total_cost = state['total_cost']
+                best_score = state['best_score']
+                best_program = state['best_program']
+                best_makespan = state['best_makespan']
+                generation = state['eval_count']
+
+        async def generate_and_update_meta_advice(eval_count: int):
+            """Generate meta-advice asynchronously and update shared state."""
+            async with state_lock:
+                metrics_copy = dict(state['period_metrics'])
+                metrics_copy['error_messages'] = set(metrics_copy['error_messages'])
+                prev_advice = state['previous_meta_advice']
+                current_best = state['best_score']
+                current_cost = state['total_cost']
+
+            # Get top 3 solutions from archive
+            top_solutions = []
+            try:
+                elites = list(pool._elites.values())
+                elites.sort(key=lambda e: e.result.primary_score, reverse=True)
+                for elite in elites[:3]:
+                    top_solutions.append((elite.result.primary_score, elite.program.code))
+            except Exception:
+                pass
+
+            progress_pct = (current_cost / 5.0) * 100
+            print(f"\n[Meta-Advice] Generating at eval #{eval_count} ({progress_pct:.0f}% budget)...", flush=True)
+
+            advice, advice_cost = await generate_meta_advice(
+                metrics=metrics_copy,
+                previous_advice=prev_advice,
+                best_score=current_best,
+                top_solutions=top_solutions,
+                model=HEAVY_MODEL,
+                progress_pct=progress_pct,
+            )
+
+            async with state_lock:
+                state['total_cost'] += advice_cost
+                state['previous_meta_advice'] = advice
+                state['current_meta_advice'] = advice
+                # Reset period metrics
+                state['period_metrics'] = {
                     'total': 0,
                     'timeouts': 0,
                     'errors': 0,
@@ -947,211 +1276,85 @@ def main():
                     'new_bests': 0,
                     'error_messages': set(),
                 }
-                print(f"[Gen {generation}] Meta-advice updated (cost: ${advice_cost:.4f})", flush=True)
-                print(f"[Meta-Advice]\n{current_meta_advice}\n", flush=True)
 
-            print(f"[Gen {generation}] Starting generation...", flush=True)
+            print(f"[Meta-Advice] Updated (cost: ${advice_cost:.4f})", flush=True)
+            print(f"[Meta-Advice]\n{advice}\n", flush=True)
 
-            # Determine which samplers to use this generation
-            # All samplers run every generation; heavy models use HEAVY_MODEL
-            # Format: (display_name, real_sampler_name, model)
-            active_samplers = []
-            for name in sampler_names:
-                sampler = pool.get_sampler(name)
-                if sampler.model_type == "heavy":
-                    active_samplers.append((name, name, HEAVY_MODEL))
-                elif name == "ucb":
-                    # Run 3 parallel UCB samplers
-                    for ucb_idx in range(3):
-                        active_samplers.append((f"ucb_{ucb_idx}", "ucb", random.choice(LIGHT_MODELS)))
-                else:
-                    active_samplers.append((name, name, random.choice(LIGHT_MODELS)))
+        async def status_monitor():
+            """Periodically print pipeline status."""
+            while not stop_event.is_set():
+                await asyncio.sleep(30)
+                async with state_lock:
+                    print(f"\n[Status] Cost: ${state['total_cost']:.3f}/5.00 | Evals: {state['eval_count']} | "
+                          f"LLM in-flight: {state['llm_in_flight']} | Eval in-flight: {state['eval_in_flight']} | "
+                          f"Archive: {pool.size()} | Best: {state['best_score']:.1f}\n", flush=True)
 
-            # Build prompts for each active sampler
-            prompts = []
-            sampler_data = []
-            for display_name, real_sampler, model in active_samplers:
-                sample = pool.sample(real_sampler, n_parents=1 + n_inspirations)  # 1 parent + inspirations
-                parents = [sample.parent] + sample.inspirations
-                source_cell = sample.metadata.get("source_cell", 0)
+        # Start all workers
+        print(f"[Pipeline] Starting {N_LLM_WORKERS} async LLM workers, {N_EVAL_PROCESSES}-process eval pool...", flush=True)
 
-                builder = PromptBuilder()
-                builder.add_section("Problem", PROBLEM_DESCRIPTION, priority=10)
-                builder.add_section("Signature", f"```python\n{FUNCTION_SIGNATURE}\n```", priority=20)
-                builder.add_parents([ProgramWithScore(p, None) for p in parents], priority=30)
-                builder.set_output_mode(OutputMode.FULL)  # Use FULL mode for better extraction
+        feeder_task = asyncio.create_task(sampler_feeder())
+        llm_tasks = [asyncio.create_task(llm_producer(i)) for i in range(N_LLM_WORKERS)]
+        eval_task = asyncio.create_task(eval_dispatcher())  # Single dispatcher with semaphore
+        processor_task = asyncio.create_task(result_processor())
+        monitor_task = asyncio.create_task(status_monitor())
 
-                # Add meta-advice at the end (low priority = appears last)
-                if current_meta_advice:
-                    builder.add_section("Meta-Advice", current_meta_advice, priority=100)
+        # Wait for budget exhaustion or stop
+        while not stop_event.is_set():
+            await asyncio.sleep(1.0)
+            async with state_lock:
+                if state['total_cost'] >= 5.0:
+                    stop_event.set()
 
-                prompts.append(builder.build())
-                sampler_data.append({
-                    "sampler": display_name,
-                    "real_sampler": real_sampler,
-                    "model": model,
-                    "parents": parents,
-                    "parent_code": parents[0].code,
-                    "source_cell": source_cell,
-                })
+        print(f"\n[Pipeline] Budget exhausted, draining queues...", flush=True)
 
-            # Generate for all samplers in parallel
-            n_samplers = len(active_samplers)
-            print(f"[Gen {generation}] LLM calls for {n_samplers} samplers...", flush=True)
-            llm_tasks = [
-                generate_for_island(i, prompts[i], sampler_data[i]["model"], 0.8)
-                for i in range(n_samplers)
-            ]
-            results = await asyncio.gather(*llm_tasks)
-            print(f"[Gen {generation}] All LLM calls complete", flush=True)
+        # Cancel feeder first to stop new work
+        feeder_task.cancel()
+        try:
+            await feeder_task
+        except asyncio.CancelledError:
+            pass
 
-            # Extract code from LLM responses
-            candidates = []
-            for res in results:
-                if "error" in res:
-                    idx = res["island"]
-                    print(f"[Gen {generation}] {sampler_data[idx]['sampler']} ERROR: {res['error'][:50]}", flush=True)
-                    continue
+        # Cancel LLM workers (they'll finish current calls)
+        for task in llm_tasks:
+            task.cancel()
+        await asyncio.gather(*llm_tasks, return_exceptions=True)
 
-                total_cost += res["cost"]
-                idx = res["island"]
-                tokens = res.get("tokens", 0)
-                sname = sampler_data[idx]["sampler"]
-                model = sampler_data[idx]["model"]
+        # Wait for eval dispatcher to drain (it waits for pending evals internally)
+        await eval_task
 
-                new_code, validation_error = extract_and_validate_code(res["content"])
+        # Wait for result queue to drain
+        while not result_queue.empty():
+            await asyncio.sleep(0.5)
 
-                if not new_code:
-                    print(f"[Gen {generation}] {sname} VALIDATION FAIL ({model.split('/')[-1]}): {validation_error}", flush=True)
-                    continue
+        # Cancel remaining tasks
+        processor_task.cancel()
+        monitor_task.cancel()
+        await asyncio.gather(processor_task, monitor_task, return_exceptions=True)
 
-                candidates.append({
-                    "sampler": sname,
-                    "real_sampler": sampler_data[idx]["real_sampler"],
-                    "code": new_code,
-                    "tokens": tokens,
-                    "generation": generation,
-                    "source_cell": sampler_data[idx]["source_cell"],
-                    "model": model,
-                })
+        # Final state update
+        async with state_lock:
+            total_cost = state['total_cost']
+            best_score = state['best_score']
+            best_program = state['best_program']
+            best_makespan = state['best_makespan']
+            generation = state['eval_count']
 
-            # Evaluate candidates with semaphore to ensure timeout starts when task runs
-            EVAL_TIMEOUT = 300  # 5 minute timeout for txn scheduling
-            print(f"[Gen {generation}] Evaluating {len(candidates)} candidates...", flush=True)
-            eval_semaphore = asyncio.Semaphore(8)  # Match executor workers
-
-            async def eval_with_timeout(idx, code):
-                async with eval_semaphore:  # Timeout starts when semaphore acquired
-                    start = time.time()
-                    try:
-                        result = await asyncio.wait_for(
-                            loop.run_in_executor(executor.executor, evaluate_code_in_process, code),
-                            timeout=EVAL_TIMEOUT
-                        )
-                        elapsed = time.time() - start
-                        print(f"  [Eval] Candidate {idx} done in {elapsed:.1f}s", flush=True)
-                        return idx, result
-                    except asyncio.TimeoutError:
-                        print(f"  [Eval] Candidate {idx} TIMEOUT after {EVAL_TIMEOUT}s", flush=True)
-                        return idx, {"error": f"Timeout after {EVAL_TIMEOUT}s"}
-                    except BrokenExecutor as e:
-                        # Pool crashed - recreate it and return error for this candidate
-                        executor._recreate_executor()
-                        print(f"  [Eval] Candidate {idx} POOL CRASHED (recreated)", flush=True)
-                        return idx, {"error": "Pool crashed, recreated"}
-                    except Exception as e:
-                        print(f"  [Eval] Candidate {idx} ERROR: {e}", flush=True)
-                        return idx, {"error": str(e)}
-
-            eval_tasks = [eval_with_timeout(i, c["code"]) for i, c in enumerate(candidates)]
-            indexed_results = await asyncio.gather(*eval_tasks)
-            eval_results = [r for _, r in sorted(indexed_results, key=lambda x: x[0])]
-            print(f"[Gen {generation}] All evaluations complete", flush=True)
-
-            batch_time = time.time() - batch_start
-
-            # Process results
-            for cand, output in zip(candidates, eval_results):
-                display_name = cand["sampler"]
-                real_sampler = cand["real_sampler"]
-                tokens = cand["tokens"]
-                score = score_fn(output)
-                exec_time = output.get("wall_time", 60.0)
-
-                child = Program(code=cand["code"], metadata={
-                    "execution_time": exec_time,
-                    "primary_score": score,
-                })
-                eval_result = EvaluationResult(
-                    program_id=child.id,
-                    scores={'score': score},
-                    is_valid="error" not in output,
-                    error=output.get("error"),
-                )
-
-                # Track metrics for meta-advice
-                period_metrics['total'] += 1
-
-                if eval_result.is_valid:
-                    accepted = pool.add(child, eval_result)
-                    pool.update_sampler(real_sampler, cand["source_cell"], success=accepted, reward=score)
-                    makespan = output.get("makespan", BASELINE)
-                    wall_time = exec_time * 1000  # ms
-                    status = "accepted" if accepted else "rejected"
-
-                    if accepted:
-                        period_metrics['acceptances'] += 1
-                    else:
-                        period_metrics['rejections'] += 1
-
-                    if score > best_score:
-                        best_score, best_program = score, child
-                        best_makespan = makespan
-                        status = "NEW BEST ★"
-                        period_metrics['new_bests'] += 1
-
-                    print(f"[Gen {generation}] {display_name:20s} {status:10s} | mkspan: {makespan:5.0f} | score: {score:5.1f} | time: {wall_time:6.0f}ms | best: {best_score:5.1f} | {tokens}tok | ${total_cost:.3f}", flush=True)
-                else:
-                    pool.update_sampler(real_sampler, cand["source_cell"], success=False)
-                    err = eval_result.error[:30] if eval_result.error else "unknown"
-
-                    # Track timeout vs other errors
-                    if eval_result.error and "timeout" in eval_result.error.lower():
-                        period_metrics['timeouts'] += 1
-                    else:
-                        period_metrics['errors'] += 1
-                        # Add truncated error message to set (avoid duplicates)
-                        if eval_result.error:
-                            err_msg = eval_result.error[:100].strip()
-                            period_metrics['error_messages'].add(err_msg)
-
-                    print(f"[Gen {generation}] {display_name:20s} INVALID    | {err}...", flush=True)
-
-            pool.on_generation_complete()
-            print(f"    [Batch {generation} done in {batch_time:.1f}s | {n_samplers} samplers, archive: {pool.size()}]", flush=True)
-
-            if generation % 25 == 0:
-                print(f"{'─'*70}\n[MILESTONE] Best makespan: {best_makespan:.0f} | Score: {best_score:.1f}\n{'─'*70}", flush=True)
-
-            # Save state after each generation
-            save_state(
-                generation=generation,
-                pool=pool,
-                best_score=best_score,
-                best_program=best_program,
-                total_cost=total_cost,
-                extra_info={
-                    "phase": "evolution",
-                    "batch_time_s": batch_time,
-                    "n_samplers": n_samplers,
-                },
-            )
+        # Final save
+        save_state(
+            generation=generation,
+            pool=pool,
+            best_score=best_score,
+            best_program=best_program,
+            total_cost=total_cost,
+            extra_info={"phase": "pipeline_complete"},
+        )
 
         executor.shutdown(wait=False)
+        print(f"[Pipeline] Complete. Total evals: {generation}", flush=True)
 
     async def main():
         await initialize_archive()
-        await run_generation()
+        await run_pipeline()
 
     asyncio.run(main())
 

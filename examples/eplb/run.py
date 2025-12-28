@@ -8,12 +8,13 @@ import sys
 import time
 from pathlib import Path
 from concurrent.futures import BrokenExecutor
-from algoforge.utils import ResilientProcessPool
 import multiprocessing
 
-# Add algoforge to path
+# Add algoforge to path (must be before algoforge imports)
 ALGOFORGE_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ALGOFORGE_ROOT))
+
+from algoforge.utils import ResilientProcessPool
 
 # Add eplb resources to path
 EPLB_RESOURCES = ALGOFORGE_ROOT.parent / "ADRS-Leaderboard" / "problems" / "eplb"
