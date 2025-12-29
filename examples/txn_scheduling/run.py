@@ -751,7 +751,7 @@ def main():
     ]
     HEAVY_MODEL = 'openrouter/deepseek/deepseek-v3.2'
 
-    n_workers = 4
+    n_workers = 8
     n_inspirations = 2  # Number of inspiration programs to use alongside parent
 
     # Use custom behavior extractor with z-score normalization for static features
@@ -921,7 +921,7 @@ def main():
         # Evaluate with semaphore to ensure timeout starts when task actually runs
         eval_map = {}
         completed = 0
-        semaphore = asyncio.Semaphore(4)  # Match executor workers
+        semaphore = asyncio.Semaphore(n_workers)  # Match executor workers
 
         async def eval_candidate(idx, code):
             nonlocal completed
