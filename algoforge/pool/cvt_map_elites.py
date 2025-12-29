@@ -34,7 +34,7 @@ class CellStats:
     """Statistics for a cell used by samplers."""
     n_samples: int = 0      # Times this cell was sampled
     n_successes: int = 0    # Times sampling led to accepted offspring
-    total_reward: float = 0.0  # Cumulative reward for UCB
+    total_reward: float = 0.0  # Cumulative reward (unused by UCB, kept for extensibility)
 
     def success_rate(self) -> float:
         if self.n_samples == 0:
@@ -42,10 +42,15 @@ class CellStats:
         return self.n_successes / self.n_samples
 
     def ucb_score(self, total_samples: int, c: float = 2.0) -> float:
-        """UCB1 score: exploitation + exploration bonus."""
+        """UCB1 score: exploitation (success rate) + exploration bonus.
+
+        Uses acceptance rate rather than raw scores to avoid bias toward
+        high-scoring cells that produce rejected clones. This encourages
+        sampling cells that actually improve the archive.
+        """
         if self.n_samples == 0:
             return float('inf')  # Unexplored cells have infinite priority
-        exploitation = self.total_reward / self.n_samples
+        exploitation = self.success_rate()
         exploration = c * math.sqrt(math.log(total_samples + 1) / self.n_samples)
         return exploitation + exploration
 

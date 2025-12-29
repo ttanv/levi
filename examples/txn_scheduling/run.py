@@ -614,7 +614,7 @@ def format_metrics_for_llm(
         metrics: Dict tracking outcomes over recent generations
         previous_advice: Previous meta-advice (for continuity)
         best_score: Current best score achieved
-        top_solutions: List of (score, code_snippet) for top 3 solutions
+        top_solutions: List of (score, code_snippet) for top solution(s)
         progress_pct: Percentage of budget consumed (0-100)
 
     Returns:
@@ -645,9 +645,8 @@ def format_metrics_for_llm(
             data += f"- {err}\n"
 
     if top_solutions:
-        data += f"\n\n## Top {len(top_solutions)} Solutions:\n"
-        for i, (score, snippet) in enumerate(top_solutions, 1):
-            data += f"\n### #{i} (Score: {score:.1f})\n```python\n{snippet}\n```\n"
+        data += f"\n\n## Best Solution (Score: {top_solutions[0][0]:.1f}):\n"
+        data += f"```python\n{top_solutions[0][1]}\n```\n"
 
     if previous_advice:
         data += f"\n\n## Previous Advice:\n{previous_advice}"
@@ -663,30 +662,40 @@ async def generate_meta_advice(
     model: str = None,
     progress_pct: float = 0.0,
 ) -> tuple[str, float]:
-    """Use heavy LLM to generate strategic meta-advice from evolution metrics.
+    """Use LLM to generate strategic meta-advice from evolution metrics.
+
+    The advisor learns from previous advice effectiveness, analyzes error patterns,
+    and provides actionable guidance for the next generation of solutions.
 
     Args:
         metrics: Dict tracking outcomes over recent generations
-        previous_advice: Previous meta-advice (for continuity)
+        previous_advice: Previous meta-advice (advisor should learn from it)
         best_score: Current best score achieved
-        top_solutions: List of (score, code_snippet) for top 3 solutions
+        top_solutions: List of (score, code_snippet) for top solution(s)
         model: LLM model to use for generating advice
         progress_pct: Percentage of budget consumed (0-100)
 
     Returns:
-        Tuple of (advice string, cost)
+        Tuple of (advice string ~500 words, cost)
     """
     metrics_data = format_metrics_for_llm(metrics, previous_advice, best_score, top_solutions, progress_pct)
     prompt = META_ADVISOR_PROMPT.format(metrics_data=metrics_data)
 
     try:
-        response = await litellm.acompletion(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.7,
-            max_tokens=500,  # ~300 words max
-            timeout=60,
-        )
+        # Build call kwargs
+        call_kwargs = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.7,
+            "max_tokens": 800,  # ~500 words max
+            "timeout": 60,
+        }
+
+        # Enable reasoning for DeepSeek models
+        if model and "deepseek" in model.lower():
+            call_kwargs["reasoning"] = {"enabled": True}
+
+        response = await litellm.acompletion(**call_kwargs)
         advice = response.choices[0].message.content.strip()
         cost = litellm.completion_cost(completion_response=response)
         return advice, cost
@@ -742,7 +751,7 @@ def main():
     ]
     HEAVY_MODEL = 'openrouter/deepseek/deepseek-v3.2'
 
-    n_workers = 8
+    n_workers = 4
     n_inspirations = 2  # Number of inspiration programs to use alongside parent
 
     # Use custom behavior extractor with z-score normalization for static features
@@ -912,7 +921,7 @@ def main():
         # Evaluate with semaphore to ensure timeout starts when task actually runs
         eval_map = {}
         completed = 0
-        semaphore = asyncio.Semaphore(8)  # Match executor workers
+        semaphore = asyncio.Semaphore(4)  # Match executor workers
 
         async def eval_candidate(idx, code):
             nonlocal completed
@@ -929,7 +938,9 @@ def main():
                     return idx, result
                 except asyncio.TimeoutError:
                     completed += 1
-                    print(f"  [Init Eval] {completed}/{len(candidates)} Candidate {idx} TIMEOUT", flush=True)
+                    # Recreate executor to kill stuck worker (same issue as main eval loop)
+                    executor._recreate_executor()
+                    print(f"  [Init Eval] {completed}/{len(candidates)} Candidate {idx} TIMEOUT (pool recreated)", flush=True)
                     return idx, {"error": "Timeout"}
                 except BrokenExecutor as e:
                     # Pool crashed - recreate it and return error for this candidate
@@ -1084,8 +1095,8 @@ def main():
         # Math: At avg 60s eval time, 8 workers process ~8 evals/min
         #       At avg 20s LLM time, need ~3 concurrent LLM calls to match
         #       Use 8 for buffer (they're just async, no CPU cost)
-        N_LLM_WORKERS = 8       # Concurrent async LLM calls (I/O bound)
-        N_EVAL_PROCESSES = 8    # Process pool size (CPU bound, matches cores)
+        N_LLM_WORKERS = 4       # Concurrent async LLM calls (I/O bound)
+        N_EVAL_PROCESSES = 4    # Process pool size (CPU bound, matches cores)
         EVAL_TIMEOUT = 300      # 5 minute timeout
         META_ADVICE_INTERVAL = 50  # Generate meta-advice every N evals
 
@@ -1120,6 +1131,7 @@ def main():
             },
             'llm_in_flight': 0,
             'eval_in_flight': 0,
+            'consecutive_timeouts': 0,  # Track for pool recreation
         }
 
         # Stop signal
@@ -1288,6 +1300,13 @@ def main():
                         except asyncio.TimeoutError:
                             output = {"error": f"Timeout after {EVAL_TIMEOUT}s"}
                             elapsed = EVAL_TIMEOUT
+                            # Track consecutive timeouts and recreate pool if too many
+                            async with state_lock:
+                                state['consecutive_timeouts'] += 1
+                                if state['consecutive_timeouts'] >= 3:
+                                    print(f"  [Pool] {state['consecutive_timeouts']} consecutive timeouts - recreating executor to kill stuck workers", flush=True)
+                                    executor._recreate_executor()
+                                    state['consecutive_timeouts'] = 0
                         except BrokenExecutor:
                             executor._recreate_executor()
                             output = {"error": "Pool crashed, recreated"}
@@ -1403,6 +1422,8 @@ def main():
                         wall_time = exec_time * 1000
 
                         async with state_lock:
+                            # Reset timeout counter on successful eval
+                            state['consecutive_timeouts'] = 0
                             if accepted:
                                 state['period_metrics']['acceptances'] += 1
                             else:
@@ -1482,12 +1503,12 @@ def main():
                     current_best = state['best_score']
                     current_cost = state['total_cost']
 
-                # Get top 3 solutions from archive
+                # Get top 1 solution from archive (reduced from 3 to save tokens)
                 top_solutions = []
                 try:
                     elites = list(pool._elites.values())
                     elites.sort(key=lambda e: e.result.primary_score, reverse=True)
-                    for elite in elites[:3]:
+                    for elite in elites[:1]:
                         top_solutions.append((elite.result.primary_score, elite.program.code))
                 except Exception:
                     pass

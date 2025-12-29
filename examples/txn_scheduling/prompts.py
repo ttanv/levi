@@ -211,28 +211,68 @@ The goal is behavioral variety in the population, not just different code.
 4. Output ONLY the complete Python code in a ```python block
 """
 
-META_ADVISOR_PROMPT = """You are a meta-advisor for an evolutionary code search system.
+META_ADVISOR_PROMPT = """You are a meta-advisor for an evolutionary code optimization system.
 
 ## Your Role
-You observe search progress and provide strategic advice that gets appended to LLM prompts. Your goal is to maintain healthy diversity while learning from errors:
-- Note recurring errors to avoid
-- Suggest alternative algorithmic directions that haven't been explored
-- Encourage trying different approaches from the parent solution
+Analyze evolution metrics and provide strategic guidance. Your advice gets injected into LLM prompts to steer the next generation of solutions.
 
-## How Your Advice Is Used
-- Each LLM sees a DIFFERENT parent solution (selected for diversity, not necessarily the best)
-- Address "the code you're given" - don't assume they see the top solutions
-- The top solutions below are context only; don't push everyone to copy them
+## What You're Given
+- **Period Metrics**: Acceptance/rejection/error rates from recent evaluations
+- **Error Messages**: Specific failure patterns to avoid
+- **Previous Advice**: What you recommended last time
+- **Best Solution**: Current top performer's code
+- **Progress**: Budget consumption percentage
 
-## Your Task
-Write concise advice (under 200 words):
+## Your Task: Write Strategic Advice (400-500 words)
 
-1. **Errors to avoid:** Common failure patterns from recent generations
-2. **Directions to explore:** Suggest 2-3 different algorithmic approaches worth trying
-3. **Encourage variation:** Push for meaningful changes from the parent, not just tweaks
+### 1. Reflect on Previous Advice
+- Look at the metrics: did your last advice help or hurt?
+- If acceptance rate improved → reinforce what worked
+- If errors increased → explicitly retract problematic suggestions
+- If no change → your advice may have been too vague, be more specific
+
+### 2. Interpret the Metrics
+Diagnose what the numbers tell you:
+- **High rejection, low error**: Valid code but not improving → need MORE diversity, structural changes
+- **High error rate**: Bugs in generated code → identify patterns from error messages, warn against them
+- **Low acceptance + plateau**: Archive saturated → need fundamentally different algorithmic approaches
+- **Good acceptance rate**: Current direction working → encourage deeper exploration of similar ideas
+
+### 3. Analyze the Best Solution
+Look at the provided code:
+- What is its core algorithmic strategy?
+- What are its likely weaknesses or blind spots?
+- What aspects of the problem might it be ignoring?
+- Suggest exploring what it DOESN'T do
+
+### 4. Give Actionable Direction
+Be SPECIFIC about what to try differently. Bad advice: "try something different." Good advice:
+- "The best solution builds schedules incrementally. Try approaches that evaluate complete schedules first, then refine."
+- "Current solutions focus on [X]. Consider approaches that optimize for [Y] instead."
+- "Error patterns show [issue]. Ensure your solution handles [specific case]."
+
+### 5. Warn Against Failure Patterns
+Based on error messages, give explicit warnings:
+- Quote specific error patterns and explain how to avoid them
+- If timeout errors: suggest ways to reduce computational complexity
+- If assertion errors: highlight what invariants must be maintained
+
+## Critical Rules
+- Each LLM sees a DIFFERENT parent solution (not the best one)
+- Tell them to STRUCTURALLY modify their given parent
+- Don't tell them to copy the best solution
+- Push for paradigm changes, not parameter tweaks
+- Your advice should evolve based on what's working/failing
+
+## Output Format
+Structure your advice clearly:
+1. **What's Working** (based on metrics)
+2. **What to Avoid** (based on errors)
+3. **Strategic Direction** (what to try next)
+4. **Specific Suggestions** (2-3 concrete ideas derived from analysis)
 
 ---
 
 {metrics_data}
 
-Provide your advice:"""
+Provide your strategic advice:"""
