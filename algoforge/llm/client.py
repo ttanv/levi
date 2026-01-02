@@ -6,9 +6,6 @@ Supports:
 - Ensemble of models with weighted selection
 
 Model string formats:
-- Anthropic: "claude-sonnet-4-20250514", "claude-3-opus-20240229"
-- OpenAI: "gpt-4", "gpt-4o", "gpt-3.5-turbo"
-- Azure: "azure/your-deployment-name"
 - OpenRouter: "openrouter/anthropic/claude-3-opus"
 - Google: "gemini/gemini-pro"
 - Together: "together_ai/meta-llama/Llama-3-70b"
@@ -27,7 +24,6 @@ from ..budget import BudgetManager, ResourceType
 
 @dataclass
 class LLMConfig:
-    """Configuration for LLM generation."""
     temperature: float = 0.7
     max_tokens: int = 4096
     top_p: float = 1.0
@@ -36,20 +32,16 @@ class LLMConfig:
 
 @dataclass
 class LLMResponse:
-    """Response from LLM generation."""
     content: str
     prompt_tokens: int
     completion_tokens: int
     total_tokens: int
     model: str
     cost: float
-    is_structured: bool = False  # Indicates if this is structured output
-    parsed_json: Optional[dict] = None  # Parsed JSON for structured outputs
 
 
 @dataclass
 class ModelWeight:
-    """A model with its selection weight."""
     model: str
     weight: float  # e.g., 0.8 for 80% of calls
 
@@ -114,7 +106,6 @@ class LLMClient:
         prompt: str,
         config: Optional[LLMConfig] = None,
         model: Optional[str] = None,
-        response_format: Optional[dict] = None
     ) -> LLMResponse:
         """
         Generate a completion for the given prompt.
@@ -125,9 +116,6 @@ class LLMClient:
             prompt: The prompt to send to the LLM
             config: Optional generation config (temperature, max_tokens, etc.)
             model: Optional model override (otherwise selects from ensemble)
-            response_format: Optional JSON schema for structured outputs.
-                Format: {"type": "json_schema", "json_schema": {...}}
-                See: https://docs.litellm.ai/docs/completion/json_mode
         """
         self._budget_manager.check_budget()
 
@@ -147,13 +135,6 @@ class LLMClient:
             kwargs["api_key"] = self._api_key
         if self._api_base:
             kwargs["api_base"] = self._api_base
-        if response_format:
-            kwargs["response_format"] = response_format
-            # Enable response-healing for OpenRouter models with structured outputs
-            if actual_model.startswith("openrouter/"):
-                extra_body = kwargs.get("extra_body", {})
-                extra_body["plugins"] = [{"id": "response-healing"}]
-                kwargs["extra_body"] = extra_body
 
         response = litellm.completion(**kwargs)
 
@@ -165,17 +146,6 @@ class LLMClient:
 
         content = response.choices[0].message.content
 
-        # Parse JSON if structured output was requested
-        parsed_json = None
-        is_structured = response_format is not None
-        if is_structured:
-            try:
-                import json
-                parsed_json = json.loads(content)
-            except json.JSONDecodeError:
-                # This shouldn't happen with strict schemas, but handle gracefully
-                is_structured = False
-
         return LLMResponse(
             content=content,
             prompt_tokens=usage.prompt_tokens,
@@ -183,8 +153,6 @@ class LLMClient:
             total_tokens=usage.total_tokens,
             model=actual_model,
             cost=cost,
-            is_structured=is_structured,
-            parsed_json=parsed_json,
         )
 
     def generate_batch(

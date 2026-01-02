@@ -17,7 +17,6 @@ class TestOutputMode:
         """All expected output modes are defined."""
         assert OutputMode.FULL.value == "full"
         assert OutputMode.DIFF.value == "diff"
-        assert OutputMode.EVOLVE_BLOCK.value == "evolve_block"
 
 
 class TestProgramWithScore:
@@ -207,16 +206,6 @@ class TestPromptBuilder:
         assert "<<<<<<< SEARCH" in prompt
         assert "=======" in prompt
         assert ">>>>>>> REPLACE" in prompt
-
-    def test_set_output_mode_evolve_block(self):
-        """set_output_mode(EVOLVE_BLOCK) sets evolve block instructions."""
-        builder = PromptBuilder()
-        builder.set_output_mode(OutputMode.EVOLVE_BLOCK)
-
-        prompt = builder.build()
-
-        assert "## Output" in prompt
-        assert "EVOLVE-BLOCK" in prompt
 
     def test_set_output_mode_chainable(self):
         """set_output_mode() returns self for chaining."""

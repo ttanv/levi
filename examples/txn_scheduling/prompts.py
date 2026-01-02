@@ -165,7 +165,6 @@ Optimize transaction scheduling for database workloads to minimize total makespa
 Find the optimal ordering of 100 transactions to minimize makespan.
 
 ## CRITICAL CONSTRAINTS
-- Runtime MUST be O(n) where n is the number of transactions
 - Do not sort transactions
 - Once a transaction is scheduled, it should NOT be moved
 
@@ -188,91 +187,63 @@ def get_random_costs() -> tuple[int, list[list[int]], list[int], float]:
     pass
 ```
 
-## Your Task
-Generate a solution with DIFFERENT BEHAVIORAL CHARACTERISTICS than the existing seeds.
+## Your Task: ALGORITHMIC DIVERSITY
 
-**CRITICAL: BEHAVIORAL DIVERSITY IS ESSENTIAL.**
+You MUST design a solution using a **FUNDAMENTALLY DIFFERENT ALGORITHM** than the existing seeds.
 
-Focus on creating solutions that exhibit different runtime behaviors:
-- Different execution time profiles (fast approximate vs slower precise)
-- Different memory usage patterns
-- Different tradeoffs between exploration and exploitation
-- Different sensitivity to workload characteristics
+**DO NOT:**
+- Make minor variations or parameter tweaks to existing approaches
+- Use the same core algorithm with different constants
+- Reorder or refactor existing logic
 
-The goal is behavioral variety in the population, not just different code.
+**DO:**
+- Analyze what algorithmic paradigm each existing seed uses
+- Identify what aspects of the problem they exploit (or ignore)
+- Design from first principles using a completely different strategy
+- Think about what information in the problem they are NOT using
+- Consider entirely different ways to model or decompose the problem
 
-## Existing Seeds (aim for different behavioral characteristics):
+The goal is to explore different regions of the algorithm design space. A population of diverse algorithms will outperform a population of similar ones.
+
+## Existing Seeds (analyze their algorithms, then do something DIFFERENT):
 {existing_seeds}
 
-## Instructions
-1. Review the existing seeds and consider their likely runtime behavior
-2. Design a solution that would behave differently (e.g., different speed/quality tradeoff)
-3. Implement it as a complete, working solution
-4. Output ONLY the complete Python code in a ```python block
+## Output
+Output ONLY the complete Python code in a ```python block.
 """
 
-META_ADVISOR_PROMPT = """You are a meta-advisor for an evolutionary code optimization system.
+META_ADVISOR_PROMPT = """You are a lessons-learned advisor for an evolutionary code optimization system.
 
 ## Your Role
-Analyze evolution metrics and provide strategic guidance. Your advice gets injected into LLM prompts to steer the next generation of solutions.
+Analyze FAILURES from recent evaluations. Your lessons get injected into LLM prompts to help future solutions avoid the same mistakes.
 
 ## What You're Given
-- **Period Metrics**: Acceptance/rejection/error rates from recent evaluations
-- **Error Messages**: Specific failure patterns to avoid
-- **Previous Advice**: What you recommended last time
-- **Best Solution**: Current top performer's code
-- **Progress**: Budget consumption percentage
+- **Failure count**: How many candidates failed (crashes, invalid code, timeouts, etc.)
+- **Error patterns**: Specific error messages encountered (including timeouts)
+- **Previous lessons**: What you warned about last time
 
-## Your Task: Write Strategic Advice (400-500 words)
+## Your Task: Write Concise Lessons (150-200 words max)
 
-### 1. Reflect on Previous Advice
-- Look at the metrics: did your last advice help or hurt?
-- If acceptance rate improved → reinforce what worked
-- If errors increased → explicitly retract problematic suggestions
-- If no change → your advice may have been too vague, be more specific
+### Focus ONLY on Failure Prevention
+You do NOT see successful solutions. Your job is purely defensive:
+1. **Identify error patterns** - What mistakes are being made repeatedly?
+2. **Explain root causes** - Why are these errors happening?
+3. **Give specific fixes** - Exactly how to avoid each error type
 
-### 2. Interpret the Metrics
-Diagnose what the numbers tell you:
-- **High rejection, low error**: Valid code but not improving → need MORE diversity, structural changes
-- **High error rate**: Bugs in generated code → identify patterns from error messages, warn against them
-- **Low acceptance + plateau**: Archive saturated → need fundamentally different algorithmic approaches
-- **Good acceptance rate**: Current direction working → encourage deeper exploration of similar ideas
-
-### 3. Analyze the Best Solution
-Look at the provided code:
-- What is its core algorithmic strategy?
-- What are its likely weaknesses or blind spots?
-- What aspects of the problem might it be ignoring?
-- Suggest exploring what it DOESN'T do
-
-### 4. Give Actionable Direction
-Be SPECIFIC about what to try differently. Bad advice: "try something different." Good advice:
-- "The best solution builds schedules incrementally. Try approaches that evaluate complete schedules first, then refine."
-- "Current solutions focus on [X]. Consider approaches that optimize for [Y] instead."
-- "Error patterns show [issue]. Ensure your solution handles [specific case]."
-
-### 5. Warn Against Failure Patterns
-Based on error messages, give explicit warnings:
-- Quote specific error patterns and explain how to avoid them
-- If timeout errors: suggest ways to reduce computational complexity
-- If assertion errors: highlight what invariants must be maintained
-
-## Critical Rules
-- Each LLM sees a DIFFERENT parent solution (not the best one)
-- Tell them to STRUCTURALLY modify their given parent
-- Don't tell them to copy the best solution
-- Push for paradigm changes, not parameter tweaks
-- Your advice should evolve based on what's working/failing
+### For Each Error Pattern:
+- Quote the error briefly
+- Explain what causes it
+- Give a specific fix
 
 ## Output Format
-Structure your advice clearly:
-1. **What's Working** (based on metrics)
-2. **What to Avoid** (based on errors)
-3. **Strategic Direction** (what to try next)
-4. **Specific Suggestions** (2-3 concrete ideas derived from analysis)
+Keep it SHORT and DIRECT:
+
+**Avoid These Errors:**
+- [Error pattern]: [How to fix]
+- [Error pattern]: [How to fix]
 
 ---
 
 {metrics_data}
 
-Provide your strategic advice:"""
+Provide your lessons (150-200 words max):"""

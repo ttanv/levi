@@ -53,52 +53,6 @@ class TestProgram:
         assert seed.is_seed is True
         assert child.is_seed is False
 
-    def test_program_with_mutation(self):
-        """with_mutation creates child program correctly."""
-        parent = Program(
-            code="def solve(x): return x",
-            metadata={"generation": 1}
-        )
-
-        child = parent.with_mutation(
-            new_code="def solve(x): return x + 1",
-            additional_metadata={"generation": 2}
-        )
-
-        assert child.code == "def solve(x): return x + 1"
-        assert child.parents == (parent.id,)
-        assert child.metadata == {"generation": 2}
-        assert child.id != parent.id
-
-    def test_program_with_mutation_inherits_metadata(self):
-        """with_mutation inherits and merges metadata."""
-        parent = Program(
-            code="def solve(x): return x",
-            metadata={"island": 3, "generation": 1}
-        )
-
-        child = parent.with_mutation(
-            new_code="def solve(x): return x + 1",
-            additional_metadata={"generation": 2}
-        )
-
-        assert child.metadata == {"island": 3, "generation": 2}
-
-    def test_program_with_crossover(self):
-        """with_crossover creates child with two parents."""
-        parent1 = Program(code="def solve(x): return x")
-        parent2 = Program(code="def solve(x): return x * 2")
-
-        child = parent1.with_crossover(
-            other=parent2,
-            new_code="def solve(x): return x + x",
-            additional_metadata={"crossover": True}
-        )
-
-        assert child.code == "def solve(x): return x + x"
-        assert child.parents == (parent1.id, parent2.id)
-        assert child.metadata == {"crossover": True}
-
     def test_program_unique_ids(self):
         """Each program gets a unique ID."""
         prog1 = Program(code="def solve(x): return x")

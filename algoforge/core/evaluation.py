@@ -1,7 +1,5 @@
 """
 EvaluationResult: The outcome of evaluating a program.
-
-Captures multi-metric scores and execution artifacts.
 """
 
 from dataclasses import dataclass, field
@@ -13,17 +11,13 @@ from .types import MetricDict, OutputDict
 @dataclass
 class EvaluationResult:
     """
-    The outcome of evaluating a program.
-
-    Captures multi-metric scores and execution artifacts.
-
     Attributes:
         program_id: Reference to the evaluated program
         scores: Dictionary mapping metric names to scalar values
         outputs: Dictionary of program outputs per test input (called "signature" in funsearch paper)
         is_valid: Boolean indicating whether the program executed correctly
         eval_time_seconds: Time taken for evaluation
-        traces: Optional execution traces, logs, or diagnostic text (useful for algorithms like GEPA)
+        traces: Optional execution traces, logs, or diagnostic text
         error: Error message if not valid
     """
 

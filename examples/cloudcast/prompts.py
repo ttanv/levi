@@ -106,7 +106,6 @@ class BroadCastTopology:
             self.paths = {dst: {str(i): None for i in range(num_partitions)} for dst in dsts}
 
     def get_paths(self):
-        print(f"now the set path is: {self.paths}")
         return self.paths
 
     def set_num_partitions(self, num_partitions: int):
@@ -189,28 +188,73 @@ The goal is behavioral variety in the population, not just different code.
 4. Output ONLY the complete Python code in a ```python block
 """
 
-META_ADVISOR_PROMPT = """You are a meta-advisor for an evolutionary code search system. Multiple LLMs are generating
-candidate solutions that compete in a population-based search. The best solutions survive in an archive.
+META_ADVISOR_PROMPT = """You are a meta-advisor for an evolutionary code optimization system.
 
-Analyze the following metrics from the last 10 generations and provide strategic advice to help
-future generations perform better. Your advice will be shown to the LLMs generating solutions.
+## Your Role
+Analyze evolution metrics and provide strategic guidance. Your advice gets injected into LLM prompts to steer the next generation of solutions.
 
-The problem is CLOUDCAST BROADCAST OPTIMIZATION:
+## Problem Context: CLOUDCAST BROADCAST OPTIMIZATION
 - Minimize transfer cost across multi-cloud networks (AWS, Azure, GCP)
 - 5 configurations are evaluated: intra_aws, intra_azure, intra_gcp, inter_agz, inter_gaz2
 - Score is 0-100 based on cost reduction from baseline ($1199) toward optimal ($626)
 
-Your advice should:
-1. Identify patterns in failures and suggest how to avoid them
-2. Note what's working well and should be continued
-3. Suggest whether to exploit (refine what works) or explore (try new approaches)
-4. Consider if different configs need different strategies (intra vs inter cloud)
-5. Be concise but actionable (2-3 paragraphs max)
-6. Carry forward any relevant insights from previous advice
+## What You're Given
+- **Period Metrics**: Acceptance/rejection/error rates from recent evaluations
+- **Error Messages**: Specific failure patterns to avoid
+- **Previous Advice**: What you recommended last time
+- **Best Solution**: Current top performer's code
+- **Progress**: Budget consumption percentage
 
-IMPORTANT: Keep your response under 300 words. Be direct and actionable.
+## Your Task: Write Strategic Advice (400-500 words)
 
-METRICS DATA:
+### 1. Reflect on Previous Advice
+- Look at the metrics: did your last advice help or hurt?
+- If acceptance rate improved → reinforce what worked
+- If errors increased → explicitly retract problematic suggestions
+- If no change → your advice may have been too vague, be more specific
+
+### 2. Interpret the Metrics
+Diagnose what the numbers tell you:
+- **High rejection, low error**: Valid code but not improving → need MORE diversity, structural changes
+- **High error rate**: Bugs in generated code → identify patterns from error messages, warn against them
+- **Low acceptance + plateau**: Archive saturated → need fundamentally different algorithmic approaches
+- **Good acceptance rate**: Current direction working → encourage deeper exploration of similar ideas
+
+### 3. Analyze the Best Solution
+Look at the provided code:
+- What is its core algorithmic strategy?
+- What are its likely weaknesses or blind spots?
+- What aspects of the problem might it be ignoring?
+- Suggest exploring what it DOESN'T do
+
+### 4. Give Actionable Direction
+Be SPECIFIC about what to try differently. Bad advice: "try something different." Good advice:
+- Identify what the best solution focuses on, then suggest alternatives
+- If current solutions ignore some aspect, recommend exploring it
+- Point to specific structural changes rather than parameter tweaks
+
+### 5. Warn Against Failure Patterns
+Based on error messages, give explicit warnings:
+- Quote specific error patterns and explain how to avoid them
+- If timeout errors: suggest ways to reduce computational complexity
+- If assertion errors: highlight what invariants must be maintained
+
+## Critical Rules
+- Each LLM sees a DIFFERENT parent solution (not the best one)
+- Tell them to STRUCTURALLY modify their given parent
+- Don't tell them to copy the best solution
+- Push for paradigm changes, not parameter tweaks
+- Your advice should evolve based on what's working/failing
+
+## Output Format
+Structure your advice clearly:
+1. **What's Working** (based on metrics)
+2. **What to Avoid** (based on errors)
+3. **Strategic Direction** (what to try next)
+4. **Specific Suggestions** (2-3 concrete ideas derived from analysis)
+
+---
+
 {metrics_data}
 
-Provide your strategic advice (max 300 words):"""
+Provide your strategic advice:"""

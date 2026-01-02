@@ -1,191 +1,139 @@
-"""Resilient process pool that auto-recovers from worker crashes."""
+"""Process pool with hard timeout enforcement via process termination."""
 
 import asyncio
+import atexit
+import multiprocessing as mp
+import signal
 import threading
-from concurrent.futures import ProcessPoolExecutor, BrokenExecutor
-from typing import Callable, Any, TypeVar
+import time
+from typing import Any, Callable, TypeVar
 
 T = TypeVar('T')
 
 
+def _worker_fn(fn: Callable, args: tuple, result_queue: mp.Queue) -> None:
+    try:
+        result = fn(*args)
+        result_queue.put(("success", result))
+    except Exception as e:
+        result_queue.put(("error", f"{type(e).__name__}: {e}"))
+
+
 class ResilientProcessPool:
-    """A ProcessPoolExecutor wrapper that automatically recreates the pool when workers crash.
+    _instances: list['ResilientProcessPool'] = []
 
-    When a child process terminates abruptly (OOM, segfault, etc.), the ProcessPoolExecutor
-    becomes permanently broken and all subsequent tasks fail with BrokenProcessPool.
-
-    This wrapper catches those failures and transparently recreates the pool, allowing
-    the system to continue operating.
-
-    Usage:
-        pool = ResilientProcessPool(max_workers=8, max_tasks_per_child=5)
-
-        # In async context:
-        result = await pool.run(loop, some_function, arg1, arg2)
-
-        # Cleanup:
-        pool.shutdown()
-
-    Thread-safe: Can be used from multiple async tasks concurrently.
-    """
-
-    def __init__(
-        self,
-        max_workers: int = None,
-        max_tasks_per_child: int = None,
-        mp_context=None,
-        initializer: Callable = None,
-        initargs: tuple = (),
-    ):
-        """Initialize the resilient process pool.
-
-        Args:
-            max_workers: Maximum number of worker processes
-            max_tasks_per_child: Number of tasks a worker can execute before being replaced
-            mp_context: Multiprocessing context (e.g., 'spawn', 'fork')
-            initializer: Callable to run in each worker on startup
-            initargs: Arguments to pass to initializer
-        """
-        self._max_workers = max_workers
-        self._max_tasks_per_child = max_tasks_per_child
-        self._mp_context = mp_context
-        self._initializer = initializer
-        self._initargs = initargs
-
+    def __init__(self, max_workers: int = 4):
+        self.max_workers = max_workers
+        self._semaphore = asyncio.Semaphore(max_workers)
+        self._active: dict[int, mp.Process] = {}
         self._lock = threading.Lock()
-        self._executor: ProcessPoolExecutor | None = None
-        self._recreation_count = 0
-        self._is_shutdown = False
+        self._shutdown = False
+        self._ctx = mp.get_context('spawn')
+        ResilientProcessPool._instances.append(self)
 
-        # Create initial executor
-        self._create_executor()
+    async def run(self, fn: Callable[..., T], *args: Any, timeout: float) -> T:
+        if self._shutdown:
+            raise RuntimeError("Pool is shutdown")
+        async with self._semaphore:
+            return await self._execute(fn, args, timeout)
 
-    def _create_executor(self) -> None:
-        """Create a new ProcessPoolExecutor instance."""
-        kwargs = {}
-        if self._max_workers is not None:
-            kwargs['max_workers'] = self._max_workers
-        if self._max_tasks_per_child is not None:
-            kwargs['max_tasks_per_child'] = self._max_tasks_per_child
-        if self._mp_context is not None:
-            kwargs['mp_context'] = self._mp_context
-        if self._initializer is not None:
-            kwargs['initializer'] = self._initializer
-            kwargs['initargs'] = self._initargs
+    async def _execute(self, fn: Callable[..., T], args: tuple, timeout: float) -> T:
+        result_queue = self._ctx.Queue(maxsize=1)
+        proc = self._ctx.Process(target=_worker_fn, args=(fn, args, result_queue), daemon=True)
+        proc.start()
 
-        self._executor = ProcessPoolExecutor(**kwargs)
-
-    def _recreate_executor(self) -> None:
-        """Shutdown broken executor and create a new one."""
         with self._lock:
-            if self._is_shutdown:
-                return
+            self._active[proc.pid] = proc
 
-            # Shutdown old executor (don't wait, it's broken anyway)
-            if self._executor is not None:
-                try:
-                    self._executor.shutdown(wait=False, cancel_futures=True)
-                except Exception:
-                    pass  # Ignore errors during shutdown of broken executor
+        try:
+            start = time.monotonic()
+            while time.monotonic() - start < timeout:
+                if not proc.is_alive():
+                    break
+                await asyncio.sleep(0.1)
 
-            # Create new executor
-            self._create_executor()
-            self._recreation_count += 1
-            print(f"  [ResilientPool] Recreated executor (recreation #{self._recreation_count})", flush=True)
+            if proc.is_alive():
+                self._terminate_process(proc)
+                raise TimeoutError(f"Process exceeded {timeout}s timeout")
 
-            # Add recovery delay - give system time to reclaim memory
-            # This prevents rapid recreation cycles that can exhaust resources
-            import time
-            delay = min(1.0 * self._recreation_count, 5.0)  # Up to 5 seconds
-            time.sleep(delay)
-
-    async def run(
-        self,
-        loop: asyncio.AbstractEventLoop,
-        fn: Callable[..., T],
-        *args: Any,
-        max_retries: int = 1,
-    ) -> T:
-        """Run a function in the process pool with automatic recovery.
-
-        Args:
-            loop: The asyncio event loop
-            fn: Function to execute (must be picklable)
-            *args: Arguments to pass to fn
-            max_retries: Number of retries after pool recreation (default: 1)
-
-        Returns:
-            The result of fn(*args)
-
-        Raises:
-            BrokenExecutor: If the pool crashes and max_retries is exceeded
-            Exception: Any exception raised by fn
-        """
-        last_error = None
-
-        for attempt in range(max_retries + 1):
             try:
-                with self._lock:
-                    if self._is_shutdown:
-                        raise RuntimeError("Pool is shutdown")
-                    executor = self._executor
+                status, value = result_queue.get(timeout=2.0)
+            except Exception:
+                exitcode = proc.exitcode
+                if exitcode is not None and exitcode < 0:
+                    try:
+                        signame = signal.Signals(-exitcode).name
+                        raise RuntimeError(f"Process killed by {signame}")
+                    except ValueError:
+                        raise RuntimeError(f"Process killed by signal {-exitcode}")
+                raise RuntimeError(f"Process exited with code {exitcode}, no result")
 
-                return await loop.run_in_executor(executor, fn, *args)
+            if status == "error":
+                raise RuntimeError(value)
+            return value
 
-            except BrokenExecutor as e:
-                last_error = e
-                if attempt < max_retries:
-                    print(f"  [ResilientPool] Pool broken, recreating (attempt {attempt + 1}/{max_retries + 1})", flush=True)
-                    self._recreate_executor()
-                else:
-                    # Re-raise on final attempt
-                    raise
+        finally:
+            with self._lock:
+                self._active.pop(proc.pid, None)
+            self._terminate_process(proc)
+            try:
+                result_queue.close()
+                result_queue.join_thread()
+            except Exception:
+                pass
 
-        # Should not reach here, but just in case
-        raise last_error
+    def _terminate_process(self, proc: mp.Process) -> None:
+        if not proc.is_alive():
+            return
+        try:
+            proc.terminate()
+            proc.join(timeout=2.0)
+        except Exception:
+            pass
+        if proc.is_alive():
+            try:
+                proc.kill()
+                proc.join(timeout=2.0)
+            except Exception:
+                pass
 
-    def submit(self, fn: Callable[..., T], *args: Any) -> 'Future[T]':
-        """Submit a task directly to the executor (synchronous interface).
-
-        Note: This doesn't auto-recover. Use `run()` for async recovery.
-
-        Returns:
-            A Future representing the pending result
-        """
+    def shutdown(self) -> None:
+        self._shutdown = True
         with self._lock:
-            if self._is_shutdown:
-                raise RuntimeError("Pool is shutdown")
-            return self._executor.submit(fn, *args)
-
-    @property
-    def recreation_count(self) -> int:
-        """Number of times the pool has been recreated due to crashes."""
-        return self._recreation_count
-
-    @property
-    def executor(self) -> ProcessPoolExecutor:
-        """Access the underlying executor (for run_in_executor compatibility)."""
-        with self._lock:
-            return self._executor
-
-    def shutdown(self, wait: bool = False, cancel_futures: bool = True) -> None:
-        """Shutdown the process pool.
-
-        Args:
-            wait: Whether to wait for pending tasks to complete
-            cancel_futures: Whether to cancel pending futures
-        """
-        with self._lock:
-            self._is_shutdown = True
-            if self._executor is not None:
-                try:
-                    self._executor.shutdown(wait=wait, cancel_futures=cancel_futures)
-                except Exception:
-                    pass
-                self._executor = None
+            for proc in list(self._active.values()):
+                self._terminate_process(proc)
+            self._active.clear()
+        try:
+            ResilientProcessPool._instances.remove(self)
+        except ValueError:
+            pass
 
     def __enter__(self) -> 'ResilientProcessPool':
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+    def __exit__(self, *args) -> None:
         self.shutdown()
+
+    @classmethod
+    def _cleanup_all(cls) -> None:
+        for pool in list(cls._instances):
+            try:
+                pool.shutdown()
+            except Exception:
+                pass
+
+
+atexit.register(ResilientProcessPool._cleanup_all)
+
+
+def _handle_signals(signum, frame):
+    ResilientProcessPool._cleanup_all()
+    import sys
+    sys.exit(128 + signum)
+
+
+if mp.current_process().name == 'MainProcess':
+    try:
+        signal.signal(signal.SIGTERM, _handle_signals)
+    except Exception:
+        pass

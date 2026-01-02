@@ -12,8 +12,8 @@ import json
 import re
 import tempfile
 import os
+from contextlib import redirect_stdout
 from pathlib import Path
-from concurrent.futures import BrokenExecutor
 
 import numpy as np
 
@@ -114,11 +114,63 @@ def quick_validate_code(code: str) -> tuple[bool, str]:
     # Try to compile and exec with mocks
     try:
         import networkx as nx
+        import math
+        import time as time_module
+        import random
+        import collections
+        import heapq
+        import numpy as np
+        from typing import Dict, List, Set, Tuple, Any
+
+        # Mock BroadCastTopology class for validation
+        class MockBroadCastTopology:
+            def __init__(self, src: str, dsts: List[str], num_partitions: int = 4, paths: Dict = None):
+                self.src = src
+                self.dsts = dsts
+                self.num_partitions = num_partitions
+                self.paths = paths or {dst: {str(i): None for i in range(num_partitions)} for dst in dsts}
+
+            def set_num_partitions(self, num_partitions: int):
+                self.num_partitions = num_partitions
+
+            def set_dst_partition_paths(self, dst: str, partition: int, paths: List[List]):
+                partition = str(partition)
+                self.paths[dst][partition] = paths
+
+            def append_dst_partition_path(self, dst: str, partition: int, path: List):
+                partition = str(partition)
+                if self.paths[dst][partition] is None:
+                    self.paths[dst][partition] = []
+                self.paths[dst][partition].append(path)
+
+        # Mock broadcast module
+        class MockBroadcastModule:
+            BroadCastTopology = MockBroadCastTopology
+
+        import sys
+        sys.modules['broadcast'] = MockBroadcastModule()
 
         namespace = {
+            '__builtins__': __builtins__,
+            # Core cloudcast classes
+            'BroadCastTopology': MockBroadCastTopology,
+            # NetworkX
             'nx': nx,
             'networkx': nx,
-            '__builtins__': __builtins__,
+            # Common modules
+            'math': math,
+            'time': time_module,
+            'random': random,
+            'collections': collections,
+            'heapq': heapq,
+            'np': np,
+            'numpy': np,
+            # Typing
+            'Dict': Dict,
+            'List': List,
+            'Set': Set,
+            'Tuple': Tuple,
+            'Any': Any,
         }
 
         exec(code, namespace)
@@ -185,13 +237,28 @@ def extract_and_validate_code(response: str) -> tuple[str | None, str]:
     return None, last_error
 
 
+def compute_config_score(cost: float, baseline: float, optimal: float) -> float:
+    """Compute 0-1 normalized score for a single config (like workload scores)."""
+    if cost >= baseline:
+        return 0.0
+    if cost <= optimal:
+        return 1.0
+    return (baseline - cost) / (baseline - optimal)
+
+
 def evaluate_code_in_process(code: str) -> dict:
     """Execute cloudcast code in a subprocess. Must be picklable."""
     import sys
     import json
     import tempfile
     import os
+    import math
+    import time as time_module
+    import random
+    import collections
+    import heapq
     from pathlib import Path
+    from typing import Dict, List, Set, Tuple, Any
 
     # Ensure paths are set up in worker process
     algoforge_root = Path(__file__).resolve().parents[2]
@@ -201,6 +268,9 @@ def evaluate_code_in_process(code: str) -> dict:
 
     from simulator import BCSimulator
     from utils import make_nx_graph
+    from broadcast import BroadCastTopology
+    import networkx as nx
+    import numpy as np
 
     # Config files (ADRS-Leaderboard directory structure)
     config_dir = cloudcast_resources / "datasets" / "examples" / "config"
@@ -217,20 +287,46 @@ def evaluate_code_in_process(code: str) -> dict:
 
     num_vms = 2
 
+    # Per-config baselines and optimals for score calculation
+    per_config_baseline = LOWER_COST / 5  # ~240 per config
+    per_config_optimal = UPPER_COST / 5   # ~125 per config
+
     try:
         # Execute code to get search_algorithm function
-        namespace = {'__builtins__': __builtins__}
+        # Include common modules in namespace so LLM code doesn't need to import
+        namespace = {
+            '__builtins__': __builtins__,
+            # Core cloudcast classes
+            'BroadCastTopology': BroadCastTopology,
+            # NetworkX
+            'nx': nx,
+            'networkx': nx,
+            # Common modules (like txn_scheduling)
+            'math': math,
+            'time': time_module,
+            'random': random,
+            'collections': collections,
+            'heapq': heapq,
+            'np': np,
+            'numpy': np,
+            # Typing
+            'Dict': Dict,
+            'List': List,
+            'Set': Set,
+            'Tuple': Tuple,
+            'Any': Any,
+        }
         exec(code, namespace)
 
         if 'search_algorithm' not in namespace:
             return {"error": "search_algorithm not defined"}
 
         search_algorithm = namespace['search_algorithm']
-        BroadCastTopology = namespace.get('BroadCastTopology')
 
-        # Track per-config costs
+        # Track per-config costs and scores
         per_config_costs = {}
         per_config_times = {}
+        per_config_scores = {}
         total_cost = 0.0
         total_time = 0.0
         successful = 0
@@ -260,20 +356,26 @@ def evaluate_code_in_process(code: str) -> dict:
 
                         bc_topology.set_num_partitions(config["num_partitions"])
 
-                        # Evaluate
+                        # Evaluate (suppress simulator's verbose output)
                         simulator = BCSimulator(num_vms=num_vms, output_dir="evals")
-                        transfer_time, cost = simulator.evaluate_path(bc_topology, config)
+                        with open(os.devnull, 'w') as devnull, redirect_stdout(devnull):
+                            transfer_time, cost = simulator.evaluate_path(bc_topology, config)
 
                         per_config_costs[config_name] = cost
                         per_config_times[config_name] = transfer_time
+                        # Compute 0-1 normalized score for this config (like workload scores)
+                        per_config_scores[config_name] = compute_config_score(
+                            cost, per_config_baseline, per_config_optimal
+                        )
                         total_cost += cost
                         total_time += transfer_time
                         successful += 1
 
                     except Exception as e:
                         # If any config fails, mark it
-                        per_config_costs[config_name] = LOWER_COST / 5  # worst case per config
+                        per_config_costs[config_name] = per_config_baseline  # worst case
                         per_config_times[config_name] = 999.0
+                        per_config_scores[config_name] = 0.0  # worst score
                         return {"error": f"Config {config_name} failed: {str(e)[:100]}"}
 
             finally:
@@ -281,6 +383,14 @@ def evaluate_code_in_process(code: str) -> dict:
 
         if successful == 0:
             return {"error": "No configurations evaluated successfully"}
+
+        # Validate solution actually transferred data (catch buggy solutions)
+        # Some LLM-generated code has bugs (e.g., set_num_partitions clears paths)
+        # that result in $0 cost and -inf time, which would incorrectly score 100
+        if total_cost == 0:
+            return {"error": "Invalid solution: zero cost (no data transferred)"}
+        if not math.isfinite(total_time) or total_time <= 0:
+            return {"error": f"Invalid solution: invalid transfer time ({total_time})"}
 
         # Compute score using leaderboard formula
         cost_clamped = max(min(total_cost, LOWER_COST), UPPER_COST)
@@ -294,6 +404,12 @@ def evaluate_code_in_process(code: str) -> dict:
             "successful_configs": successful,
             "per_config_costs": per_config_costs,
             "per_config_times": per_config_times,
+            # Per-config scores (0-1 normalized) for behavior extraction
+            "intra_aws_score": per_config_scores.get("intra_aws", 0.0),
+            "intra_azure_score": per_config_scores.get("intra_azure", 0.0),
+            "intra_gcp_score": per_config_scores.get("intra_gcp", 0.0),
+            "inter_agz_score": per_config_scores.get("inter_agz", 0.0),
+            "inter_gaz2_score": per_config_scores.get("inter_gaz2", 0.0),
         }
 
     except Exception as e:
@@ -302,34 +418,124 @@ def evaluate_code_in_process(code: str) -> dict:
 
 class CloudcastBehaviorExtractor(BehaviorExtractor):
     """
-    Custom behavior extractor that uses per-config performance as behavioral dimensions.
-    This enables MAP-Elites to maintain diversity across different network topologies.
+    Custom behavior extractor for cloudcast with z-score normalization.
+
+    Uses per-config scores as behavioral dimensions (similar to workload_1/2/3 in txn_scheduling).
+    Removes execution_time as a behavioral dimension per user request.
+
+    Features (all normalized to ~[0, 1] via sigmoid of z-score):
+    - loop_count: Number of for/while loops
+    - branch_count: Number of if/elif/else branches
+    - math_operators: Count of math ops
+    - intra_aws_score: Performance on intra_aws config
+    - intra_azure_score: Performance on intra_azure config
+    - intra_gcp_score: Performance on intra_gcp config
+    - inter_agz_score: Performance on inter_agz config
+    - inter_gaz2_score: Performance on inter_gaz2 config
     """
 
     def __init__(self):
-        # Features: normalized cost for each config (lower = better, so we invert)
-        self.features = [f"cost_{name}" for name in CONFIG_NAMES] + ["execution_time", "primary_score"]
-        self.max_cost_per_config = LOWER_COST / 5  # ~240 per config baseline
+        self.features = [
+            'loop_count',
+            'branch_count',
+            'math_operators',
+            'intra_aws_score',
+            'intra_azure_score',
+            'intra_gcp_score',
+            'inter_agz_score',
+            'inter_gaz2_score',
+        ]
+
+        # All features use z-score normalization (Welford's online algorithm)
+        self._zscore_features = self.features.copy()
+        self._count = {f: 0 for f in self._zscore_features}
+        self._mean = {f: 0.0 for f in self._zscore_features}
+        self._M2 = {f: 0.0 for f in self._zscore_features}  # Sum of squared differences
+
+        # Per-config baselines for score calculation
+        self.per_config_baseline = LOWER_COST / 5  # ~240 per config
+        self.per_config_optimal = UPPER_COST / 5   # ~125 per config
+
+    def _update_stats(self, feature: str, value: float):
+        """Update running mean and variance using Welford's algorithm."""
+        self._count[feature] += 1
+        delta = value - self._mean[feature]
+        self._mean[feature] += delta / self._count[feature]
+        delta2 = value - self._mean[feature]
+        self._M2[feature] += delta * delta2
+
+    def _get_std(self, feature: str) -> float:
+        """Get current standard deviation for a feature."""
+        if self._count[feature] < 2:
+            return 1.0  # Avoid division by zero
+        variance = self._M2[feature] / (self._count[feature] - 1)
+        return max(np.sqrt(variance), 0.1)  # Min std of 0.1 to avoid extreme z-scores
+
+    def _zscore_to_01(self, z: float) -> float:
+        """Convert z-score to [0, 1] using sigmoid."""
+        z = max(-10, min(10, z))  # Clamp to avoid overflow
+        return 1.0 / (1.0 + np.exp(-z))
+
+    def _compute_config_score(self, cost: float) -> float:
+        """Compute 0-1 normalized score for a single config (like workload scores)."""
+        if cost >= self.per_config_baseline:
+            return 0.0
+        if cost <= self.per_config_optimal:
+            return 1.0
+        return (self.per_config_baseline - cost) / (self.per_config_baseline - self.per_config_optimal)
 
     def extract(self, program: Program) -> FeatureVector:
-        """Extract per-config performance as behavioral features."""
+        """Extract behavioral features from a program."""
+        import ast
+
+        code = program.code
         metadata = program.metadata or {}
         values = {}
 
-        # Per-config cost features (normalized: 0 = worst, 1 = best)
-        per_config_costs = metadata.get("per_config_costs", {})
-        for name in CONFIG_NAMES:
-            cost = per_config_costs.get(name, self.max_cost_per_config)
-            # Normalize: max_cost -> 0, 0 -> 1
-            values[f"cost_{name}"] = max(0.0, 1.0 - cost / self.max_cost_per_config)
+        # Parse AST for static features
+        try:
+            tree = ast.parse(code)
+        except SyntaxError:
+            return FeatureVector({f: 0.5 for f in self.features})
 
-        # Execution time (normalized: slow -> 0, fast -> 1)
-        exec_time = metadata.get("execution_time", 60.0)
-        values["execution_time"] = max(0.0, 1.0 - exec_time / 60.0)
+        # === Static features (from code analysis) ===
 
-        # Primary score (normalized: 0 -> 0, 100 -> 1)
-        score = metadata.get("primary_score", 0.0)
-        values["primary_score"] = score / 100.0
+        # Count loops
+        loop_count = sum(1 for node in ast.walk(tree)
+                        if isinstance(node, (ast.For, ast.While)))
+
+        # Count branches
+        branch_count = sum(1 for node in ast.walk(tree)
+                          if isinstance(node, ast.If))
+
+        # Count math operators
+        math_ops = sum(1 for node in ast.walk(tree)
+                      if isinstance(node, (ast.BinOp, ast.UnaryOp, ast.AugAssign)))
+
+        # === Dynamic features (per-config scores from evaluation) ===
+        intra_aws = metadata.get('intra_aws_score', 0.0)
+        intra_azure = metadata.get('intra_azure_score', 0.0)
+        intra_gcp = metadata.get('intra_gcp_score', 0.0)
+        inter_agz = metadata.get('inter_agz_score', 0.0)
+        inter_gaz2 = metadata.get('inter_gaz2_score', 0.0)
+
+        # Collect all raw values
+        raw_values = {
+            'loop_count': float(loop_count),
+            'branch_count': float(branch_count),
+            'math_operators': float(math_ops),
+            'intra_aws_score': float(intra_aws),
+            'intra_azure_score': float(intra_azure),
+            'intra_gcp_score': float(intra_gcp),
+            'inter_agz_score': float(inter_agz),
+            'inter_gaz2_score': float(inter_gaz2),
+        }
+
+        # Update running statistics and apply z-score normalization with sigmoid
+        for feature in self._zscore_features:
+            self._update_stats(feature, raw_values[feature])
+            z = (raw_values[feature] - self._mean[feature]) / self._get_std(feature)
+            values[feature] = self._zscore_to_01(z)
 
         return FeatureVector(values)
 
@@ -395,8 +601,20 @@ def format_metrics_for_llm(
     previous_advice: str,
     best_score: float,
     top_solutions: list[tuple[float, str]] = None,
+    progress_pct: float = 0.0,
 ) -> str:
-    """Format metrics data for the LLM to analyze."""
+    """Format metrics data for the LLM to analyze.
+
+    Args:
+        metrics: Dict tracking outcomes over recent generations
+        previous_advice: Previous meta-advice (for continuity)
+        best_score: Current best score achieved
+        top_solutions: List of (score, code_snippet) for top solution(s)
+        progress_pct: Percentage of budget consumed (0-100)
+
+    Returns:
+        Formatted string with all metrics data
+    """
     total = metrics.get('total', 0)
     timeouts = metrics.get('timeouts', 0)
     error_count = metrics.get('errors', 0)
@@ -405,27 +623,28 @@ def format_metrics_for_llm(
     new_bests = metrics.get('new_bests', 0)
     error_messages = metrics.get('error_messages', set())
 
-    data = f"""Current Best Score: {best_score:.1f}
+    data = f"""## Progress: {progress_pct:.0f}% of budget consumed
 
-Outcomes from Last 10 Generations ({total} candidates):
-- Timeouts: {timeouts} (solution took too long to execute)
-- Errors: {error_count} (solution crashed, had bugs, or failed validation)
-- Rejections: {rejections} (solution was valid but didn't beat existing archive entry)
-- Acceptances: {acceptances} (solution was good enough to enter the archive)
-- New Bests: {new_bests} (solution achieved a new highest score)"""
+## Current Best Score: {best_score:.1f}
+
+## Last 10 Generations ({total} candidates):
+- Acceptances: {acceptances} (improved archive)
+- Rejections: {rejections} (valid but didn't improve)
+- Errors: {error_count} (crashed/invalid)
+- Timeouts: {timeouts}
+- New Bests: {new_bests}"""
 
     if error_messages:
-        data += "\n\nErrors encountered:\n"
+        data += "\n\n## Errors Encountered:\n"
         for err in sorted(error_messages):
             data += f"- {err}\n"
 
     if top_solutions:
-        data += f"\n\nTop {len(top_solutions)} Solutions in Archive:\n"
-        for i, (score, snippet) in enumerate(top_solutions, 1):
-            data += f"\n### #{i} (Score: {score:.1f})\n```python\n{snippet}\n```\n"
+        data += f"\n\n## Best Solution (Score: {top_solutions[0][0]:.1f}):\n"
+        data += f"```python\n{top_solutions[0][1]}\n```\n"
 
     if previous_advice:
-        data += f"\n\nPrevious Strategic Advice:\n{previous_advice}"
+        data += f"\n\n## Previous Advice:\n{previous_advice}"
 
     return data
 
@@ -436,27 +655,60 @@ async def generate_meta_advice(
     best_score: float,
     top_solutions: list[tuple[float, str]] = None,
     model: str = None,
+    progress_pct: float = 0.0,
 ) -> tuple[str, float]:
-    """Use heavy LLM to generate strategic meta-advice from evolution metrics."""
-    metrics_data = format_metrics_for_llm(metrics, previous_advice, best_score, top_solutions)
+    """Use LLM to generate strategic meta-advice from evolution metrics.
+
+    The advisor learns from previous advice effectiveness, analyzes error patterns,
+    and provides actionable guidance for the next generation of solutions.
+
+    Args:
+        metrics: Dict tracking outcomes over recent generations
+        previous_advice: Previous meta-advice (advisor should learn from it)
+        best_score: Current best score achieved
+        top_solutions: List of (score, code_snippet) for top solution(s)
+        model: LLM model to use for generating advice
+        progress_pct: Percentage of budget consumed (0-100)
+
+    Returns:
+        Tuple of (advice string ~500 words, cost)
+    """
+    metrics_data = format_metrics_for_llm(metrics, previous_advice, best_score, top_solutions, progress_pct)
     prompt = META_ADVISOR_PROMPT.format(metrics_data=metrics_data)
 
-    try:
-        response = await litellm.acompletion(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.7,
-            max_tokens=500,
-            timeout=60,
-        )
-        advice = response.choices[0].message.content.strip()
-        cost = litellm.completion_cost(completion_response=response)
-        return advice, cost
-    except Exception as e:
-        fallback = f"(Meta-advice generation failed: {str(e)[:50]})\n\n"
-        fallback += f"Best score: {best_score:.1f}. "
-        fallback += f"Last 10 gens: {metrics.get('acceptances', 0)} accepted, {metrics.get('errors', 0)} errors."
-        return fallback, 0.0
+    # Retry up to 3 times for transient failures
+    last_error = None
+    for attempt in range(3):
+        try:
+            # Build call kwargs
+            call_kwargs = {
+                "model": model,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.7,
+                "max_tokens": 800,  # ~500 words max
+                "timeout": 180,  # 3 minutes for meta-advice
+            }
+
+            # Enable reasoning for DeepSeek models
+            if model and "deepseek" in model.lower():
+                call_kwargs["reasoning"] = {"enabled": True}
+
+            response = await litellm.acompletion(**call_kwargs)
+            advice = response.choices[0].message.content.strip()
+            cost = litellm.completion_cost(completion_response=response)
+            return advice, cost
+        except Exception as e:
+            last_error = e
+            if attempt < 2:
+                print(f"[Meta-Advice] Attempt {attempt+1} failed: {str(e)[:50]}, retrying...", flush=True)
+                await asyncio.sleep(2 ** attempt)  # Exponential backoff: 1s, 2s
+            continue
+
+    # Fallback to simple formatted advice if all retries fail
+    fallback = f"(Meta-advice generation failed after 3 attempts: {str(last_error)[:50]})\n\n"
+    fallback += f"Best score: {best_score:.1f}. "
+    fallback += f"Last 10 gens: {metrics.get('acceptances', 0)} accepted, {metrics.get('errors', 0)} errors."
+    return fallback, 0.0
 
 
 async def generate_for_island(island_idx: int, prompt: str, model: str, temperature: float) -> dict:
@@ -513,10 +765,10 @@ def main():
     extractor = CloudcastBehaviorExtractor()
 
     # Single archive with deferred centroid initialization
+    # Note: removed subscore_keys=["execution_time"] per user request
     pool = CVTMAPElitesPool(
         behavior_extractor=extractor,
-        n_centroids=50,
-        subscore_keys=["execution_time"],
+        n_centroids=100,
         defer_centroids=True,
     )
 
@@ -533,6 +785,12 @@ def main():
         "execution_time": seed_exec_time,
         "primary_score": seed_score,
         "per_config_costs": seed_output.get("per_config_costs", {}),
+        # Per-config scores for behavior extraction
+        "intra_aws_score": seed_output.get("intra_aws_score", 0.0),
+        "intra_azure_score": seed_output.get("intra_azure_score", 0.0),
+        "intra_gcp_score": seed_output.get("intra_gcp_score", 0.0),
+        "inter_agz_score": seed_output.get("inter_agz_score", 0.0),
+        "inter_gaz2_score": seed_output.get("inter_gaz2_score", 0.0),
     }
     seed_program = Program(code=SEED_PROGRAM, metadata=seed_metadata)
     best_score = seed_score
@@ -546,8 +804,9 @@ def main():
     print(f"  Baseline cost:        ${LOWER_COST:.2f}")
     print(f"  Best known:           ${UPPER_COST:.2f}")
     print(f"  Seed cost:            ${seed_total_cost:.2f} (score: {seed_score:.1f})")
+    print(f"  Per-config scores:    aws={seed_output.get('intra_aws_score', 0):.2f}, azure={seed_output.get('intra_azure_score', 0):.2f}, gcp={seed_output.get('intra_gcp_score', 0):.2f}, agz={seed_output.get('inter_agz_score', 0):.2f}, gaz2={seed_output.get('inter_gaz2_score', 0):.2f}")
     print(f"  Budget:               $5.00")
-    print(f"  Behavior dimensions:  {', '.join(CONFIG_NAMES)} + time + score")
+    print(f"  Behavior dimensions:  loop_count, branch_count, math_operators + 5 config scores")
     print(f"  Samplers:             {', '.join(sampler_names)} (UCB runs 3x)")
     print(f"  Light models:         {', '.join(LIGHT_MODELS)}")
     print(f"  Heavy model:          {HEAVY_MODEL}")
@@ -556,7 +815,7 @@ def main():
     generation = 0
     total_cost = 0.0
 
-    executor = ResilientProcessPool(max_workers=n_workers, max_tasks_per_child=5)
+    executor = ResilientProcessPool(max_workers=n_workers)
 
     async def initialize_archive():
         """Generate diverse seeds with heavy model, then expand with light models."""
@@ -590,10 +849,9 @@ def main():
 
             if new_code:
                 try:
-                    eval_result = await loop.run_in_executor(executor.executor, evaluate_code_in_process, new_code)
-                except BrokenExecutor:
-                    executor._recreate_executor()
-                    eval_result = {"error": "Pool crashed, recreated"}
+                    eval_result = await executor.run(evaluate_code_in_process, new_code, timeout=120)
+                except Exception as e:
+                    eval_result = {"error": str(e)}
                 if "error" not in eval_result:
                     new_score = compute_score(eval_result)
                     diverse_seeds.append((new_code, new_score, eval_result.get("per_config_costs", {})))
@@ -661,22 +919,15 @@ def main():
             async with semaphore:
                 start = time.time()
                 try:
-                    result = await asyncio.wait_for(
-                        loop.run_in_executor(executor.executor, evaluate_code_in_process, code),
-                        timeout=60
-                    )
+                    result = await executor.run(evaluate_code_in_process, code, timeout=60)
                     elapsed = time.time() - start
                     completed += 1
                     print(f"  [Init Eval] {completed}/{len(candidates)} Candidate {idx} done in {elapsed:.1f}s", flush=True)
                     return idx, result
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     completed += 1
                     print(f"  [Init Eval] {completed}/{len(candidates)} Candidate {idx} TIMEOUT", flush=True)
                     return idx, {"error": "Timeout"}
-                except BrokenExecutor:
-                    executor._recreate_executor()
-                    completed += 1
-                    return idx, {"error": "Pool crashed, recreated"}
                 except Exception as e:
                     completed += 1
                     return idx, {"error": str(e)}
@@ -703,11 +954,22 @@ def main():
                 "output": output,
                 "execution_time": execution_time,
                 "per_config_costs": output.get("per_config_costs", {}),
+                # Per-config scores for behavior extraction
+                "intra_aws_score": output.get("intra_aws_score", 0.0),
+                "intra_azure_score": output.get("intra_azure_score", 0.0),
+                "intra_gcp_score": output.get("intra_gcp_score", 0.0),
+                "inter_agz_score": output.get("inter_agz_score", 0.0),
+                "inter_gaz2_score": output.get("inter_gaz2_score", 0.0),
             })
             temp_prog = Program(code=cand["code"], metadata={
                 "execution_time": execution_time,
                 "primary_score": score,
                 "per_config_costs": output.get("per_config_costs", {}),
+                "intra_aws_score": output.get("intra_aws_score", 0.0),
+                "intra_azure_score": output.get("intra_azure_score", 0.0),
+                "intra_gcp_score": output.get("intra_gcp_score", 0.0),
+                "inter_agz_score": output.get("inter_agz_score", 0.0),
+                "inter_gaz2_score": output.get("inter_gaz2_score", 0.0),
             })
             behavior = extractor.extract(temp_prog)
             behavior_vectors.append(np.array([behavior[f] for f in extractor.features]))
@@ -718,10 +980,9 @@ def main():
         print(f"[Init] Adding {len(diverse_seeds)} diverse seeds to candidates...", flush=True)
         for seed_code, seed_score, per_config_costs in diverse_seeds:
             try:
-                seed_eval = await loop.run_in_executor(executor.executor, evaluate_code_in_process, seed_code)
-            except BrokenExecutor:
-                executor._recreate_executor()
-                seed_eval = {"error": "Pool crashed"}
+                seed_eval = await executor.run(evaluate_code_in_process, seed_code, timeout=120)
+            except Exception as e:
+                seed_eval = {"error": str(e)}
             if "error" not in seed_eval:
                 execution_time = seed_eval.get("total_time", 60.0)
                 valid_programs.append({
@@ -730,11 +991,21 @@ def main():
                     "output": seed_eval,
                     "execution_time": execution_time,
                     "per_config_costs": seed_eval.get("per_config_costs", {}),
+                    "intra_aws_score": seed_eval.get("intra_aws_score", 0.0),
+                    "intra_azure_score": seed_eval.get("intra_azure_score", 0.0),
+                    "intra_gcp_score": seed_eval.get("intra_gcp_score", 0.0),
+                    "inter_agz_score": seed_eval.get("inter_agz_score", 0.0),
+                    "inter_gaz2_score": seed_eval.get("inter_gaz2_score", 0.0),
                 })
                 temp_prog = Program(code=seed_code, metadata={
                     "execution_time": execution_time,
                     "primary_score": seed_score,
                     "per_config_costs": seed_eval.get("per_config_costs", {}),
+                    "intra_aws_score": seed_eval.get("intra_aws_score", 0.0),
+                    "intra_azure_score": seed_eval.get("intra_azure_score", 0.0),
+                    "intra_gcp_score": seed_eval.get("intra_gcp_score", 0.0),
+                    "inter_agz_score": seed_eval.get("inter_agz_score", 0.0),
+                    "inter_gaz2_score": seed_eval.get("inter_gaz2_score", 0.0),
                 })
                 behavior = extractor.extract(temp_prog)
                 behavior_vectors.append(np.array([behavior[f] for f in extractor.features]))
@@ -753,6 +1024,11 @@ def main():
                 "execution_time": prog["execution_time"],
                 "primary_score": prog["score"],
                 "per_config_costs": prog.get("per_config_costs", {}),
+                "intra_aws_score": prog.get("intra_aws_score", 0.0),
+                "intra_azure_score": prog.get("intra_azure_score", 0.0),
+                "intra_gcp_score": prog.get("intra_gcp_score", 0.0),
+                "inter_agz_score": prog.get("inter_agz_score", 0.0),
+                "inter_gaz2_score": prog.get("inter_gaz2_score", 0.0),
             })
             behavior = extractor.extract(temp_prog)
             top_behaviors.append(np.array([behavior[f] for f in extractor.features]))
@@ -762,7 +1038,7 @@ def main():
             top_behaviors,
             percentile_low=5.0,
             percentile_high=95.0,
-            n_centroids=50,
+            n_centroids=100,
         )
         print(f"[Init] Built {n_centroids} centroids", flush=True)
 
@@ -773,6 +1049,11 @@ def main():
                 "execution_time": prog["execution_time"],
                 "primary_score": prog["score"],
                 "per_config_costs": prog.get("per_config_costs", {}),
+                "intra_aws_score": prog.get("intra_aws_score", 0.0),
+                "intra_azure_score": prog.get("intra_azure_score", 0.0),
+                "intra_gcp_score": prog.get("intra_gcp_score", 0.0),
+                "inter_agz_score": prog.get("inter_agz_score", 0.0),
+                "inter_gaz2_score": prog.get("inter_gaz2_score", 0.0),
             })
             eval_result = EvaluationResult(
                 program_id=child.id,
@@ -797,248 +1078,516 @@ def main():
         )
         print(f"[Init] State saved to {STATE_FILE}\n", flush=True)
 
-    async def run_generation():
+    async def run_pipeline():
+        """
+        Producer-consumer pipeline for async LLM sampling and evaluation.
+
+        Architecture (same as txn_scheduling):
+        - Sampler Queue: Yields (display_name, real_sampler, model) in fair distribution
+        - LLM Producers: Pull from sampler queue, generate code, push to eval queue
+        - Eval Consumers: Pull from eval queue, evaluate in process pool, push to result queue
+        - Result Processor: Update archive, track metrics, trigger meta-advice every 50 evals
+        """
         nonlocal generation, best_score, best_program, total_cost
 
-        print(f"[Evolution] Starting evolution loop...", flush=True)
-        loop = asyncio.get_event_loop()
+        print(f"[Pipeline] Starting async evolution pipeline...", flush=True)
 
-        # Meta-advice tracking
-        current_meta_advice = ""
-        previous_meta_advice = ""
-        period_metrics = {
-            'total': 0,
-            'timeouts': 0,
-            'errors': 0,
-            'rejections': 0,
-            'acceptances': 0,
-            'new_bests': 0,
-            'error_messages': set(),
+        # Configuration
+        N_LLM_WORKERS = 4       # Concurrent async LLM calls (I/O bound)
+        N_EVAL_PROCESSES = 4    # Process pool size (CPU bound)
+        EVAL_TIMEOUT = 60       # 1 minute timeout for cloudcast (fast problem)
+        META_ADVICE_INTERVAL = 50  # Generate meta-advice every N evals
+        BUDGET_USD = 5.0
+
+        # Queues for pipeline
+        sampler_queue = asyncio.Queue()      # Sampler configs to process
+        eval_queue = asyncio.Queue()         # Candidates awaiting evaluation
+        result_queue = asyncio.Queue()       # Evaluated results
+
+        # Semaphore to limit total in-flight work
+        pipeline_capacity = asyncio.Semaphore(N_EVAL_PROCESSES + 4)
+
+        # Shared state with lock
+        state_lock = asyncio.Lock()
+        state = {
+            'total_cost': total_cost,
+            'eval_count': 0,
+            'best_score': best_score,
+            'best_program': best_program,
+            'current_meta_advice': '',
+            'previous_meta_advice': '',
+            'period_metrics': {
+                'total': 0,
+                'timeouts': 0,
+                'errors': 0,
+                'rejections': 0,
+                'acceptances': 0,
+                'new_bests': 0,
+                'error_messages': set(),
+            },
+            'llm_in_flight': 0,
+            'eval_in_flight': 0,
         }
 
-        while total_cost < 5.0:
-            generation += 1
-            batch_start = time.time()
+        # Stop signal
+        stop_event = asyncio.Event()
 
-            # Every 10 generations, generate new meta-advice
-            if generation > 1 and (generation - 1) % 10 == 0:
+        def get_sampler_cycle():
+            """Generate one cycle of sampler configs with fair distribution."""
+            configs = []
+            for name in sampler_names:
+                sampler = pool.get_sampler(name)
+                if sampler.model_type == "heavy":
+                    configs.append((name, name, HEAVY_MODEL))
+                elif name == "ucb":
+                    for ucb_idx in range(3):
+                        configs.append((f"ucb_{ucb_idx}", "ucb", random.choice(LIGHT_MODELS)))
+                else:
+                    configs.append((name, name, random.choice(LIGHT_MODELS)))
+            return configs
+
+        async def sampler_feeder():
+            """Continuously feed sampler configs to the queue."""
+            while not stop_event.is_set():
+                configs = get_sampler_cycle()
+                for config in configs:
+                    if stop_event.is_set():
+                        break
+                    await sampler_queue.put(config)
+                await asyncio.sleep(0.1)
+
+        async def llm_producer(worker_id: int):
+            """Pull sampler config, generate LLM response, push to eval queue."""
+            while not stop_event.is_set():
+                slot_acquired = False
+                slot_transferred = False
+                try:
+                    # Get next sampler config
+                    try:
+                        display_name, real_sampler, model = await asyncio.wait_for(
+                            sampler_queue.get(), timeout=2.0
+                        )
+                    except asyncio.TimeoutError:
+                        continue
+
+                    # Acquire pipeline slot BEFORE LLM call
+                    await pipeline_capacity.acquire()
+                    slot_acquired = True
+
+                    # Check budget
+                    async with state_lock:
+                        if state['total_cost'] >= BUDGET_USD:
+                            stop_event.set()
+                            break
+                        state['llm_in_flight'] += 1
+                        current_meta_advice = state['current_meta_advice']
+
+                    # Sample from pool
+                    sample = pool.sample(real_sampler, n_parents=1 + n_inspirations)
+                    inspirations = [p for p in sample.inspirations if random.random() < 0.8]
+                    parents = [sample.parent] + inspirations
+                    source_cell = sample.metadata.get("source_cell", 0)
+
+                    # Build prompt
+                    builder = PromptBuilder()
+                    builder.add_section("Problem", PROBLEM_DESCRIPTION, priority=10)
+                    builder.add_section("Signature", f"```python\n{FUNCTION_SIGNATURE}\n```", priority=20)
+                    builder.add_parents([ProgramWithScore(p, None) for p in parents], priority=30)
+                    builder.set_output_mode(OutputMode.FULL)
+
+                    # Meta-advice injection (80% probability)
+                    if current_meta_advice and random.random() < 0.8:
+                        builder.add_section("Meta-Advice", current_meta_advice, priority=100)
+
+                    prompt = builder.build()
+
+                    # Generate
+                    result = await generate_for_island(worker_id, prompt, model, 0.8)
+
+                    async with state_lock:
+                        state['llm_in_flight'] -= 1
+
+                    if "error" in result:
+                        print(f"[LLM-{worker_id}] {display_name} ERROR: {result['error'][:50]}", flush=True)
+                        continue
+
+                    # Track cost
+                    async with state_lock:
+                        state['total_cost'] += result["cost"]
+                        if state['total_cost'] >= BUDGET_USD:
+                            stop_event.set()
+
+                    # Extract code
+                    new_code, validation_error = extract_and_validate_code(result["content"])
+                    if not new_code:
+                        print(f"[LLM-{worker_id}] {display_name} VALIDATION FAIL: {validation_error}", flush=True)
+                        continue
+
+                    # Push to eval queue
+                    candidate = {
+                        "sampler": display_name,
+                        "real_sampler": real_sampler,
+                        "code": new_code,
+                        "tokens": result.get("tokens", 0),
+                        "source_cell": source_cell,
+                        "model": model,
+                    }
+                    try:
+                        await asyncio.shield(eval_queue.put(candidate))
+                        slot_transferred = True
+                    except asyncio.CancelledError:
+                        slot_transferred = True
+                        async with state_lock:
+                            if state['llm_in_flight'] > 0:
+                                state['llm_in_flight'] -= 1
+                        raise
+
+                except asyncio.CancelledError:
+                    async with state_lock:
+                        if state['llm_in_flight'] > 0:
+                            state['llm_in_flight'] -= 1
+                    raise
+                except Exception as e:
+                    print(f"[LLM-{worker_id}] Unexpected error: {e}", flush=True)
+                    async with state_lock:
+                        if state['llm_in_flight'] > 0:
+                            state['llm_in_flight'] -= 1
+                finally:
+                    if slot_acquired and not slot_transferred:
+                        pipeline_capacity.release()
+
+        async def eval_dispatcher():
+            """Dispatch evaluations and push results to result queue."""
+            pending_evals = set()
+
+            async def run_eval(candidate):
+                incremented = False
+                output = None
+                elapsed = 0
+                start = time.time()
+                try:
+                    async with state_lock:
+                        state['eval_in_flight'] += 1
+                        incremented = True
+
+                    try:
+                        output = await executor.run(evaluate_code_in_process, candidate["code"], timeout=EVAL_TIMEOUT)
+                        elapsed = time.time() - start
+                    except TimeoutError:
+                        output = {"error": f"Timeout after {EVAL_TIMEOUT}s"}
+                        elapsed = EVAL_TIMEOUT
+                    except asyncio.CancelledError:
+                        output = {"error": "Evaluation cancelled"}
+                        elapsed = time.time() - start
+                        raise
+                    except Exception as e:
+                        output = {"error": str(e)}
+                        elapsed = time.time() - start
+
+                    await result_queue.put({
+                        "candidate": candidate,
+                        "output": output,
+                        "elapsed": elapsed,
+                    })
+                except asyncio.CancelledError:
+                    if output is not None:
+                        try:
+                            await asyncio.shield(result_queue.put({
+                                "candidate": candidate,
+                                "output": output,
+                                "elapsed": elapsed,
+                            }))
+                        except Exception:
+                            pass
+                    raise
+                except Exception as e:
+                    print(f"[Eval] Unexpected error in run_eval: {e}", flush=True)
+                finally:
+                    if incremented:
+                        async with state_lock:
+                            state['eval_in_flight'] -= 1
+                    pipeline_capacity.release()
+
+            while not stop_event.is_set() or not eval_queue.empty():
+                try:
+                    candidate = await asyncio.wait_for(eval_queue.get(), timeout=2.0)
+                    task = asyncio.create_task(run_eval(candidate))
+                    pending_evals.add(task)
+                    task.add_done_callback(pending_evals.discard)
+                except asyncio.TimeoutError:
+                    continue
+                except asyncio.CancelledError:
+                    break
+                except Exception as e:
+                    print(f"[EvalDispatch] Unexpected error: {e}", flush=True)
+
+            # Wait for pending evals
+            if pending_evals:
+                try:
+                    await asyncio.wait_for(
+                        asyncio.gather(*pending_evals, return_exceptions=True),
+                        timeout=EVAL_TIMEOUT + 10
+                    )
+                except asyncio.TimeoutError:
+                    print(f"[EvalDispatch] Pending evals didn't complete in time", flush=True)
+
+        async def result_processor():
+            """Process evaluation results, update archive, trigger meta-advice."""
+            nonlocal generation, best_score, best_program, total_cost
+
+            last_save_time = time.time()
+
+            while not stop_event.is_set() or not result_queue.empty():
+                try:
+                    try:
+                        item = await asyncio.wait_for(result_queue.get(), timeout=1.0)
+                    except asyncio.TimeoutError:
+                        continue
+
+                    candidate = item["candidate"]
+                    output = item["output"]
+                    elapsed = item["elapsed"]
+
+                    display_name = candidate["sampler"]
+                    real_sampler = candidate["real_sampler"]
+                    tokens = candidate["tokens"]
+
+                    score = compute_score(output)
+                    exec_time = output.get("total_time", 60.0)
+
+                    child = Program(code=candidate["code"], metadata={
+                        "execution_time": exec_time,
+                        "primary_score": score,
+                        "per_config_costs": output.get("per_config_costs", {}),
+                        "intra_aws_score": output.get("intra_aws_score", 0.0),
+                        "intra_azure_score": output.get("intra_azure_score", 0.0),
+                        "intra_gcp_score": output.get("intra_gcp_score", 0.0),
+                        "inter_agz_score": output.get("inter_agz_score", 0.0),
+                        "inter_gaz2_score": output.get("inter_gaz2_score", 0.0),
+                    })
+                    eval_result = EvaluationResult(
+                        program_id=child.id,
+                        scores={'score': score},
+                        is_valid="error" not in output,
+                        error=output.get("error"),
+                    )
+
+                    async with state_lock:
+                        state['eval_count'] += 1
+                        state['period_metrics']['total'] += 1
+                        eval_count = state['eval_count']
+                        current_cost = state['total_cost']
+
+                    if eval_result.is_valid:
+                        accepted = pool.add(child, eval_result)
+                        pool.update_sampler(real_sampler, candidate["source_cell"], success=accepted, reward=score)
+                        total_cost_val = output.get("total_cost", LOWER_COST)
+
+                        async with state_lock:
+                            if accepted:
+                                state['period_metrics']['acceptances'] += 1
+                            else:
+                                state['period_metrics']['rejections'] += 1
+
+                            status = "accepted" if accepted else "rejected"
+                            if score > state['best_score']:
+                                state['best_score'] = score
+                                state['best_program'] = child
+                                best_score = score
+                                best_program = child
+                                status = "NEW BEST ★"
+                                state['period_metrics']['new_bests'] += 1
+
+                        print(f"[Eval #{eval_count:4d}] {display_name:20s} {status:10s} | cost: ${total_cost_val:6.2f} | score: {score:5.1f} | best: {best_score:5.1f} | {tokens}tok | ${current_cost:.3f}", flush=True)
+                    else:
+                        pool.update_sampler(real_sampler, candidate["source_cell"], success=False)
+                        err = eval_result.error[:30] if eval_result.error else "unknown"
+
+                        async with state_lock:
+                            if eval_result.error and "timeout" in eval_result.error.lower():
+                                state['period_metrics']['timeouts'] += 1
+                            else:
+                                state['period_metrics']['errors'] += 1
+                                if eval_result.error:
+                                    state['period_metrics']['error_messages'].add(eval_result.error[:100].strip())
+
+                        print(f"[Eval #{eval_count:4d}] {display_name:20s} INVALID    | {err}...", flush=True)
+
+                    # Trigger meta-advice every N evals
+                    if eval_count > 0 and eval_count % META_ADVICE_INTERVAL == 0:
+                        asyncio.create_task(generate_and_update_meta_advice(eval_count))
+
+                    # Save state periodically
+                    if time.time() - last_save_time > 30:
+                        async with state_lock:
+                            save_state(
+                                generation=eval_count,
+                                pool=pool,
+                                best_score=state['best_score'],
+                                best_program=state['best_program'],
+                                total_cost_usd=state['total_cost'],
+                                extra_info={
+                                    "phase": "pipeline",
+                                    "eval_count": eval_count,
+                                    "llm_in_flight": state['llm_in_flight'],
+                                    "eval_in_flight": state['eval_in_flight'],
+                                },
+                            )
+                        last_save_time = time.time()
+
+                except asyncio.CancelledError:
+                    break
+                except Exception as e:
+                    print(f"[ResultProc] Unexpected error: {e}", flush=True)
+
+            # Final state update
+            async with state_lock:
+                total_cost = state['total_cost']
+                best_score = state['best_score']
+                best_program = state['best_program']
+                generation = state['eval_count']
+
+        async def generate_and_update_meta_advice(eval_count: int):
+            """Generate meta-advice asynchronously and update shared state."""
+            try:
+                async with state_lock:
+                    metrics_copy = dict(state['period_metrics'])
+                    # Create independent copy of the set to avoid race conditions
+                    metrics_copy['error_messages'] = set(state['period_metrics']['error_messages'])
+                    prev_advice = state['previous_meta_advice']
+                    current_best = state['best_score']
+                    current_cost = state['total_cost']
+
+                # Get top 1 solution from archive (reduced from 3 to save tokens)
                 top_solutions = []
                 try:
                     elites = list(pool._elites.values())
                     elites.sort(key=lambda e: e.result.primary_score, reverse=True)
-                    for elite in elites[:3]:
-                        score = elite.result.primary_score
-                        code = elite.program.code
-                        top_solutions.append((score, code))
+                    for elite in elites[:1]:
+                        top_solutions.append((elite.result.primary_score, elite.program.code))
                 except Exception:
                     pass
 
-                print(f"[Gen {generation}] Generating meta-advice with heavy model...", flush=True)
-                current_meta_advice, advice_cost = await generate_meta_advice(
-                    metrics=period_metrics,
-                    previous_advice=previous_meta_advice,
-                    best_score=best_score,
+                progress_pct = (current_cost / BUDGET_USD) * 100
+                print(f"\n[Meta-Advice] Generating at eval #{eval_count} ({progress_pct:.0f}% budget)...", flush=True)
+
+                advice, advice_cost = await generate_meta_advice(
+                    metrics=metrics_copy,
+                    previous_advice=prev_advice,
+                    best_score=current_best,
                     top_solutions=top_solutions,
                     model=HEAVY_MODEL,
-                )
-                total_cost += advice_cost
-                previous_meta_advice = current_meta_advice
-                period_metrics = {
-                    'total': 0,
-                    'timeouts': 0,
-                    'errors': 0,
-                    'rejections': 0,
-                    'acceptances': 0,
-                    'new_bests': 0,
-                    'error_messages': set(),
-                }
-                print(f"[Gen {generation}] Meta-advice updated (cost: ${advice_cost:.4f})", flush=True)
-                print(f"[Meta-Advice]\n{current_meta_advice}\n", flush=True)
-
-            print(f"[Gen {generation}] Starting generation...", flush=True)
-
-            # Build prompts for each sampler
-            active_samplers = []
-            for name in sampler_names:
-                sampler = pool.get_sampler(name)
-                if sampler.model_type == "heavy":
-                    active_samplers.append((name, name, HEAVY_MODEL))
-                elif name == "ucb":
-                    for ucb_idx in range(3):
-                        active_samplers.append((f"ucb_{ucb_idx}", "ucb", random.choice(LIGHT_MODELS)))
-                else:
-                    active_samplers.append((name, name, random.choice(LIGHT_MODELS)))
-
-            prompts = []
-            sampler_data = []
-            for display_name, real_sampler, model in active_samplers:
-                sample = pool.sample(real_sampler, n_parents=1 + n_inspirations)
-                parents = [sample.parent] + sample.inspirations
-                source_cell = sample.metadata.get("source_cell", 0)
-
-                builder = PromptBuilder()
-                builder.add_section("Problem", PROBLEM_DESCRIPTION, priority=10)
-                builder.add_section("Signature", f"```python\n{FUNCTION_SIGNATURE}\n```", priority=20)
-                builder.add_parents([ProgramWithScore(p, None) for p in parents], priority=30)
-                builder.set_output_mode(OutputMode.FULL)
-
-                if current_meta_advice:
-                    builder.add_section("Meta-Advice", current_meta_advice, priority=100)
-
-                prompts.append(builder.build())
-                sampler_data.append({
-                    "sampler": display_name,
-                    "real_sampler": real_sampler,
-                    "model": model,
-                    "parents": parents,
-                    "source_cell": source_cell,
-                })
-
-            n_samplers = len(active_samplers)
-            print(f"[Gen {generation}] LLM calls for {n_samplers} samplers...", flush=True)
-            llm_tasks = [
-                generate_for_island(i, prompts[i], sampler_data[i]["model"], 0.8)
-                for i in range(n_samplers)
-            ]
-            results = await asyncio.gather(*llm_tasks)
-            print(f"[Gen {generation}] All LLM calls complete", flush=True)
-
-            candidates = []
-            for res in results:
-                if "error" in res:
-                    idx = res["island"]
-                    print(f"[Gen {generation}] {sampler_data[idx]['sampler']} ERROR: {res['error'][:50]}", flush=True)
-                    continue
-
-                total_cost += res["cost"]
-                idx = res["island"]
-                tokens = res.get("tokens", 0)
-                sname = sampler_data[idx]["sampler"]
-                model = sampler_data[idx]["model"]
-
-                new_code, validation_error = extract_and_validate_code(res["content"])
-
-                if not new_code:
-                    print(f"[Gen {generation}] {sname} VALIDATION FAIL ({model.split('/')[-1]}): {validation_error}", flush=True)
-                    continue
-
-                candidates.append({
-                    "sampler": sname,
-                    "real_sampler": sampler_data[idx]["real_sampler"],
-                    "code": new_code,
-                    "tokens": tokens,
-                    "generation": generation,
-                    "source_cell": sampler_data[idx]["source_cell"],
-                    "model": model,
-                })
-
-            EVAL_TIMEOUT = 60  # 1 minute timeout for cloudcast (fast problem)
-            print(f"[Gen {generation}] Evaluating {len(candidates)} candidates...", flush=True)
-            eval_semaphore = asyncio.Semaphore(8)
-
-            async def eval_with_timeout(idx, code):
-                async with eval_semaphore:
-                    start = time.time()
-                    try:
-                        result = await asyncio.wait_for(
-                            loop.run_in_executor(executor.executor, evaluate_code_in_process, code),
-                            timeout=EVAL_TIMEOUT
-                        )
-                        elapsed = time.time() - start
-                        print(f"  [Eval] Candidate {idx} done in {elapsed:.1f}s", flush=True)
-                        return idx, result
-                    except asyncio.TimeoutError:
-                        print(f"  [Eval] Candidate {idx} TIMEOUT after {EVAL_TIMEOUT}s", flush=True)
-                        return idx, {"error": f"Timeout after {EVAL_TIMEOUT}s"}
-                    except BrokenExecutor:
-                        executor._recreate_executor()
-                        return idx, {"error": "Pool crashed, recreated"}
-                    except Exception as e:
-                        return idx, {"error": str(e)}
-
-            eval_tasks = [eval_with_timeout(i, c["code"]) for i, c in enumerate(candidates)]
-            indexed_results = await asyncio.gather(*eval_tasks)
-            eval_results = [r for _, r in sorted(indexed_results, key=lambda x: x[0])]
-            print(f"[Gen {generation}] All evaluations complete", flush=True)
-
-            batch_time = time.time() - batch_start
-
-            for cand, output in zip(candidates, eval_results):
-                display_name = cand["sampler"]
-                real_sampler = cand["real_sampler"]
-                tokens = cand["tokens"]
-                score = compute_score(output)
-                exec_time = output.get("total_time", 60.0)
-
-                child = Program(code=cand["code"], metadata={
-                    "execution_time": exec_time,
-                    "primary_score": score,
-                    "per_config_costs": output.get("per_config_costs", {}),
-                })
-                eval_result = EvaluationResult(
-                    program_id=child.id,
-                    scores={'score': score},
-                    is_valid="error" not in output,
-                    error=output.get("error"),
+                    progress_pct=progress_pct,
                 )
 
-                period_metrics['total'] += 1
+                async with state_lock:
+                    state['total_cost'] += advice_cost
+                    state['previous_meta_advice'] = advice
+                    state['current_meta_advice'] = advice
+                    # Reset period metrics
+                    state['period_metrics'] = {
+                        'total': 0, 'timeouts': 0, 'errors': 0,
+                        'rejections': 0, 'acceptances': 0, 'new_bests': 0,
+                        'error_messages': set(),
+                    }
 
-                if eval_result.is_valid:
-                    accepted = pool.add(child, eval_result)
-                    pool.update_sampler(real_sampler, cand["source_cell"], success=accepted, reward=score)
-                    total_cost_val = output.get("total_cost", LOWER_COST)
-                    status = "accepted" if accepted else "rejected"
+                print(f"[Meta-Advice] Updated (cost: ${advice_cost:.4f})", flush=True)
+                print(f"[Meta-Advice]\n{advice}\n", flush=True)
+            except asyncio.CancelledError:
+                print(f"[Meta-Advice] Cancelled at eval #{eval_count}", flush=True)
+                raise
+            except Exception as e:
+                # Log unexpected errors that would otherwise be silently lost
+                print(f"[Meta-Advice] Unexpected error at eval #{eval_count}: {e}", flush=True)
 
-                    if accepted:
-                        period_metrics['acceptances'] += 1
-                    else:
-                        period_metrics['rejections'] += 1
+        async def status_monitor():
+            """Periodically print pipeline status."""
+            while not stop_event.is_set():
+                await asyncio.sleep(30)
+                async with state_lock:
+                    print(f"\n[Status] Cost: ${state['total_cost']:.3f}/{BUDGET_USD:.2f} | Evals: {state['eval_count']} | "
+                          f"LLM: {state['llm_in_flight']} | Eval: {state['eval_in_flight']} | "
+                          f"Archive: {pool.size()} | Best: {state['best_score']:.1f}\n", flush=True)
 
-                    if score > best_score:
-                        best_score, best_program = score, child
-                        status = "NEW BEST ★"
-                        period_metrics['new_bests'] += 1
+        # Start all workers
+        print(f"[Pipeline] Starting {N_LLM_WORKERS} LLM workers, {N_EVAL_PROCESSES}-process eval pool...", flush=True)
 
-                    print(f"[Gen {generation}] {display_name:20s} {status:10s} | cost: ${total_cost_val:6.2f} | score: {score:5.1f} | best: {best_score:5.1f} | {tokens}tok | ${total_cost:.3f}", flush=True)
-                else:
-                    pool.update_sampler(real_sampler, cand["source_cell"], success=False)
-                    err = eval_result.error[:30] if eval_result.error else "unknown"
+        feeder_task = asyncio.create_task(sampler_feeder())
+        llm_tasks = [asyncio.create_task(llm_producer(i)) for i in range(N_LLM_WORKERS)]
+        eval_task = asyncio.create_task(eval_dispatcher())
+        processor_task = asyncio.create_task(result_processor())
+        monitor_task = asyncio.create_task(status_monitor())
 
-                    if eval_result.error and "timeout" in eval_result.error.lower():
-                        period_metrics['timeouts'] += 1
-                    else:
-                        period_metrics['errors'] += 1
-                        if eval_result.error:
-                            err_msg = eval_result.error[:100].strip()
-                            period_metrics['error_messages'].add(err_msg)
+        # Wait for budget exhaustion
+        while not stop_event.is_set():
+            await asyncio.sleep(1.0)
+            async with state_lock:
+                if state['total_cost'] >= BUDGET_USD:
+                    stop_event.set()
 
-                    print(f"[Gen {generation}] {display_name:20s} INVALID    | {err}...", flush=True)
+        print(f"\n[Pipeline] Budget exhausted, draining queues...", flush=True)
 
-            pool.on_generation_complete()
-            print(f"    [Batch {generation} done in {batch_time:.1f}s | {n_samplers} samplers, archive: {pool.size()}]", flush=True)
+        # Cancel feeder
+        feeder_task.cancel()
+        try:
+            await feeder_task
+        except asyncio.CancelledError:
+            pass
 
-            if generation % 25 == 0:
-                print(f"{'─'*70}\n[MILESTONE] Best score: {best_score:.1f}\n{'─'*70}", flush=True)
-
-            save_state(
-                generation=generation,
-                pool=pool,
-                best_score=best_score,
-                best_program=best_program,
-                total_cost_usd=total_cost,
-                extra_info={
-                    "phase": "evolution",
-                    "batch_time_s": batch_time,
-                    "n_samplers": n_samplers,
-                },
+        # Cancel LLM workers
+        for task in llm_tasks:
+            task.cancel()
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(*llm_tasks, return_exceptions=True),
+                timeout=10.0
             )
+        except asyncio.TimeoutError:
+            print("[Pipeline] LLM workers didn't cancel in time", flush=True)
 
-        executor.shutdown(wait=False)
+        # Wait for eval dispatcher
+        await eval_task
+
+        # Wait for result processor
+        try:
+            await asyncio.wait_for(processor_task, timeout=30.0)
+        except asyncio.TimeoutError:
+            processor_task.cancel()
+            try:
+                await processor_task
+            except asyncio.CancelledError:
+                pass
+
+        # Cancel monitor
+        monitor_task.cancel()
+        try:
+            await monitor_task
+        except asyncio.CancelledError:
+            pass
+
+        # Final state
+        async with state_lock:
+            total_cost = state['total_cost']
+            best_score = state['best_score']
+            best_program = state['best_program']
+            generation = state['eval_count']
+
+        # Final save
+        save_state(
+            generation=generation,
+            pool=pool,
+            best_score=best_score,
+            best_program=best_program,
+            total_cost_usd=total_cost,
+            extra_info={"phase": "pipeline_complete"},
+        )
+
+        executor.shutdown()
+        print(f"[Pipeline] Complete. Total evals: {generation}", flush=True)
 
     async def main_async():
         await initialize_archive()
-        await run_generation()
+        await run_pipeline()
 
     asyncio.run(main_async())
 

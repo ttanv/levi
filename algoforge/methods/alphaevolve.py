@@ -71,92 +71,6 @@ def apply_diff(original: str, diff_response: str) -> Optional[str]:
     return result
 
 
-def apply_structured_diff(original: str, structured_response: dict) -> Optional[str]:
-    """
-    Apply structured diff edits to original code.
-
-    Args:
-        original: Original code string
-        structured_response: Parsed JSON with "edits" and "summary"
-            Format: {
-                "edits": [
-                    {
-                        "start_line": int,  # 1-indexed, inclusive
-                        "end_line": int,    # 1-indexed, inclusive
-                        "new_content": str, # Empty to delete
-                        "explanation": str
-                    }
-                ],
-                "summary": str
-            }
-
-    Returns:
-        Modified code string, or None if edits are invalid
-
-    Validation:
-        - All line numbers in valid range
-        - No overlapping edits
-        - start_line <= end_line + 1 (allows insertion)
-        - Edits sorted by start_line
-    """
-    # Validate structure
-    if not isinstance(structured_response, dict) or "edits" not in structured_response:
-        return None
-
-    edits = structured_response["edits"]
-    if not isinstance(edits, list):
-        return None
-
-    # Handle empty edits (no changes)
-    if len(edits) == 0:
-        return original
-
-    # Split original into lines
-    lines = original.split('\n')
-    total_lines = len(lines)
-
-    # Validate edits
-    validated_edits = []
-    for edit in edits:
-        if not all(k in edit for k in ["start_line", "end_line", "new_content"]):
-            return None
-
-        start, end, content = edit["start_line"], edit["end_line"], edit["new_content"]
-
-        # Type checks
-        if not isinstance(start, int) or not isinstance(end, int) or not isinstance(content, str):
-            return None
-
-        # Range checks (allow insertion: start = end + 1)
-        if start < 1 or start > total_lines + 1 or end < 0 or end > total_lines:
-            return None
-        if start > end + 1:
-            return None
-
-        validated_edits.append((start, end, content))
-
-    # Sort and check for overlaps
-    validated_edits.sort(key=lambda x: x[0])
-    for i in range(len(validated_edits) - 1):
-        curr_start, curr_end, _ = validated_edits[i]
-        next_start, _, _ = validated_edits[i + 1]
-        if max(curr_start, curr_end) >= next_start:
-            return None  # Overlapping
-
-    # Apply edits in reverse order (preserves line numbers)
-    result_lines = lines[:]
-    for start, end, content in reversed(validated_edits):
-        start_idx, end_idx = start - 1, end - 1
-        new_lines = content.split('\n') if content else []
-
-        if start == end + 1:  # Insert
-            result_lines[start_idx:start_idx] = new_lines
-        else:  # Replace
-            result_lines[start_idx:end_idx + 1] = new_lines
-
-    return '\n'.join(result_lines)
-
-
 def alphaevolve(
     score_functions: dict[str, Callable[[Any, Any, float], float]],
     inputs: list,
@@ -171,7 +85,6 @@ def alphaevolve(
     n_parents: int = 2,
     epoch_interval: int = 100,
     use_diff_mode: bool = False,
-    use_structured_diff_mode: bool = False,
     temperature: float = 0.7,
     verbose: bool = True,
 ) -> Program:
@@ -192,16 +105,12 @@ def alphaevolve(
         n_parents: Parents to sample per mutation
         epoch_interval: Generations between island culling
         use_diff_mode: Whether to use text-based diff mutations
-        use_structured_diff_mode: Whether to use structured (JSON) diff mutations
         temperature: LLM sampling temperature
         verbose: Print progress
 
     Returns:
         Best program found
     """
-    # Validate mode parameters
-    if use_diff_mode and use_structured_diff_mode:
-        raise ValueError("Cannot use both use_diff_mode and use_structured_diff_mode")
     config = get_config()
     start_time = time.time()
 
@@ -295,9 +204,7 @@ def alphaevolve(
             parent_with_scores = [ProgramWithScore(p, None) for p in parents]
             builder.add_parents(parent_with_scores, priority=30)
 
-            if use_structured_diff_mode:
-                builder.set_output_mode(OutputMode.STRUCTURED_DIFF)
-            elif use_diff_mode:
+            if use_diff_mode:
                 builder.set_output_mode(OutputMode.DIFF)
             else:
                 builder.add_section(
@@ -308,31 +215,18 @@ def alphaevolve(
                 )
 
             prompt = builder.build()
-            response_format = builder.get_response_format() if use_structured_diff_mode else None
 
             # Generate mutation
             try:
-                response = llm.generate(prompt, response_format=response_format)
+                response = llm.generate(prompt)
                 model_used = response.model
-                tokens_used = response.total_tokens
             except BudgetExhausted:
                 if verbose:
                     print(f"[Gen {generation}] Budget exhausted during LLM call")
                 break
 
             # Extract/apply code
-            if use_structured_diff_mode:
-                if response.is_structured and response.parsed_json:
-                    new_code = apply_structured_diff(parents[0].code, response.parsed_json)
-                else:
-                    # Try manual parsing as fallback
-                    try:
-                        import json
-                        parsed = json.loads(response.content)
-                        new_code = apply_structured_diff(parents[0].code, parsed)
-                    except:
-                        new_code = None
-            elif use_diff_mode:
+            if use_diff_mode:
                 new_code = apply_diff(parents[0].code, response.content)
             else:
                 new_code = extract_code(response.content)
@@ -343,11 +237,6 @@ def alphaevolve(
                     print(f"[Gen {generation}] Failed to extract code | "
                           f"Island {island_index} | Model: {model_used}")
                 continue
-
-            # Verbose logging for structured diff
-            if use_structured_diff_mode and verbose and response.is_structured:
-                n_edits = len(response.parsed_json.get("edits", []))
-                print(f"[Gen {generation}] Structured diff: {n_edits} edits | {tokens_used} tokens")
 
             # Create child with island metadata
             child = Program(
