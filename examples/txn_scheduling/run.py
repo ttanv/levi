@@ -7,7 +7,6 @@ import asyncio
 import sys
 import time
 from pathlib import Path
-from concurrent.futures import BrokenExecutor
 
 # Add algoforge to path (must be before algoforge imports)
 ALGOFORGE_ROOT = Path(__file__).resolve().parents[2]
@@ -33,56 +32,70 @@ class TxnSchedulingBehaviorExtractor:
     """
     Custom behavior extractor for transaction scheduling with z-score normalization.
 
+    Structural/behavioral features only (no performance scores).
+    All features normalized via z-score + sigmoid for adaptive scaling.
+
     Features (all normalized to ~[0, 1] via sigmoid of z-score):
-    - execution_time: Wall clock time
     - loop_count: Number of for/while loops
     - branch_count: Number of if/elif/else branches
     - math_operators: Count of math ops (+, -, *, /, etc.)
-    - workload_1_score: Performance on WORKLOAD_1 (already 0-1)
-    - workload_2_score: Performance on WORKLOAD_2 (already 0-1)
-    - workload_3_score: Performance on WORKLOAD_3 (already 0-1)
+    - loop_nesting_max: Maximum depth of nested loops
     """
 
-    def __init__(self, max_time: float = 200.0):
+    def __init__(self, max_time: float = 200.0, init_noise: float = 0.15):
         self.features = [
-            'execution_time',
             'loop_count',
             'branch_count',
             'math_operators',
-            'workload_1_score',
-            'workload_2_score',
-            'workload_3_score',
+            'loop_nesting_max',
         ]
         self.max_time = max_time
 
-        # Running statistics for z-score normalization (Welford's online algorithm)
-        # Keys: feature names that need z-score normalization
-        self._zscore_features = ['loop_count', 'branch_count', 'math_operators']
-        self._count = 0
-        self._mean = {f: 0.0 for f in self._zscore_features}
-        self._M2 = {f: 0.0 for f in self._zscore_features}  # Sum of squared differences
+        # Noise during init phase spreads solutions across cells, preventing clustering
+        # During evolution, no noise allows proper competition
+        self.init_noise = init_noise
+        self._phase = 'init'  # Start in init phase
+
+        # Z-score normalization using Welford's online algorithm
+        self._count = {f: 0 for f in self.features}
+        self._mean = {f: 0.0 for f in self.features}
+        self._M2 = {f: 0.0 for f in self.features}  # Sum of squared differences
+
+    def set_phase(self, phase: str):
+        """Set extraction phase: 'init' adds noise, 'evolution' does not."""
+        self._phase = phase
 
     def _update_stats(self, feature: str, value: float):
         """Update running mean and variance using Welford's algorithm."""
-        self._count += 1
+        self._count[feature] += 1
         delta = value - self._mean[feature]
-        self._mean[feature] += delta / self._count
+        self._mean[feature] += delta / self._count[feature]
         delta2 = value - self._mean[feature]
         self._M2[feature] += delta * delta2
 
     def _get_std(self, feature: str) -> float:
         """Get current standard deviation for a feature."""
-        if self._count < 2:
+        if self._count[feature] < 2:
             return 1.0  # Avoid division by zero
-        variance = self._M2[feature] / (self._count - 1)
+        variance = self._M2[feature] / (self._count[feature] - 1)
         return max(np.sqrt(variance), 0.1)  # Min std of 0.1 to avoid extreme z-scores
 
     def _zscore_to_01(self, z: float) -> float:
         """Convert z-score to [0, 1] using sigmoid."""
-        # Sigmoid: 1 / (1 + exp(-z))
-        # Clamp z to avoid overflow
-        z = max(-10, min(10, z))
+        z = max(-10, min(10, z))  # Clamp to avoid overflow
         return 1.0 / (1.0 + np.exp(-z))
+
+    def _max_loop_nesting(self, tree: ast.AST) -> int:
+        """Find maximum loop nesting depth."""
+        def _depth(node: ast.AST, current: int) -> int:
+            max_depth = current
+            for child in ast.iter_child_nodes(node):
+                if isinstance(child, (ast.For, ast.While)):
+                    max_depth = max(max_depth, _depth(child, current + 1))
+                else:
+                    max_depth = max(max_depth, _depth(child, current))
+            return max_depth
+        return _depth(tree, 0)
 
     def extract(self, program: Program) -> FeatureVector:
         """Extract behavioral features from a program."""
@@ -96,18 +109,7 @@ class TxnSchedulingBehaviorExtractor:
         except SyntaxError:
             return FeatureVector({f: 0.5 for f in self.features})
 
-        # === Dynamic features (from evaluation metadata) ===
-
-        # execution_time: normalize using max_time (0 = max_time, 1 = instant)
-        raw_time = metadata.get('execution_time', self.max_time)
-        values['execution_time'] = max(0.0, 1.0 - raw_time / self.max_time)
-
-        # Per-workload scores: already 0-1 normalized
-        values['workload_1_score'] = metadata.get('workload_1_score', 0.0)
-        values['workload_2_score'] = metadata.get('workload_2_score', 0.0)
-        values['workload_3_score'] = metadata.get('workload_3_score', 0.0)
-
-        # === Static features (from code analysis, z-score normalized) ===
+        # === Static features (from code analysis) ===
 
         # Count loops
         loop_count = sum(1 for node in ast.walk(tree)
@@ -121,21 +123,28 @@ class TxnSchedulingBehaviorExtractor:
         math_ops = sum(1 for node in ast.walk(tree)
                       if isinstance(node, (ast.BinOp, ast.UnaryOp, ast.AugAssign)))
 
-        # Update running statistics
+        # Max loop nesting depth
+        loop_nesting = self._max_loop_nesting(tree)
+
+        # Collect all raw values
         raw_values = {
             'loop_count': float(loop_count),
             'branch_count': float(branch_count),
             'math_operators': float(math_ops),
+            'loop_nesting_max': float(loop_nesting),
         }
 
-        for feature in self._zscore_features:
+        # Update running statistics and apply z-score normalization with sigmoid
+        for feature in self.features:
             self._update_stats(feature, raw_values[feature])
-
-        # Apply z-score normalization with sigmoid
-        for feature in self._zscore_features:
-            raw = raw_values[feature]
-            z = (raw - self._mean[feature]) / self._get_std(feature)
+            z = (raw_values[feature] - self._mean[feature]) / self._get_std(feature)
             values[feature] = self._zscore_to_01(z)
+
+        # Add noise during init phase to spread solutions across cells
+        if self._phase == 'init' and self.init_noise > 0:
+            for feature in self.features:
+                noise = np.random.normal(0, self.init_noise)
+                values[feature] = np.clip(values[feature] + noise, 0.0, 1.0)
 
         return FeatureVector(values)
 
@@ -604,52 +613,34 @@ def save_state(
 def format_metrics_for_llm(
     metrics: dict,
     previous_advice: str,
-    best_score: float,
-    top_solutions: list[tuple[float, str]] = None,
     progress_pct: float = 0.0,
 ) -> str:
-    """Format metrics data for the LLM to analyze.
+    """Format failure metrics for the LLM to learn from.
 
     Args:
         metrics: Dict tracking outcomes over recent generations
         previous_advice: Previous meta-advice (for continuity)
-        best_score: Current best score achieved
-        top_solutions: List of (score, code_snippet) for top solution(s)
         progress_pct: Percentage of budget consumed (0-100)
 
     Returns:
-        Formatted string with all metrics data
+        Formatted string with failure data only
     """
     total = metrics.get('total', 0)
-    timeouts = metrics.get('timeouts', 0)
     error_count = metrics.get('errors', 0)
-    rejections = metrics.get('rejections', 0)
-    acceptances = metrics.get('acceptances', 0)
-    new_bests = metrics.get('new_bests', 0)
     error_messages = metrics.get('error_messages', set())
 
     data = f"""## Progress: {progress_pct:.0f}% of budget consumed
 
-## Current Best Score: {best_score:.1f}
-
-## Last 10 Generations ({total} candidates):
-- Acceptances: {acceptances} (improved archive)
-- Rejections: {rejections} (valid but didn't improve)
-- Errors: {error_count} (crashed/invalid)
-- Timeouts: {timeouts}
-- New Bests: {new_bests}"""
+## Recent Failures ({total} candidates evaluated):
+- Failures: {error_count} (crashes, invalid code, timeouts, etc.)"""
 
     if error_messages:
-        data += "\n\n## Errors Encountered:\n"
+        data += "\n\n## Error Patterns to Avoid:\n"
         for err in sorted(error_messages):
             data += f"- {err}\n"
 
-    if top_solutions:
-        data += f"\n\n## Best Solution (Score: {top_solutions[0][0]:.1f}):\n"
-        data += f"```python\n{top_solutions[0][1]}\n```\n"
-
     if previous_advice:
-        data += f"\n\n## Previous Advice:\n{previous_advice}"
+        data += f"\n\n## Previous Lessons:\n{previous_advice}"
 
     return data
 
@@ -657,28 +648,24 @@ def format_metrics_for_llm(
 async def generate_meta_advice(
     metrics: dict,
     previous_advice: str,
-    best_score: float,
-    top_solutions: list[tuple[float, str]] = None,
     model: str = None,
     progress_pct: float = 0.0,
 ) -> tuple[str, float]:
-    """Use LLM to generate strategic meta-advice from evolution metrics.
+    """Use LLM to generate lessons learned from failures.
 
-    The advisor learns from previous advice effectiveness, analyzes error patterns,
-    and provides actionable guidance for the next generation of solutions.
+    The advisor analyzes error patterns to provide guidance that helps
+    future solutions avoid the same mistakes.
 
     Args:
-        metrics: Dict tracking outcomes over recent generations
-        previous_advice: Previous meta-advice (advisor should learn from it)
-        best_score: Current best score achieved
-        top_solutions: List of (score, code_snippet) for top solution(s)
+        metrics: Dict tracking failures over recent generations
+        previous_advice: Previous lessons (for continuity)
         model: LLM model to use for generating advice
         progress_pct: Percentage of budget consumed (0-100)
 
     Returns:
-        Tuple of (advice string ~500 words, cost)
+        Tuple of (advice string ~200 words, cost)
     """
-    metrics_data = format_metrics_for_llm(metrics, previous_advice, best_score, top_solutions, progress_pct)
+    metrics_data = format_metrics_for_llm(metrics, previous_advice, progress_pct)
     prompt = META_ADVISOR_PROMPT.format(metrics_data=metrics_data)
 
     try:
@@ -687,7 +674,7 @@ async def generate_meta_advice(
             "model": model,
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.7,
-            "max_tokens": 800,  # ~500 words max
+            "max_tokens": 400,  # ~200 words max
             "timeout": 60,
         }
 
@@ -701,9 +688,8 @@ async def generate_meta_advice(
         return advice, cost
     except Exception as e:
         # Fallback to simple formatted advice if LLM fails
-        fallback = f"(Meta-advice generation failed: {str(e)[:50]})\n\n"
-        fallback += f"Best score: {best_score:.1f}. "
-        fallback += f"Last 10 gens: {metrics.get('acceptances', 0)} accepted, {metrics.get('errors', 0)} errors."
+        fallback = f"(Lessons generation failed: {str(e)[:50]})\n\n"
+        fallback += f"Recent failures: {metrics.get('errors', 0)}."
         return fallback, 0.0
 
 
@@ -754,16 +740,16 @@ def main():
     n_workers = 8
     n_inspirations = 2  # Number of inspiration programs to use alongside parent
 
-    # Use custom behavior extractor with z-score normalization for static features
+    # Use custom behavior extractor with STRUCTURAL FEATURES ONLY (no scores)
+    # This prevents high-scoring solutions from clustering in behavioral space
     # Features: execution_time, loop_count, branch_count, math_operators,
-    #           workload_1_score, workload_2_score, workload_3_score
+    #           loop_nesting_max, early_exit_count, function_count
     extractor = TxnSchedulingBehaviorExtractor(max_time=200.0)
 
     # Single archive with deferred centroid initialization
     pool = CVTMAPElitesPool(
         behavior_extractor=extractor,
         n_centroids=50,  # 50 centroids for more diversity
-        subscore_keys=["execution_time"],
         defer_centroids=True,  # Build centroids from initial LLM generations
     )
 
@@ -804,16 +790,11 @@ def main():
     generation = 0
     total_cost = 0.0
 
-    # Create resilient process pool with worker recycling to prevent memory buildup
-    # Workers restart after 5 tasks, releasing accumulated memory back to OS
-    # ResilientProcessPool auto-recovers if workers crash (OOM, segfault, etc.)
-    executor = ResilientProcessPool(max_workers=n_workers, max_tasks_per_child=5)
+    executor = ResilientProcessPool(max_workers=n_workers)
 
     async def initialize_archive():
         """Generate diverse seeds with heavy model, then expand with light models."""
         nonlocal total_cost, best_score, best_program, best_makespan, seed_score
-
-        loop = asyncio.get_event_loop()
 
         # Phase 1: Generate 5 diverse seeds using heavy model (sequential, with context)
         n_diverse_seeds = 5
@@ -842,12 +823,10 @@ def main():
             new_code, validation_error = extract_and_validate_code(result["content"])
 
             if new_code:
-                # Quick eval to verify it works
                 try:
-                    eval_result = await loop.run_in_executor(executor.executor, evaluate_code_in_process, new_code)
-                except BrokenExecutor:
-                    executor._recreate_executor()
-                    eval_result = {"error": "Pool crashed, recreated"}
+                    eval_result = await executor.run(evaluate_code_in_process, new_code, timeout=300)
+                except (TimeoutError, RuntimeError) as e:
+                    eval_result = {"error": str(e)}
                 if "error" not in eval_result:
                     new_score = score_fn(eval_result)
                     diverse_seeds.append((new_code, new_score))
@@ -918,40 +897,25 @@ def main():
 
         print(f"[Init] Evaluating {len(candidates)} candidates...", flush=True)
 
-        # Evaluate with semaphore to ensure timeout starts when task actually runs
-        eval_map = {}
         completed = 0
-        semaphore = asyncio.Semaphore(n_workers)  # Match executor workers
 
         async def eval_candidate(idx, code):
             nonlocal completed
-            async with semaphore:  # Only start timeout when we acquire semaphore
-                start = time.time()
-                try:
-                    result = await asyncio.wait_for(
-                        loop.run_in_executor(executor.executor, evaluate_code_in_process, code),
-                        timeout=60  # 1 minute timeout for init phase
-                    )
-                    elapsed = time.time() - start
-                    completed += 1
-                    print(f"  [Init Eval] {completed}/{len(candidates)} Candidate {idx} done in {elapsed:.1f}s", flush=True)
-                    return idx, result
-                except asyncio.TimeoutError:
-                    completed += 1
-                    # Recreate executor to kill stuck worker (same issue as main eval loop)
-                    executor._recreate_executor()
-                    print(f"  [Init Eval] {completed}/{len(candidates)} Candidate {idx} TIMEOUT (pool recreated)", flush=True)
-                    return idx, {"error": "Timeout"}
-                except BrokenExecutor as e:
-                    # Pool crashed - recreate it and return error for this candidate
-                    executor._recreate_executor()
-                    completed += 1
-                    print(f"  [Init Eval] {completed}/{len(candidates)} Candidate {idx} POOL CRASHED (recreated)", flush=True)
-                    return idx, {"error": "Pool crashed, recreated"}
-                except Exception as e:
-                    completed += 1
-                    print(f"  [Init Eval] {completed}/{len(candidates)} Candidate {idx} ERROR: {e}", flush=True)
-                    return idx, {"error": str(e)}
+            start = time.time()
+            try:
+                result = await executor.run(evaluate_code_in_process, code, timeout=300)
+                elapsed = time.time() - start
+                completed += 1
+                print(f"  [Init Eval] {completed}/{len(candidates)} Candidate {idx} done in {elapsed:.1f}s", flush=True)
+                return idx, result
+            except TimeoutError:
+                completed += 1
+                print(f"  [Init Eval] {completed}/{len(candidates)} Candidate {idx} TIMEOUT", flush=True)
+                return idx, {"error": "Timeout"}
+            except Exception as e:
+                completed += 1
+                print(f"  [Init Eval] {completed}/{len(candidates)} Candidate {idx} ERROR: {e}", flush=True)
+                return idx, {"error": str(e)}
 
         eval_tasks = [eval_candidate(c["idx"], c["code"]) for c in candidates]
         eval_results = await asyncio.gather(*eval_tasks)
@@ -994,14 +958,12 @@ def main():
 
         print(f"[Init] Valid programs: {len(valid_programs)}/{len(candidates)} ({n_errors} eval failures)", flush=True)
 
-        # Add all diverse seeds (including original) to valid_programs
         print(f"[Init] Adding {len(diverse_seeds)} diverse seeds to candidates...", flush=True)
         for seed_code, seed_score in diverse_seeds:
             try:
-                seed_eval = await loop.run_in_executor(executor.executor, evaluate_code_in_process, seed_code)
-            except BrokenExecutor:
-                executor._recreate_executor()
-                seed_eval = {"error": "Pool crashed, recreated"}
+                seed_eval = await executor.run(evaluate_code_in_process, seed_code, timeout=300)
+            except (TimeoutError, RuntimeError) as e:
+                seed_eval = {"error": str(e)}
             if "error" not in seed_eval:
                 execution_time = seed_eval.get("wall_time", 60.0)
                 valid_programs.append({
@@ -1086,7 +1048,6 @@ def main():
         nonlocal generation, best_score, best_program, best_makespan, total_cost
 
         print(f"[Pipeline] Starting async evolution pipeline...", flush=True)
-        loop = asyncio.get_event_loop()
 
         # Configuration for 8-core machine
         # LLM: I/O bound (10-30s) - just need enough async tasks to keep eval fed
@@ -1122,7 +1083,6 @@ def main():
             'previous_meta_advice': '',
             'period_metrics': {
                 'total': 0,
-                'timeouts': 0,
                 'errors': 0,
                 'rejections': 0,
                 'acceptances': 0,
@@ -1131,7 +1091,6 @@ def main():
             },
             'llm_in_flight': 0,
             'eval_in_flight': 0,
-            'consecutive_timeouts': 0,  # Track for pool recreation
         }
 
         # Stop signal
@@ -1274,63 +1233,38 @@ def main():
                         pipeline_capacity.release()
 
         async def eval_dispatcher():
-            """
-            Single dispatcher that pulls from eval queue and spawns eval tasks.
-            Uses semaphore to limit concurrent process pool submissions to N_EVAL_PROCESSES.
-            """
-            eval_semaphore = asyncio.Semaphore(N_EVAL_PROCESSES)
-            pending_evals = set()  # Track in-flight eval tasks
+            pending_evals = set()
 
             async def run_eval(candidate):
-                """Run single evaluation with semaphore-limited concurrency."""
+                incremented = False
                 output = None
                 elapsed = 0
+                start = time.time()
                 try:
-                    async with eval_semaphore:
-                        async with state_lock:
-                            state['eval_in_flight'] += 1
+                    async with state_lock:
+                        state['eval_in_flight'] += 1
+                        incremented = True
 
-                        start = time.time()
-                        try:
-                            output = await asyncio.wait_for(
-                                loop.run_in_executor(executor.executor, evaluate_code_in_process, candidate["code"]),
-                                timeout=EVAL_TIMEOUT
-                            )
-                            elapsed = time.time() - start
-                        except asyncio.TimeoutError:
-                            output = {"error": f"Timeout after {EVAL_TIMEOUT}s"}
-                            elapsed = EVAL_TIMEOUT
-                            # Track consecutive timeouts and recreate pool if too many
-                            async with state_lock:
-                                state['consecutive_timeouts'] += 1
-                                if state['consecutive_timeouts'] >= 3:
-                                    print(f"  [Pool] {state['consecutive_timeouts']} consecutive timeouts - recreating executor to kill stuck workers", flush=True)
-                                    executor._recreate_executor()
-                                    state['consecutive_timeouts'] = 0
-                        except BrokenExecutor:
-                            executor._recreate_executor()
-                            output = {"error": "Pool crashed, recreated"}
-                            elapsed = time.time() - start
-                        except asyncio.CancelledError:
-                            output = {"error": "Evaluation cancelled"}
-                            elapsed = time.time() - start
-                            raise  # Re-raise to propagate cancellation
-                        except Exception as e:
-                            output = {"error": str(e)}
-                            elapsed = time.time() - start
-                        finally:
-                            # Always release pipeline slot and update state
-                            async with state_lock:
-                                state['eval_in_flight'] -= 1
-                            pipeline_capacity.release()
+                    try:
+                        output = await executor.run(evaluate_code_in_process, candidate["code"], timeout=EVAL_TIMEOUT)
+                        elapsed = time.time() - start
+                    except TimeoutError:
+                        output = {"error": f"Timeout after {EVAL_TIMEOUT}s"}
+                        elapsed = EVAL_TIMEOUT
+                    except asyncio.CancelledError:
+                        output = {"error": "Evaluation cancelled"}
+                        elapsed = time.time() - start
+                        raise
+                    except Exception as e:
+                        output = {"error": str(e)}
+                        elapsed = time.time() - start
 
-                        await result_queue.put({
-                            "candidate": candidate,
-                            "output": output,
-                            "elapsed": elapsed,
-                        })
+                    await result_queue.put({
+                        "candidate": candidate,
+                        "output": output,
+                        "elapsed": elapsed,
+                    })
                 except asyncio.CancelledError:
-                    # If cancelled, still try to push result if we have one
                     if output is not None:
                         try:
                             await asyncio.shield(result_queue.put({
@@ -1342,8 +1276,12 @@ def main():
                             pass
                     raise
                 except Exception as e:
-                    # Log unexpected errors that would otherwise be silently lost
                     print(f"[Eval] Unexpected error in run_eval: {e}", flush=True)
+                finally:
+                    if incremented:
+                        async with state_lock:
+                            state['eval_in_flight'] -= 1
+                    pipeline_capacity.release()
 
             while not stop_event.is_set() or not eval_queue.empty():
                 try:
@@ -1422,8 +1360,6 @@ def main():
                         wall_time = exec_time * 1000
 
                         async with state_lock:
-                            # Reset timeout counter on successful eval
-                            state['consecutive_timeouts'] = 0
                             if accepted:
                                 state['period_metrics']['acceptances'] += 1
                             else:
@@ -1446,12 +1382,9 @@ def main():
                         err = eval_result.error[:30] if eval_result.error else "unknown"
 
                         async with state_lock:
-                            if eval_result.error and "timeout" in eval_result.error.lower():
-                                state['period_metrics']['timeouts'] += 1
-                            else:
-                                state['period_metrics']['errors'] += 1
-                                if eval_result.error:
-                                    state['period_metrics']['error_messages'].add(eval_result.error[:100].strip())
+                            state['period_metrics']['errors'] += 1
+                            if eval_result.error:
+                                state['period_metrics']['error_messages'].add(eval_result.error[:100].strip())
 
                         print(f"[Eval #{eval_count:4d}] {display_name:20s} INVALID    | {err}...", flush=True)
 
@@ -1493,34 +1426,21 @@ def main():
                 generation = state['eval_count']
 
         async def generate_and_update_meta_advice(eval_count: int):
-            """Generate meta-advice asynchronously and update shared state."""
+            """Generate lessons from failures and update shared state."""
             try:
                 async with state_lock:
                     metrics_copy = dict(state['period_metrics'])
                     # Create independent copy of the set to avoid race conditions
                     metrics_copy['error_messages'] = set(state['period_metrics']['error_messages'])
                     prev_advice = state['previous_meta_advice']
-                    current_best = state['best_score']
                     current_cost = state['total_cost']
 
-                # Get top 1 solution from archive (reduced from 3 to save tokens)
-                top_solutions = []
-                try:
-                    elites = list(pool._elites.values())
-                    elites.sort(key=lambda e: e.result.primary_score, reverse=True)
-                    for elite in elites[:1]:
-                        top_solutions.append((elite.result.primary_score, elite.program.code))
-                except Exception:
-                    pass
-
                 progress_pct = (current_cost / BUDGET_USD) * 100
-                print(f"\n[Meta-Advice] Generating at eval #{eval_count} ({progress_pct:.0f}% budget)...", flush=True)
+                print(f"\n[Lessons] Generating at eval #{eval_count} ({progress_pct:.0f}% budget)...", flush=True)
 
                 advice, advice_cost = await generate_meta_advice(
                     metrics=metrics_copy,
                     previous_advice=prev_advice,
-                    best_score=current_best,
-                    top_solutions=top_solutions,
                     model=HEAVY_MODEL,
                     progress_pct=progress_pct,
                 )
@@ -1532,7 +1452,6 @@ def main():
                     # Reset period metrics
                     state['period_metrics'] = {
                         'total': 0,
-                        'timeouts': 0,
                         'errors': 0,
                         'rejections': 0,
                         'acceptances': 0,
@@ -1540,14 +1459,14 @@ def main():
                         'error_messages': set(),
                     }
 
-                print(f"[Meta-Advice] Updated (cost: ${advice_cost:.4f})", flush=True)
-                print(f"[Meta-Advice]\n{advice}\n", flush=True)
+                print(f"[Lessons] Updated (cost: ${advice_cost:.4f})", flush=True)
+                print(f"[Lessons]\n{advice}\n", flush=True)
             except asyncio.CancelledError:
-                print(f"[Meta-Advice] Cancelled at eval #{eval_count}", flush=True)
+                print(f"[Lessons] Cancelled at eval #{eval_count}", flush=True)
                 raise
             except Exception as e:
                 # Log unexpected errors that would otherwise be silently lost
-                print(f"[Meta-Advice] Unexpected error at eval #{eval_count}: {e}", flush=True)
+                print(f"[Lessons] Unexpected error at eval #{eval_count}: {e}", flush=True)
 
         async def status_monitor():
             """Periodically print pipeline status."""
@@ -1634,11 +1553,14 @@ def main():
             extra_info={"phase": "pipeline_complete"},
         )
 
-        executor.shutdown(wait=False)
+        executor.shutdown()
         print(f"[Pipeline] Complete. Total evals: {generation}", flush=True)
 
     async def main():
         await initialize_archive()
+        # Switch to evolution phase - no more noise on behavioral vectors
+        extractor.set_phase('evolution')
+        print("[Phase] Switching to evolution phase (no behavioral noise)", flush=True)
         await run_pipeline()
 
     asyncio.run(main())
