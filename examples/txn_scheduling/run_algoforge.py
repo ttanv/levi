@@ -104,10 +104,10 @@ config = AlgoforgeConfig(
         n_diverse_seeds=8,
         n_variants_per_seed=15,
         diversity_model="openrouter/z-ai/glm-4.7",
-        variant_model=LIGHT_MODELS[1],  # gemini-2.5-flash-lite
+        variant_model=LIGHT_MODELS[1],
     ),
     meta_advice=MetaAdviceConfig(interval=50, model=HEAVY_MODEL),
-    pipeline=PipelineConfig(n_llm_workers=4, n_eval_processes=4, n_inspirations=1),
+    pipeline=PipelineConfig(n_llm_workers=4, n_eval_processes=8, n_inspirations=1),
     output_dir=RUN_DIR,
 )
 

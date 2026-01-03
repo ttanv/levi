@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import random
 import re
 from typing import Optional
 
@@ -217,20 +218,31 @@ class Diversifier:
 
         logger.info(f"[Init Phase 2] Generating {n_variants} variants with {model}")
 
-        # Build prompts for all variants
+        # Build prompts for all variants with inspirations from other seeds
         prompts = []
+        n_inspirations = self.config.pipeline.n_inspirations
+
+        seed_programs = []
         for seed_code, seed_score in diverse_seeds:
-            seed_prog = Program(code=seed_code, metadata={"score": seed_score})
-            seed_eval = EvaluationResult(
-                program_id=seed_prog.id,
+            prog = Program(code=seed_code, metadata={"score": seed_score})
+            eval_res = EvaluationResult(
+                program_id=prog.id,
                 scores={'score': seed_score},
                 is_valid=True,
             )
+            seed_programs.append(ProgramWithScore(prog, eval_res))
+
+        for seed_idx, (seed_code, seed_score) in enumerate(diverse_seeds):
+            parent = seed_programs[seed_idx]
+            other_seeds = [sp for i, sp in enumerate(seed_programs) if i != seed_idx]
+
             for _ in range(n_variants_per_seed):
+                inspirations = random.sample(other_seeds, min(n_inspirations, len(other_seeds))) if other_seeds and n_inspirations > 0 else []
+
                 builder = PromptBuilder()
                 builder.add_section("Problem", self.config.problem_description, priority=10)
                 builder.add_section("Signature", f"```python\n{self.config.function_signature}\n```", priority=20)
-                builder.add_parents([ProgramWithScore(seed_prog, seed_eval)], priority=30)
+                builder.add_parents([parent] + inspirations, priority=30)
                 builder.set_output_mode(OutputMode.FULL)
                 prompts.append(builder.build())
 
