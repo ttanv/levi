@@ -44,8 +44,22 @@ from .behavior import BehaviorExtractor, FeatureVector
 # Configuration
 from ._config import configure, get_config, AlgoForgeConfig
 
+# New config types
+from .config import (
+    AlgoforgeConfig,
+    AlgoforgeResult,
+    BudgetConfig,
+    SamplerModelPair,
+    CVTConfig,
+    InitConfig,
+    MetaAdviceConfig,
+    BehaviorConfig,
+    CheckpointConfig,
+    PipelineConfig,
+)
+
 # Methods
-from .methods import alphaevolve
+from .methods import alphaevolve, run
 
 __version__ = "0.1.0"
 
@@ -98,6 +112,7 @@ __all__ = [
     'ProgramPool',
     'SampleResult',
     'SimplePool',
+    'CVTMAPElitesPool',
     # Evaluator
     'Evaluator',
     'EvaluationStage',
@@ -117,13 +132,25 @@ __all__ = [
     # Behavior
     'BehaviorExtractor',
     'FeatureVector',
-    # Config
+    # Legacy config
     'configure',
     'get_config',
     'AlgoForgeConfig',
-    # Methods (stubs)
-    'funsearch',
+    # New config types
+    'AlgoforgeConfig',
+    'AlgoforgeResult',
+    'BudgetConfig',
+    'SamplerModelPair',
+    'CVTConfig',
+    'InitConfig',
+    'MetaAdviceConfig',
+    'BehaviorConfig',
+    'CheckpointConfig',
+    'PipelineConfig',
+    # Methods
+    'run',
     'alphaevolve',
+    'funsearch',
     'gepa',
     'discover',
 ]

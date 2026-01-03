@@ -1,13 +1,11 @@
-"""
-BehaviorExtractor: Computes behavioral features from programs.
-
-Used by MAP-Elites style methods to characterize programs
-along dimensions other than fitness.
-"""
+"""BehaviorExtractor: Computes behavioral features from programs."""
 
 import ast
+import math
 from dataclasses import dataclass
 from typing import Callable, Optional
+
+import numpy as np
 
 from ..core import Program
 from .features import (
@@ -16,17 +14,16 @@ from .features import (
     compute_cyclomatic_complexity,
     compute_loop_count,
     compute_math_operators,
+    compute_branch_count,
+    compute_loop_nesting_max,
 )
 
 
 @dataclass
 class FeatureVector:
-    """Vector of behavioral features for a program."""
-
     values: dict[str, float]
 
     def to_array(self, feature_names: list[str]) -> list[float]:
-        """Convert to array in specified feature order."""
         return [self.values.get(name, 0.0) for name in feature_names]
 
     def __getitem__(self, key: str) -> float:
@@ -34,12 +31,7 @@ class FeatureVector:
 
 
 class BehaviorExtractor:
-    """
-    Computes behavioral features from programs.
-
-    Used by MAP-Elites style methods to characterize programs
-    along dimensions other than fitness.
-    """
+    """Computes behavioral features from programs with z-score normalization."""
 
     BUILT_IN_FEATURES: dict[str, Callable[[Program, ast.AST], float]] = {
         "code_length": compute_code_length,
@@ -47,36 +39,101 @@ class BehaviorExtractor:
         "cyclomatic_complexity": compute_cyclomatic_complexity,
         "loop_count": compute_loop_count,
         "math_operators": compute_math_operators,
+        "branch_count": compute_branch_count,
+        "loop_nesting_max": compute_loop_nesting_max,
     }
 
     def __init__(
         self,
+        ast_features: Optional[list[str]] = None,
+        score_keys: Optional[list[str]] = None,
+        init_noise: float = 0.15,
+        custom_extractors: Optional[dict[str, Callable[[Program, ast.AST], float]]] = None,
+        # Legacy parameter for backward compatibility
         features: Optional[list[str]] = None,
-        custom_extractors: Optional[dict[str, Callable[[Program, ast.AST], float]]] = None
     ) -> None:
-        """
-        Args:
-            features: List of feature names to extract (defaults to all built-in)
-            custom_extractors: Custom feature extractors {name: func}
-        """
-        self.features = features or list(self.BUILT_IN_FEATURES.keys())
+        # Handle legacy 'features' parameter
+        if features is not None and ast_features is None:
+            ast_features = features
+
+        self.ast_features = ast_features or ["loop_count", "branch_count", "math_operators", "loop_nesting_max"]
+        self.score_keys = score_keys or []
+        self.init_noise = init_noise
         self.extractors = {**self.BUILT_IN_FEATURES, **(custom_extractors or {})}
 
-    def extract(self, program: Program) -> FeatureVector:
+        # All features = AST features + score keys
+        self.features = self.ast_features + self.score_keys
+
+        # Phase control for noise
+        self._phase = 'init'
+
+        # Welford's online algorithm for z-score normalization
+        self._count: dict[str, int] = {f: 0 for f in self.features}
+        self._mean: dict[str, float] = {f: 0.0 for f in self.features}
+        self._M2: dict[str, float] = {f: 0.0 for f in self.features}
+
+    def set_phase(self, phase: str) -> None:
+        """Set extraction phase: 'init' adds noise, 'evolution' does not."""
+        self._phase = phase
+
+    def _update_stats(self, feature: str, value: float) -> None:
+        """Update running mean and variance using Welford's algorithm."""
+        self._count[feature] += 1
+        delta = value - self._mean[feature]
+        self._mean[feature] += delta / self._count[feature]
+        delta2 = value - self._mean[feature]
+        self._M2[feature] += delta * delta2
+
+    def _get_std(self, feature: str) -> float:
+        if self._count[feature] < 2:
+            return 1.0
+        variance = self._M2[feature] / (self._count[feature] - 1)
+        return max(math.sqrt(variance), 0.1)
+
+    def _zscore_to_01(self, z: float) -> float:
+        """Convert z-score to [0, 1] using sigmoid."""
+        z = max(-10, min(10, z))
+        return 1.0 / (1.0 + math.exp(-z))
+
+    def extract(self, program: Program, eval_result: Optional[dict] = None) -> FeatureVector:
         """Extract behavioral features from a program."""
         try:
             tree = ast.parse(program.code)
         except SyntaxError:
-            return FeatureVector({f: 0.0 for f in self.features})
+            return FeatureVector({f: 0.5 for f in self.features})
 
-        values = {}
-        for feature_name in self.features:
+        raw_values: dict[str, float] = {}
+
+        # Extract AST-based features
+        for feature_name in self.ast_features:
             if feature_name in self.extractors:
                 try:
-                    values[feature_name] = self.extractors[feature_name](program, tree)
+                    raw_values[feature_name] = self.extractors[feature_name](program, tree)
                 except Exception:
-                    values[feature_name] = 0.0
+                    raw_values[feature_name] = 0.0
             else:
-                values[feature_name] = 0.0
+                raw_values[feature_name] = 0.0
+
+        # Extract score-based features from eval result
+        if eval_result:
+            for key in self.score_keys:
+                raw_values[key] = float(eval_result.get(key, 0.0))
+        else:
+            for key in self.score_keys:
+                raw_values[key] = 0.0
+
+        # Apply z-score normalization with sigmoid
+        values: dict[str, float] = {}
+        for feature in self.features:
+            raw = raw_values.get(feature, 0.0)
+            self._update_stats(feature, raw)
+            z = (raw - self._mean[feature]) / self._get_std(feature)
+            values[feature] = self._zscore_to_01(z)
+
+        # Add noise during init phase
+        if self._phase == 'init' and self.init_noise > 0:
+            for feature in self.features:
+                noise = np.random.normal(0, self.init_noise)
+                values[feature] = float(np.clip(values[feature] + noise, 0.0, 1.0))
 
         return FeatureVector(values)

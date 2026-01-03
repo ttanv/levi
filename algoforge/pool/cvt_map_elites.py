@@ -130,9 +130,12 @@ class SoftmaxSampler(Sampler):
         cells = list(elites.keys())
         scores = [elites[c].result.primary_score for c in cells]
 
-        # Softmax weights
+        min_s = min(scores)
         max_s = max(scores)
-        exp_s = [math.exp((s - max_s) / self.temperature) for s in scores]
+        score_range = max_s - min_s if max_s > min_s else 1.0
+        normalized = [(s - min_s) / score_range for s in scores]  # [0, 1]
+
+        exp_s = [math.exp((ns - 1.0) / self.temperature) for ns in normalized]
         total = sum(exp_s)
         weights = [e / total for e in exp_s]
 
@@ -213,6 +216,13 @@ class SubscoreSampler(Sampler):
         return selected
 
 
+@dataclass
+class SamplerModelConfig:
+    sampler_name: str
+    model: str
+    weight: float = 1.0
+
+
 class CVTMAPElitesPool:
     """
     CVT-MAP-Elites Pool with Multi-Strategy Sampling.
@@ -264,6 +274,10 @@ class CVTMAPElitesPool:
             for key in subscore_keys:
                 sampler = SubscoreSampler(key, key)
                 self._samplers[f"subscore_{key}"] = sampler
+
+        # Sampler-model pairs for weighted selection
+        self._sampler_model_pairs: list[SamplerModelConfig] = []
+        self._total_weight: float = 0.0
 
     def _init_cvt_centroids(self) -> np.ndarray:
         """Initialize CVT centroids using k-means++ in normalized space."""
@@ -477,6 +491,39 @@ class CVTMAPElitesPool:
         """Get sampler by name."""
         return self._samplers[name]
 
+    def register_sampler_model_pair(
+        self, sampler_name: str, model: str, weight: float = 1.0, temperature: Optional[float] = None
+    ) -> None:
+        if weight <= 0:
+            raise ValueError("Weight must be positive")
+
+        actual_sampler_name = sampler_name
+
+        # For softmax with custom temperature, create a new sampler instance
+        if sampler_name == "softmax" and temperature is not None:
+            actual_sampler_name = f"softmax_T{temperature}"
+            if actual_sampler_name not in self._samplers:
+                self._samplers[actual_sampler_name] = SoftmaxSampler(temperature=temperature)
+        elif sampler_name not in self._samplers:
+            raise ValueError(f"Unknown sampler: {sampler_name}. Available: {list(self._samplers.keys())}")
+
+        self._sampler_model_pairs.append(SamplerModelConfig(actual_sampler_name, model, weight))
+        self._total_weight += weight
+
+    def get_weighted_sampler_config(self) -> tuple[str, str]:
+        if not self._sampler_model_pairs:
+            raise ValueError("No sampler-model pairs registered. Call register_sampler_model_pair() first.")
+
+        r = random.random() * self._total_weight
+        cumulative = 0.0
+        for pair in self._sampler_model_pairs:
+            cumulative += pair.weight
+            if r <= cumulative:
+                return pair.sampler_name, pair.model
+
+        last = self._sampler_model_pairs[-1]
+        return last.sampler_name, last.model
+
     def best(self, metric: str = "score") -> Program:
         """Return best program in archive."""
         if not self._elites:
@@ -508,3 +555,64 @@ class CVTMAPElitesPool:
                 for i, f in enumerate(self._feature_names)
             }
         return stats
+
+    def get_archive_snapshot(self) -> dict:
+        """
+        Get a JSON-serializable snapshot of the entire archive state.
+
+        Returns a dict containing:
+        - metadata: archive stats and configuration
+        - elites: list of all elite programs with their scores and behaviors
+        - sampler_stats: per-sampler statistics
+        """
+        elites_data = []
+        for cell_idx, elite in self._elites.items():
+            elite_data = {
+                "cell_index": cell_idx,
+                "program_id": str(elite.program.id),
+                "code": elite.program.code,
+                "scores": elite.result.scores,
+                "primary_score": elite.result.primary_score,
+                "behavior": elite.behavior.values,
+                "metadata": elite.program.metadata,
+                "parents": [str(p) for p in elite.program.parents] if elite.program.parents else [],
+                "created_at": elite.program.created_at.isoformat() if elite.program.created_at else None,
+            }
+            elites_data.append(elite_data)
+
+        # Sort by primary score descending
+        elites_data.sort(key=lambda x: x["primary_score"], reverse=True)
+
+        sampler_stats = {}
+        for name, sampler in self._samplers.items():
+            stats = sampler.get_stats_summary()
+            # Add per-cell stats
+            cell_stats = {}
+            for cell, cs in sampler.cell_stats.items():
+                cell_stats[str(cell)] = {
+                    "n_samples": cs.n_samples,
+                    "n_successes": cs.n_successes,
+                    "success_rate": cs.success_rate(),
+                }
+            stats["cell_stats"] = cell_stats
+            sampler_stats[name] = stats
+
+        snapshot = {
+            "metadata": {
+                "archive_size": self.size(),
+                "n_centroids": self._n_centroids,
+                "best_score": self._best_score,
+                "generation": self._generation,
+                "feature_names": self._feature_names,
+            },
+            "elites": elites_data,
+            "sampler_stats": sampler_stats,
+        }
+
+        if self._mins is not None:
+            snapshot["metadata"]["learned_bounds"] = {
+                f: {"min": float(self._mins[i]), "max": float(self._maxs[i])}
+                for i, f in enumerate(self._feature_names)
+            }
+
+        return snapshot

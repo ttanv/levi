@@ -51,3 +51,22 @@ def compute_math_operators(program: Program, tree: ast.AST) -> float:
             count += _count(child)
         return count
     return float(_count(tree))
+
+
+def compute_branch_count(program: Program, tree: ast.AST) -> float:
+    """Count of if/elif/else branches."""
+    count = sum(1 for node in ast.walk(tree) if isinstance(node, ast.If))
+    return float(count)
+
+
+def compute_loop_nesting_max(program: Program, tree: ast.AST) -> float:
+    """Maximum depth of nested loops."""
+    def _depth(node: ast.AST, current: int) -> int:
+        max_depth = current
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.For, ast.While)):
+                max_depth = max(max_depth, _depth(child, current + 1))
+            else:
+                max_depth = max(max_depth, _depth(child, current))
+        return max_depth
+    return float(_depth(tree, 0))
