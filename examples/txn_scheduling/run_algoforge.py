@@ -29,6 +29,14 @@ litellm.register_model({
         "output_cost_per_token": 0.00000027,
         "litellm_provider": "openrouter",
     },
+    "openrouter/z-ai/glm-4.7": {
+        "max_tokens": 32768,
+        "max_input_tokens": 202752,
+        "max_output_tokens": 32768,
+        "input_cost_per_token": 0.0000004,
+        "output_cost_per_token": 0.0000015,
+        "litellm_provider": "openrouter",
+    },
 })
 
 from txn_simulator import Workload
@@ -93,9 +101,9 @@ config = AlgoforgeConfig(
     ],
     cvt=CVTConfig(n_centroids=50, defer_centroids=True),
     init=InitConfig(
-        n_diverse_seeds=5,
-        n_variants_per_seed=25,
-        diversity_model=HEAVY_MODEL,
+        n_diverse_seeds=8,
+        n_variants_per_seed=15,
+        diversity_model="openrouter/z-ai/glm-4.7",
         variant_model=LIGHT_MODELS[1],  # gemini-2.5-flash-lite
     ),
     meta_advice=MetaAdviceConfig(interval=50, model=HEAVY_MODEL),

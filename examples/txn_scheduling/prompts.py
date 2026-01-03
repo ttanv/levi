@@ -24,11 +24,6 @@ A workload object with:
 - `workload.txns[i]` - Transaction i as list of (op_type, key, pos, txn_len)
 - `workload.get_opt_seq_cost(seq)` - Compute makespan for ordering
 
-## CRITICAL CONSTRAINTS
-- Runtime MUST be O(n) where n is the number of transactions
-- Do not sort transactions
-- Once scheduled, a transaction should NOT be moved
-
 ## Evaluation
 Your function is called on 3 workloads. Total makespan is summed.
 
@@ -53,7 +48,7 @@ def get_best_schedule(workload, num_seqs: int) -> tuple[int, list[int]]:
 SEED_PROGRAM = '''import random
 
 def get_best_schedule(workload, num_seqs):
-    """Get optimal schedule using greedy cost sampling strategy."""
+    """Get optimal schedule using cost sampling strategy."""
     random.seed(42)
 
     start_txn = random.randint(0, workload.num_txns - 1)
@@ -106,11 +101,6 @@ A workload object with:
 - `workload.num_txns` - Number of transactions (n)
 - `workload.txns[i]` - Transaction i as list of (op_type, key, pos, txn_len)
 - `workload.get_opt_seq_cost(seq)` - Compute makespan for ordering
-
-## CRITICAL CONSTRAINTS
-- Runtime MUST be O(n)
-- Do not sort transactions
-- Once scheduled, a transaction should NOT be moved
 
 ## Function Signature
 ```python
