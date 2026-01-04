@@ -27,6 +27,7 @@ class Elite:
     program: Program
     result: EvaluationResult
     behavior: FeatureVector
+    raw_behavior: Optional[dict] = None  # Raw feature values for cross-island migration
 
 
 @dataclass
@@ -432,20 +433,62 @@ class CVTMAPElitesPool:
             return False
 
         behavior = self._extractor.extract(program)
+        raw_behavior = behavior.values.copy()  # Store for cross-island migration
         cell_index = self._find_nearest_centroid(behavior)
         new_score = evaluation_result.primary_score
 
         if cell_index not in self._elites:
-            self._elites[cell_index] = Elite(program, evaluation_result, behavior)
+            self._elites[cell_index] = Elite(program, evaluation_result, behavior, raw_behavior)
             self._best_score = max(self._best_score, new_score)
             return True
 
         if new_score > self._elites[cell_index].result.primary_score:
-            self._elites[cell_index] = Elite(program, evaluation_result, behavior)
+            self._elites[cell_index] = Elite(program, evaluation_result, behavior, raw_behavior)
             self._best_score = max(self._best_score, new_score)
             return True
 
         return False
+
+    def add_with_raw_behavior(
+        self,
+        program: Program,
+        evaluation_result: EvaluationResult,
+        raw_behavior: dict[str, float],
+    ) -> bool:
+        """
+        Add a migrant program using raw behavior values for re-normalization.
+
+        Used for cross-island migration where the source island has different
+        adaptive bounds. The raw_behavior contains pre-normalized feature values
+        that will be re-normalized using this island's bounds.
+        """
+        if not evaluation_result.is_valid:
+            return False
+
+        # Create FeatureVector from raw behavior
+        behavior = FeatureVector(raw_behavior.copy())
+        cell_index = self._find_nearest_centroid(behavior)
+        new_score = evaluation_result.primary_score
+
+        if cell_index not in self._elites:
+            self._elites[cell_index] = Elite(program, evaluation_result, behavior, raw_behavior.copy())
+            self._best_score = max(self._best_score, new_score)
+            return True
+
+        if new_score > self._elites[cell_index].result.primary_score:
+            self._elites[cell_index] = Elite(program, evaluation_result, behavior, raw_behavior.copy())
+            self._best_score = max(self._best_score, new_score)
+            return True
+
+        return False
+
+    def get_elites(self) -> dict[int, Elite]:
+        """Get all elites in the archive."""
+        return self._elites
+
+    def get_elite(self, cell_index: int) -> Optional[Elite]:
+        """Get elite at a specific cell index."""
+        return self._elites.get(cell_index)
 
     def sample(
         self,
