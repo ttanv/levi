@@ -95,7 +95,7 @@ HEAVY_MODEL = "openrouter/deepseek/deepseek-v3.2"
 N_ISLANDS = 4
 MIGRATION_INTERVAL = 100  # Per-island eval count before migration
 MIGRANTS_PER_EVENT = 5    # Random elites to migrate
-BUDGET_USD = 15.0         # 5x single-island budget for 5 islands
+BUDGET_USD = 5.0          # 5x single-island budget for 5 islands
 
 RUN_DIR = f"runs/islands_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
