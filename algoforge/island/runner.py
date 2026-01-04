@@ -30,6 +30,7 @@ from ..behavior import BehaviorExtractor
 from ..llm import PromptBuilder, ProgramWithScore, OutputMode
 from ..utils import ResilientProcessPool
 from ..pipeline.state import PipelineState
+from ..pipeline.consumer import _generate_meta_advice
 from .coordinator import IslandCoordinator
 from .diversifier import IslandDiversifier
 
@@ -317,6 +318,11 @@ class IslandPipelineRunner:
                     logger.info(
                         f"[Eval #{self.state.eval_count}] Island {island_idx} ERROR: {result['error'][:50]}"
                     )
+
+            # Generate meta-advice periodically to reduce errors
+            if (self.config.meta_advice.enabled and
+                self.state.should_generate_meta_advice(self.config.meta_advice.interval)):
+                asyncio.create_task(_generate_meta_advice(self.config, self.state))
 
             if self.output_dir and self.state.eval_count % 10 == 0:
                 try:

@@ -49,7 +49,7 @@ litellm.register_model({
 from txn_simulator import Workload
 from workloads import WORKLOAD_1, WORKLOAD_2, WORKLOAD_3
 from prompts import PROBLEM_DESCRIPTION, FUNCTION_SIGNATURE, SEED_PROGRAM
-from algoforge import AlgoforgeConfig, BudgetConfig, SamplerModelPair, InitConfig, PipelineConfig, CVTConfig
+from algoforge import AlgoforgeConfig, BudgetConfig, SamplerModelPair, InitConfig, PipelineConfig, CVTConfig, MetaAdviceConfig
 from algoforge.island import run_islands
 
 # --- Problem Setup ---
@@ -92,7 +92,7 @@ LIGHT_MODELS = [
 HEAVY_MODEL = "openrouter/deepseek/deepseek-v3.2"
 
 # --- Island Config ---
-N_ISLANDS = 4
+N_ISLANDS = 3
 MIGRATION_INTERVAL = 100  # Per-island eval count before migration
 MIGRANTS_PER_EVENT = 5    # Random elites to migrate
 BUDGET_USD = 5.0          # 5x single-island budget for 5 islands
@@ -117,10 +117,11 @@ config = AlgoforgeConfig(
     cvt=CVTConfig(n_centroids=50, defer_centroids=True),
     init=InitConfig(
         n_diverse_seeds=N_ISLANDS,  # One diverse seed per island
-        n_variants_per_seed=20,
+        n_variants_per_seed=30,
         diversity_model="openrouter/z-ai/glm-4.7",
         variant_model=LIGHT_MODELS[1],
     ),
+    meta_advice=MetaAdviceConfig(enabled=True, interval=50, model=HEAVY_MODEL),
     pipeline=PipelineConfig(n_llm_workers=4, n_eval_processes=8, n_inspirations=1),
     output_dir=RUN_DIR,
 )
