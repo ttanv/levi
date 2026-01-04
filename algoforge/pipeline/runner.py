@@ -31,6 +31,7 @@ class PipelineRunner:
         self.archive_lock = asyncio.Lock()
         self.code_queue = asyncio.Queue()
         self.state = PipelineState(config.budget)
+        self.state.best_score_so_far = pool.get_stats().get("best_score", float('-inf'))
         self.stop_event = asyncio.Event()
 
         # Snapshot output directory
