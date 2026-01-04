@@ -12,6 +12,18 @@ from typing import Optional, Callable
 
 import litellm
 
+
+def _setup_logging() -> None:
+    """Configure logging for island runner."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        datefmt="%H:%M:%S",
+    )
+    logging.getLogger("LiteLLM").setLevel(logging.ERROR)
+    logging.getLogger("litellm").setLevel(logging.ERROR)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+
 from ..config import AlgoforgeConfig, AlgoforgeResult, BudgetConfig
 from ..core import Program, EvaluationResult
 from ..behavior import BehaviorExtractor
@@ -406,6 +418,7 @@ async def run_islands_async(
 
     This is the async entry point for island evolution.
     """
+    _setup_logging()
     logger.info(f"[Islands] Starting with {n_islands} islands")
     logger.info(f"[Islands] Migration interval: {migration_interval}, migrants: {migrants_per_event}")
 
