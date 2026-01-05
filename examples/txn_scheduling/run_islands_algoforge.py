@@ -129,7 +129,7 @@ config = AlgoforgeConfig(
         variant_model=LIGHT_MODELS[1],
     ),
     meta_advice=MetaAdviceConfig(enabled=True, interval=50, model=HEAVY_MODEL),
-    pipeline=PipelineConfig(n_llm_workers=4, n_eval_processes=8, n_inspirations=1),
+    pipeline=PipelineConfig(n_llm_workers=12, n_eval_processes=12, n_inspirations=1),
     output_dir=RUN_DIR,
 )
 
