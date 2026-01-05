@@ -116,7 +116,7 @@ config = AlgoforgeConfig(
     init=InitConfig(
         n_diverse_seeds=N_ISLANDS,  # One diverse seed per island
         n_variants_per_seed=30,
-        diversity_model="openrouter/z-ai/glm-4.7",
+        diversity_model=HEAVY_MODEL,
         variant_model=LIGHT_MODELS[1],
     ),
     meta_advice=MetaAdviceConfig(enabled=True, interval=50, model=HEAVY_MODEL),
