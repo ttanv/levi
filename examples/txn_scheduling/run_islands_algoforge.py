@@ -100,8 +100,9 @@ LIGHT_MODELS = [
 HEAVY_MODEL = "openrouter/deepseek/deepseek-v3.2"
 
 # --- Island Config ---
-N_ISLANDS = 3
+N_ISLANDS = 4
 CULLING_CHECKPOINTS = [0.25, 0.50, 0.75]  # Cull bottom half of islands at these budget %
+MIGRATION_INTERVAL = 999999999  # Effectively disable migration (set to 100 to enable)
 BUDGET_USD = 5.0
 
 RUN_DIR = f"runs/islands_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
@@ -134,7 +135,7 @@ config = AlgoforgeConfig(
 
 # --- Run ---
 if __name__ == "__main__":
-    print(f"Islands: {N_ISLANDS} | Budget: ${BUDGET_USD} | Culling at: {CULLING_CHECKPOINTS}")
+    print(f"Islands: {N_ISLANDS} | Budget: ${BUDGET_USD} | Culling at: {CULLING_CHECKPOINTS} | Migration: disabled")
     print(f"Baseline: {BASELINE} | Target: {EFFECTIVE_OPTIMAL:.0f}")
     print(f"Output: {RUN_DIR}/snapshot.json\n")
 
@@ -142,6 +143,7 @@ if __name__ == "__main__":
         config,
         n_islands=N_ISLANDS,
         culling_checkpoints=CULLING_CHECKPOINTS,
+        migration_interval=MIGRATION_INTERVAL,
     )
 
     print(f"\nBest: {result.best_score:.1f} pts | Evals: {result.total_evaluations} | Cost: ${result.total_cost:.4f}")

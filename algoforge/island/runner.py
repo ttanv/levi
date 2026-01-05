@@ -444,6 +444,7 @@ async def run_islands_async(
     n_islands: int = 5,
     culling_checkpoints: Optional[list[float]] = None,
     n_seed_elites: int = 1,
+    migration_interval: Optional[int] = None,
 ) -> AlgoforgeResult:
     """
     Run island-based evolution with periodic culling.
@@ -454,6 +455,8 @@ async def run_islands_async(
         culling_checkpoints: Budget fractions at which to cull bottom half of islands
                             (default: [0.25, 0.50, 0.75])
         n_seed_elites: Number of top elites to seed into culled islands
+        migration_interval: Evals per island before migration triggers (default: 100).
+                           Set to a very large number to disable migration.
 
     This is the async entry point for island evolution.
     """
@@ -470,11 +473,15 @@ async def run_islands_async(
         init_noise=config.behavior.init_noise,
     )
 
-    coordinator = IslandCoordinator(
-        n_islands=n_islands,
-        behavior_extractor=extractor,
-        n_centroids=config.cvt.n_centroids,
-    )
+    coordinator_kwargs = {
+        "n_islands": n_islands,
+        "behavior_extractor": extractor,
+        "n_centroids": config.cvt.n_centroids,
+    }
+    if migration_interval is not None:
+        coordinator_kwargs["migration_interval"] = migration_interval
+
+    coordinator = IslandCoordinator(**coordinator_kwargs)
 
     for island in coordinator.islands:
         for pair in config.sampler_model_pairs:
@@ -534,6 +541,7 @@ def run_islands(
     n_islands: int = 5,
     culling_checkpoints: Optional[list[float]] = None,
     n_seed_elites: int = 1,
+    migration_interval: Optional[int] = None,
 ) -> AlgoforgeResult:
     """
     Run island-based evolution with periodic culling.
@@ -545,4 +553,5 @@ def run_islands(
         n_islands=n_islands,
         culling_checkpoints=culling_checkpoints,
         n_seed_elites=n_seed_elites,
+        migration_interval=migration_interval,
     ))
