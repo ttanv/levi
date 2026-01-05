@@ -48,21 +48,39 @@ def get_best_schedule(workload, num_seqs: int) -> tuple[int, list[int]]:
 SEED_PROGRAM = '''import random
 
 def get_best_schedule(workload, num_seqs):
-    """Find a good transaction schedule by trying random permutations."""
-    n = workload.num_txns
+    """Get optimal schedule using greedy cost sampling strategy."""
+    random.seed(42)
 
-    best_schedule = list(range(n))
-    best_cost = workload.get_opt_seq_cost(best_schedule)
+    start_txn = random.randint(0, workload.num_txns - 1)
+    txn_seq = [start_txn]
+    remaining_txns = list(range(workload.num_txns))
+    remaining_txns.remove(start_txn)
 
-    for _ in range(num_seqs):
-        schedule = list(range(n))
-        random.shuffle(schedule)
-        cost = workload.get_opt_seq_cost(schedule)
-        if cost < best_cost:
-            best_cost = cost
-            best_schedule = schedule
+    for _ in range(workload.num_txns - 1):
+        min_cost = float('inf')
+        min_txn = -1
+        holdout_txns = []
 
-    return best_cost, best_schedule
+        num_samples = min(10, len(remaining_txns))
+        for _ in range(num_samples):
+            if not remaining_txns:
+                break
+            idx = random.randint(0, len(remaining_txns) - 1)
+            t = remaining_txns[idx]
+            holdout_txns.append(remaining_txns.pop(idx))
+
+            test_seq = txn_seq + [t]
+            cost = workload.get_opt_seq_cost(test_seq)
+            if cost < min_cost:
+                min_cost = cost
+                min_txn = t
+
+        if min_txn != -1:
+            txn_seq.append(min_txn)
+            holdout_txns.remove(min_txn)
+        remaining_txns.extend(holdout_txns)
+
+    return workload.get_opt_seq_cost(txn_seq), txn_seq
 '''
 
 SEED_INSPIRATIONS = []
