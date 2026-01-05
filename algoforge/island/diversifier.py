@@ -194,7 +194,8 @@ class IslandDiversifier:
                         f"(pool: {len(pool)})"
                     )
                 else:
-                    logger.warning(f"  [Candidate {i+1}] Failed: {result['error'][:50]}")
+                    logger.warning(f"  [Candidate {i+1}] Failed: {result['error']}")
+                    logger.warning(f"  [Candidate {i+1}] Code:\n{new_code}")
 
             except Exception as e:
                 logger.warning(f"  [Candidate {i+1}] Error: {e}")
