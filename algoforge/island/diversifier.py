@@ -26,10 +26,7 @@ from .coordinator import IslandCoordinator
 logger = logging.getLogger(__name__)
 
 
-ISLAND_SEED_PROMPT = """# {problem_title}
-
-## Problem
-{problem_description}
+ISLAND_SEED_PROMPT = """{problem_description}
 
 ## Function Signature
 ```python
@@ -155,7 +152,6 @@ class IslandDiversifier:
             ])
 
             prompt = ISLAND_SEED_PROMPT.format(
-                problem_title="Algorithm Optimization",
                 problem_description=self.config.problem_description,
                 function_signature=self.config.function_signature,
                 existing_seeds=existing_seeds_text,
