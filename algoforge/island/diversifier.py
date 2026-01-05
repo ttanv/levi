@@ -57,6 +57,9 @@ The goal is to explore different regions of the algorithm design space. A popula
 ## Existing Seeds (analyze their algorithms, then do something DIFFERENT):
 {existing_seeds}
 
+## Common Mistake
+If using functools.reduce, the signature is `reduce(function, iterable)` - function FIRST.
+
 ## Output
 Output ONLY the complete Python code in a ```python block.
 """
