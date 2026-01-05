@@ -67,6 +67,17 @@ class PipelineState:
     def elapsed_seconds(self) -> float:
         return time.time() - self.start_time
 
+    @property
+    def budget_progress(self) -> float:
+        """Return progress as fraction (0 to 1) based on primary budget type."""
+        if self.budget.dollars is not None:
+            return min(1.0, self.total_cost / self.budget.dollars)
+        if self.budget.evaluations is not None:
+            return min(1.0, self.eval_count / self.budget.evaluations)
+        if self.budget.seconds is not None:
+            return min(1.0, self.elapsed_seconds / self.budget.seconds)
+        return 0.0
+
     def add_cost(self, cost: float) -> None:
         self.total_cost += cost
 

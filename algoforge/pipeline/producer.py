@@ -60,7 +60,8 @@ async def llm_producer(
             async with archive_lock:
                 sampler_name, model = pool.get_weighted_sampler_config()
                 n_parents = config.pipeline.n_parents + config.pipeline.n_inspirations
-                sample = pool.sample(sampler_name, n_parents=n_parents)
+                context = {"budget_progress": state.budget_progress}
+                sample = pool.sample(sampler_name, n_parents=n_parents, context=context)
 
             parent = sample.parent
             inspirations = [p for p in sample.inspirations if random.random() < 0.8]

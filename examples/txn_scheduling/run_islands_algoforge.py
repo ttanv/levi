@@ -93,9 +93,8 @@ HEAVY_MODEL = "openrouter/deepseek/deepseek-v3.2"
 
 # --- Island Config ---
 N_ISLANDS = 3
-MIGRATION_INTERVAL = 100  # Per-island eval count before migration
-MIGRANTS_PER_EVENT = 5    # Random elites to migrate
-BUDGET_USD = 5.0          # 5x single-island budget for 5 islands
+CULLING_CHECKPOINTS = [0.25, 0.50, 0.75]  # Cull bottom half of islands at these budget %
+BUDGET_USD = 5.0
 
 RUN_DIR = f"runs/islands_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
@@ -108,13 +107,12 @@ config = AlgoforgeConfig(
     score_fn=score_fn,
     budget=BudgetConfig(dollars=BUDGET_USD),
     sampler_model_pairs=[
-        SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[0], weight=1.0, temperature=0.7),
-        SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[1], weight=1.0, temperature=0.7),
-        SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[2], weight=1.0, temperature=0.7),
-        SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[0], weight=1.0, temperature=1.2),
-        SamplerModelPair(sampler="softmax", model=HEAVY_MODEL, weight=1.0, temperature=0.3),
+        SamplerModelPair(sampler="cyclic_annealing", model=LIGHT_MODELS[0], weight=1.0),
+        SamplerModelPair(sampler="cyclic_annealing", model=LIGHT_MODELS[1], weight=1.0),
+        SamplerModelPair(sampler="cyclic_annealing", model=LIGHT_MODELS[2], weight=1.0),
+        SamplerModelPair(sampler="cyclic_annealing", model=HEAVY_MODEL, weight=1.0),
     ],
-    cvt=CVTConfig(n_centroids=50, defer_centroids=True),
+    cvt=CVTConfig(n_centroids=20, defer_centroids=True),
     init=InitConfig(
         n_diverse_seeds=N_ISLANDS,  # One diverse seed per island
         n_variants_per_seed=30,
@@ -128,15 +126,14 @@ config = AlgoforgeConfig(
 
 # --- Run ---
 if __name__ == "__main__":
-    print(f"Islands: {N_ISLANDS} | Budget: ${BUDGET_USD} | Migration every {MIGRATION_INTERVAL} evals")
+    print(f"Islands: {N_ISLANDS} | Budget: ${BUDGET_USD} | Culling at: {CULLING_CHECKPOINTS}")
     print(f"Baseline: {BASELINE} | Target: {EFFECTIVE_OPTIMAL:.0f}")
     print(f"Output: {RUN_DIR}/snapshot.json\n")
 
     result = run_islands(
         config,
         n_islands=N_ISLANDS,
-        migration_interval=MIGRATION_INTERVAL,
-        migrants_per_event=MIGRANTS_PER_EVENT,
+        culling_checkpoints=CULLING_CHECKPOINTS,
     )
 
     print(f"\nBest: {result.best_score:.1f} pts | Evals: {result.total_evaluations} | Cost: ${result.total_cost:.4f}")

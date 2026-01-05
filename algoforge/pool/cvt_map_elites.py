@@ -78,7 +78,9 @@ class Sampler(ABC):
         stats.total_reward += reward
 
     @abstractmethod
-    def select_cells(self, elites: dict[int, Elite], n: int) -> list[int]:
+    def select_cells(
+        self, elites: dict[int, Elite], n: int, context: Optional[dict] = None
+    ) -> list[int]:
         """Select n cells from the archive."""
         pass
 
@@ -101,7 +103,9 @@ class UCBSampler(Sampler):
         self.c = c
         self._total_samples = 0
 
-    def select_cells(self, elites: dict[int, Elite], n: int) -> list[int]:
+    def select_cells(
+        self, elites: dict[int, Elite], n: int, context: Optional[dict] = None
+    ) -> list[int]:
         if not elites:
             return []
         self._total_samples += 1
@@ -125,7 +129,9 @@ class SoftmaxSampler(Sampler):
         super().__init__("softmax", "heavy")
         self.temperature = temperature
 
-    def select_cells(self, elites: dict[int, Elite], n: int) -> list[int]:
+    def select_cells(
+        self, elites: dict[int, Elite], n: int, context: Optional[dict] = None
+    ) -> list[int]:
         if not elites:
             return []
         cells = list(elites.keys())
@@ -161,13 +167,93 @@ class SoftmaxSampler(Sampler):
         return selected
 
 
+class CyclicAnnealingSampler(Sampler):
+    """
+    Cyclic annealing sampler with budget-based temperature schedule.
+
+    Temperature cycles from T_max to T_min multiple times during the run:
+        T = T_min + (T_max - T_min) * (1 - cycle_progress)
+    where cycle_progress = (budget_progress * n_cycles) mod 1
+
+    This provides periodic exploration/exploitation phases:
+    - High temperature: more uniform sampling (exploration)
+    - Low temperature: favor high-scoring cells (exploitation)
+    """
+
+    def __init__(self, t_max: float = 1.2, t_min: float = 0.15, n_cycles: int = 4):
+        super().__init__("cyclic_annealing", "heavy")
+        self.t_max = t_max
+        self.t_min = t_min
+        self.n_cycles = n_cycles
+        self._last_temperature: float = t_max
+
+    def _compute_temperature(self, budget_progress: float) -> float:
+        """Compute temperature based on budget progress (0 to 1)."""
+        cycle_progress = (budget_progress * self.n_cycles) % 1.0
+        temperature = self.t_min + (self.t_max - self.t_min) * (1.0 - cycle_progress)
+        self._last_temperature = temperature
+        return temperature
+
+    def select_cells(
+        self, elites: dict[int, Elite], n: int, context: Optional[dict] = None
+    ) -> list[int]:
+        if not elites:
+            return []
+
+        # Get budget progress from context, default to 0 (start of run)
+        budget_progress = 0.0
+        if context and "budget_progress" in context:
+            budget_progress = context["budget_progress"]
+
+        temperature = self._compute_temperature(budget_progress)
+
+        cells = list(elites.keys())
+        scores = [elites[c].result.primary_score for c in cells]
+
+        min_s = min(scores)
+        max_s = max(scores)
+        score_range = max_s - min_s if max_s > min_s else 1.0
+        normalized = [(s - min_s) / score_range for s in scores]  # [0, 1]
+
+        exp_s = [math.exp((ns - 1.0) / temperature) for ns in normalized]
+        total = sum(exp_s)
+        weights = [e / total for e in exp_s]
+
+        # Weighted sampling without replacement
+        selected = []
+        remaining_cells = cells.copy()
+        remaining_weights = weights.copy()
+
+        for _ in range(min(n, len(cells))):
+            if not remaining_cells:
+                break
+            w_sum = sum(remaining_weights)
+            if w_sum == 0:
+                break
+            probs = [w / w_sum for w in remaining_weights]
+            idx = np.random.choice(len(remaining_cells), p=probs)
+            selected.append(remaining_cells[idx])
+            remaining_cells.pop(idx)
+            remaining_weights.pop(idx)
+
+        return selected
+
+    def get_stats_summary(self) -> dict:
+        stats = super().get_stats_summary()
+        stats["last_temperature"] = self._last_temperature
+        stats["t_max"] = self.t_max
+        stats["t_min"] = self.t_min
+        stats["n_cycles"] = self.n_cycles
+        return stats
+
+
 class UniformSampler(Sampler):
     """Uniform random sampling for pure exploration."""
 
     def __init__(self):
         super().__init__("uniform", "light")
 
-    def select_cells(self, elites: dict[int, Elite], n: int) -> list[int]:
+    def select_cells(self, elites: dict[int, Elite], n: int, context: Optional[dict] = None) -> list[int]:
         if not elites:
             return []
         cells = list(elites.keys())
@@ -183,7 +269,9 @@ class SubscoreSampler(Sampler):
         self.display_name = display_name
         self.temperature = temperature
 
-    def select_cells(self, elites: dict[int, Elite], n: int) -> list[int]:
+    def select_cells(
+        self, elites: dict[int, Elite], n: int, context: Optional[dict] = None
+    ) -> list[int]:
         if not elites:
             return []
 
@@ -268,6 +356,7 @@ class CVTMAPElitesPool:
             "ucb": UCBSampler(c=2.0),
             "softmax": SoftmaxSampler(temperature=temperature),
             "uniform": UniformSampler(),
+            "cyclic_annealing": CyclicAnnealingSampler(),
         }
 
         # Add per-subscore samplers
@@ -505,7 +594,7 @@ class CVTMAPElitesPool:
         if not self._elites:
             raise ValueError("Archive is empty")
 
-        cells = sampler.select_cells(self._elites, n_parents)
+        cells = sampler.select_cells(self._elites, n_parents, context)
 
         if not cells:
             # Fallback to uniform if sampler returns nothing
@@ -577,6 +666,33 @@ class CVTMAPElitesPool:
 
     def size(self) -> int:
         return len(self._elites)
+
+    def clear(self) -> int:
+        """
+        Clear all elites from the archive.
+
+        Returns the number of elites removed.
+        """
+        n_removed = len(self._elites)
+        self._elites.clear()
+        self._best_score = float('-inf')
+        return n_removed
+
+    def get_top_elites(self, n: int) -> list[Elite]:
+        """
+        Get top n elites by score.
+
+        Returns list of Elite objects sorted by score descending.
+        """
+        if not self._elites:
+            return []
+
+        sorted_elites = sorted(
+            self._elites.values(),
+            key=lambda e: e.result.primary_score,
+            reverse=True
+        )
+        return sorted_elites[:n]
 
     def on_generation_complete(self) -> None:
         self._generation += 1

@@ -127,35 +127,28 @@ class IslandDiversifier:
         base_seed: str,
         base_result: dict,
         n_islands: int,
+        pool_multiplier: int = 3,
     ) -> list[tuple[str, dict]]:
         """
-        Generate n_islands diverse seeds using sequential divergence.
+        Generate a pool of diverse seeds and select the best n_islands.
 
-        Args:
-            base_seed: The initial seed program
-            base_result: Evaluation result of base seed
-            n_islands: Number of islands (seeds to generate)
-
-        Returns:
-            List of (code, result) tuples, one per island.
-            Island 0 gets base_seed, others get divergent seeds.
+        Creates n_islands * pool_multiplier candidates, then picks top by score.
         """
         fn_name = extract_fn_name(self.config.function_signature)
         model = self.config.init.diversity_model or "gpt-4"
-        base_score = base_result.get('score', 0.0)
+        n_candidates = n_islands * pool_multiplier
 
         logger.info(
-            f"[IslandDiversifier] Generating {n_islands} diverse seeds with {model}"
+            f"[IslandDiversifier] Generating {n_candidates} candidates, "
+            f"selecting best {n_islands} with {model}"
         )
 
-        # Island 0 always gets the base seed
-        seeds: list[tuple[str, dict]] = [(base_seed, base_result)]
+        pool: list[tuple[str, dict]] = [(base_seed, base_result)]
 
-        # Generate divergent seeds for remaining islands
-        for i in range(1, n_islands):
+        for i in range(n_candidates - 1):
             existing_seeds_text = "\n\n---\n\n".join([
                 f"### Seed {j+1} (Score: {result.get('score', 0.0):.1f}):\n```python\n{code}\n```"
-                for j, (code, result) in enumerate(seeds)
+                for j, (code, result) in enumerate(pool)
             ])
 
             prompt = ISLAND_SEED_PROMPT.format(
@@ -179,8 +172,7 @@ class IslandDiversifier:
 
                 new_code = extract_code(content)
                 if not new_code:
-                    logger.warning(f"  [Island {i}] Failed to extract code, using base seed")
-                    seeds.append((base_seed, base_result))
+                    logger.warning(f"  [Candidate {i+1}] Failed to extract code")
                     continue
 
                 result = await self.executor.run(
@@ -193,27 +185,28 @@ class IslandDiversifier:
                 )
 
                 if "error" not in result:
-                    seeds.append((new_code, result))
+                    pool.append((new_code, result))
                     logger.info(
-                        f"  [Island {i}] Generated diverse seed - "
-                        f"score: {result.get('score', 0.0):.1f}"
+                        f"  [Candidate {i+1}] score: {result.get('score', 0.0):.1f} "
+                        f"(pool: {len(pool)})"
                     )
                 else:
-                    logger.warning(
-                        f"  [Island {i}] Eval failed: {result['error'][:50]}, "
-                        "using base seed"
-                    )
-                    seeds.append((base_seed, base_result))
+                    logger.warning(f"  [Candidate {i+1}] Failed: {result['error'][:50]}")
 
             except Exception as e:
-                logger.warning(f"  [Island {i}] Error: {e}, using base seed")
-                seeds.append((base_seed, base_result))
+                logger.warning(f"  [Candidate {i+1}] Error: {e}")
+
+        pool.sort(key=lambda x: x[1].get('score', 0.0), reverse=True)
+        selected = pool[:n_islands]
 
         logger.info(
-            f"[IslandDiversifier] Generated {len(seeds)} seeds, "
+            f"[IslandDiversifier] Selected {len(selected)}/{len(pool)} seeds, "
             f"cost: ${self.total_cost:.3f}"
         )
-        return seeds
+        for i, (_, result) in enumerate(selected):
+            logger.info(f"  Island {i}: score {result.get('score', 0.0):.1f}")
+
+        return selected
 
     async def initialize_island(
         self,

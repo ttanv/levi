@@ -272,3 +272,77 @@ class IslandCoordinator:
     def get_total_archive_size(self) -> int:
         """Get total number of elites across all islands."""
         return sum(island.pool.size() for island in self.islands)
+
+    def perform_culling(self, n_seed_elites: int = 10) -> dict:
+        """
+        Cull bottom half of islands and reseed from top half.
+
+        Ranks islands by best score, clears the bottom half, then seeds
+        each cleared island with top elites from a different top-half island.
+
+        Args:
+            n_seed_elites: Number of top elites to seed into each cleared island
+
+        Returns:
+            Dict with culling statistics
+        """
+        if self.n_islands < 2:
+            return {"culled": 0, "seeded": 0}
+
+        # Rank islands by best score
+        ranked = sorted(
+            self.islands,
+            key=lambda i: i.best_score,
+            reverse=True
+        )
+
+        n_top = (self.n_islands + 1) // 2  # Ceiling division for odd counts
+        top_islands = ranked[:n_top]
+        bottom_islands = ranked[n_top:]
+
+        if not bottom_islands:
+            return {"culled": 0, "seeded": 0}
+
+        logger.info(
+            f"[Culling] Top islands: {[i.index for i in top_islands]} | "
+            f"Bottom islands: {[i.index for i in bottom_islands]}"
+        )
+
+        # Clear bottom islands
+        total_cleared = 0
+        for island in bottom_islands:
+            n_cleared = island.pool.clear()
+            total_cleared += n_cleared
+            island.eval_count = 0
+            island.acceptance_count = 0
+            logger.info(f"[Culling] Cleared island {island.index}: {n_cleared} elites removed")
+
+        # Seed each bottom island from a different top island (round-robin)
+        total_seeded = 0
+        for i, bottom_island in enumerate(bottom_islands):
+            source_island = top_islands[i % len(top_islands)]
+            top_elites = source_island.pool.get_top_elites(n_seed_elites)
+
+            seeded = 0
+            for elite in top_elites:
+                if elite.raw_behavior is not None:
+                    if bottom_island.pool.add_with_raw_behavior(
+                        elite.program,
+                        elite.result,
+                        elite.raw_behavior,
+                    ):
+                        seeded += 1
+
+            total_seeded += seeded
+            logger.info(
+                f"[Culling] Seeded island {bottom_island.index} from island "
+                f"{source_island.index}: {seeded}/{len(top_elites)} elites"
+            )
+
+        return {
+            "culled": len(bottom_islands),
+            "cleared_elites": total_cleared,
+            "seeded_elites": total_seeded,
+            "top_islands": [i.index for i in top_islands],
+            "bottom_islands": [i.index for i in bottom_islands],
+        }

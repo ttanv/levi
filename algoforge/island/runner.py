@@ -92,6 +92,8 @@ class IslandPipelineRunner:
         coordinator: IslandCoordinator,
         executor: ResilientProcessPool,
         output_dir: Optional[str] = None,
+        culling_checkpoints: Optional[list[float]] = None,
+        n_seed_elites: int = 1,
     ):
         self.config = config
         self.coordinator = coordinator
@@ -100,6 +102,11 @@ class IslandPipelineRunner:
         self.code_queue = asyncio.Queue()
         self.state = PipelineState(config.budget)
         self.stop_event = asyncio.Event()
+
+        # Culling configuration
+        self.culling_checkpoints = culling_checkpoints or [0.25, 0.50, 0.75]
+        self.n_seed_elites = n_seed_elites
+        self._completed_culling_checkpoints: set[float] = set()
 
         self.output_dir: Optional[Path] = None
         if output_dir:
@@ -179,7 +186,8 @@ class IslandPipelineRunner:
                 async with self.archive_lock:
                     sampler_name, model = island.pool.get_weighted_sampler_config()
                     n_parents = self.config.pipeline.n_parents + self.config.pipeline.n_inspirations
-                    sample = island.pool.sample(sampler_name, n_parents=n_parents)
+                    context = {"budget_progress": self.state.budget_progress}
+                    sample = island.pool.sample(sampler_name, n_parents=n_parents, context=context)
 
                 parent = sample.parent
                 inspirations = [p for p in sample.inspirations if random.random() < 0.8]
@@ -324,6 +332,9 @@ class IslandPipelineRunner:
                 self.state.should_generate_meta_advice(self.config.meta_advice.interval)):
                 asyncio.create_task(_generate_meta_advice(self.config, self.state))
 
+            # Check for culling checkpoints
+            self._check_culling()
+
             if self.output_dir and self.state.eval_count % 10 == 0:
                 try:
                     self._save_snapshot()
@@ -333,6 +344,23 @@ class IslandPipelineRunner:
     async def _wait_for_completion(self) -> None:
         while not self.state.budget_exhausted:
             await asyncio.sleep(1.0)
+
+    def _check_culling(self) -> None:
+        """Check if we've hit a culling checkpoint and perform culling if so."""
+        progress = self.state.budget_progress
+
+        for checkpoint in self.culling_checkpoints:
+            if checkpoint in self._completed_culling_checkpoints:
+                continue
+            if progress >= checkpoint:
+                logger.info(f"[Culling] Reached {checkpoint*100:.0f}% budget checkpoint")
+                result = self.coordinator.perform_culling(n_seed_elites=self.n_seed_elites)
+                self._completed_culling_checkpoints.add(checkpoint)
+                logger.info(
+                    f"[Culling] Complete: culled {result['culled']} islands, "
+                    f"cleared {result.get('cleared_elites', 0)} elites, "
+                    f"seeded {result.get('seeded_elites', 0)} elites"
+                )
 
     async def _status_monitor(self) -> None:
         while not self.stop_event.is_set():
@@ -416,17 +444,27 @@ class IslandPipelineRunner:
 async def run_islands_async(
     config: AlgoforgeConfig,
     n_islands: int = 5,
-    migration_interval: int = 100,
-    migrants_per_event: int = 5,
+    culling_checkpoints: Optional[list[float]] = None,
+    n_seed_elites: int = 1,
 ) -> AlgoforgeResult:
     """
-    Run island-based evolution.
+    Run island-based evolution with periodic culling.
+
+    Args:
+        config: AlgoForge configuration
+        n_islands: Number of islands to run
+        culling_checkpoints: Budget fractions at which to cull bottom half of islands
+                            (default: [0.25, 0.50, 0.75])
+        n_seed_elites: Number of top elites to seed into culled islands
 
     This is the async entry point for island evolution.
     """
     _setup_logging()
+    if culling_checkpoints is None:
+        culling_checkpoints = [0.25, 0.50, 0.75]
+
     logger.info(f"[Islands] Starting with {n_islands} islands")
-    logger.info(f"[Islands] Migration interval: {migration_interval}, migrants: {migrants_per_event}")
+    logger.info(f"[Islands] Culling at: {[f'{c*100:.0f}%' for c in culling_checkpoints]}")
 
     extractor = BehaviorExtractor(
         ast_features=config.behavior.ast_features,
@@ -438,8 +476,6 @@ async def run_islands_async(
         n_islands=n_islands,
         behavior_extractor=extractor,
         n_centroids=config.cvt.n_centroids,
-        migration_interval=migration_interval,
-        migrants_per_event=migrants_per_event,
     )
 
     for island in coordinator.islands:
@@ -480,7 +516,12 @@ async def run_islands_async(
             raise RuntimeError("Island mode requires init.enabled=True")
 
         runner = IslandPipelineRunner(
-            config, coordinator, executor, output_dir=config.output_dir
+            config,
+            coordinator,
+            executor,
+            output_dir=config.output_dir,
+            culling_checkpoints=culling_checkpoints,
+            n_seed_elites=n_seed_elites,
         )
         runner.state.total_cost = init_cost if config.init.enabled else 0.0
 
@@ -493,17 +534,17 @@ async def run_islands_async(
 def run_islands(
     config: AlgoforgeConfig,
     n_islands: int = 5,
-    migration_interval: int = 100,
-    migrants_per_event: int = 5,
+    culling_checkpoints: Optional[list[float]] = None,
+    n_seed_elites: int = 1,
 ) -> AlgoforgeResult:
     """
-    Run island-based evolution.
+    Run island-based evolution with periodic culling.
 
     Synchronous entry point that handles async internally.
     """
     return asyncio.run(run_islands_async(
         config,
         n_islands=n_islands,
-        migration_interval=migration_interval,
-        migrants_per_event=migrants_per_event,
+        culling_checkpoints=culling_checkpoints,
+        n_seed_elites=n_seed_elites,
     ))
