@@ -44,6 +44,14 @@ litellm.register_model({
         "output_cost_per_token": 0.0000015,
         "litellm_provider": "openrouter",
     },
+    "openrouter/google/gemini-2.5-pro-preview-05-06": {
+        "max_tokens": 65536,
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 65536,
+        "input_cost_per_token": 0.00000125,
+        "output_cost_per_token": 0.00001,
+        "litellm_provider": "openrouter",
+    },
 })
 
 from txn_simulator import Workload
@@ -116,7 +124,7 @@ config = AlgoforgeConfig(
     init=InitConfig(
         n_diverse_seeds=N_ISLANDS,  # One diverse seed per island
         n_variants_per_seed=30,
-        diversity_model=HEAVY_MODEL,
+        diversity_model="openrouter/google/gemini-2.5-pro-preview-05-06",
         variant_model=LIGHT_MODELS[1],
     ),
     meta_advice=MetaAdviceConfig(enabled=True, interval=50, model=HEAVY_MODEL),
