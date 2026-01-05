@@ -5,6 +5,7 @@ import json
 import logging
 import random
 import re
+import types
 from datetime import datetime
 from itertools import cycle
 from pathlib import Path
@@ -54,7 +55,7 @@ def _extract_code(response: str) -> Optional[str]:
 
 
 def _extract_fn_name(fn_signature: str) -> str:
-    match = re.match(r'def\s+(\w+)\s*\(', fn_signature)
+    match = re.search(r'def\s+(\w+)\s*\(', fn_signature)
     if match:
         return match.group(1)
     return 'solve'
@@ -63,17 +64,14 @@ def _extract_fn_name(fn_signature: str) -> str:
 def _evaluate_code(code: str, score_fn, inputs: list, fn_name: str) -> dict:
     """Runs in subprocess: parse code, extract callable, call score_fn."""
     namespace = {}
-    exec(code, namespace)
+    try:
+        exec(code, namespace)
+    except SyntaxError as e:
+        return {"error": f"Syntax error: {e}"}
 
     fn = namespace.get(fn_name)
-    if fn is None:
-        for name, obj in namespace.items():
-            if callable(obj) and not name.startswith('_'):
-                fn = obj
-                break
-
-    if fn is None:
-        return {"error": f"Function '{fn_name}' not found in generated code"}
+    if not isinstance(fn, types.FunctionType):
+        return {"error": f"Function '{fn_name}' not found (got {type(fn).__name__})"}
 
     return score_fn(fn, inputs)
 

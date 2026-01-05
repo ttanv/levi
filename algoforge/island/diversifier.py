@@ -10,6 +10,7 @@ import asyncio
 import logging
 import random
 import re
+import types
 from typing import Optional
 
 import litellm
@@ -33,32 +34,16 @@ ISLAND_SEED_PROMPT = """{problem_description}
 {function_signature}
 ```
 
-## Your Task: ALGORITHMIC DIVERSITY
+## Your Task
+Design a solution using a DIFFERENT algorithmic approach than the existing seeds.
 
-You MUST design a solution using a **FUNDAMENTALLY DIFFERENT ALGORITHM** than the existing seeds.
-
-**DO NOT:**
-- Make minor variations or parameter tweaks to existing approaches
-- Use the same core algorithm with different constants
-- Reorder or refactor existing logic
-
-**DO:**
-- Analyze what algorithmic paradigm each existing seed uses
-- Identify what aspects of the problem they exploit (or ignore)
-- Design from first principles using a completely different strategy
-- Think about what information in the problem they are NOT using
-- Consider entirely different ways to model or decompose the problem
-
-The goal is to explore different regions of the algorithm design space. A population of diverse algorithms will outperform a population of similar ones.
-
-## Existing Seeds (analyze their algorithms, then do something DIFFERENT):
+## Existing Seeds:
 {existing_seeds}
 
-## Common Mistake
-If using functools.reduce, the signature is `reduce(function, iterable)` - function FIRST.
-
-## Output
-Output ONLY the complete Python code in a ```python block.
+## Output Rules
+- Output ONLY a ```python code block
+- All imports MUST be at the very top of the code
+- The function MUST have a return statement
 """
 
 
@@ -79,7 +64,7 @@ def extract_code(response: str) -> Optional[str]:
 
 
 def extract_fn_name(fn_signature: str) -> str:
-    match = re.match(r'def\s+(\w+)\s*\(', fn_signature)
+    match = re.search(r'def\s+(\w+)\s*\(', fn_signature)
     if match:
         return match.group(1)
     return 'solve'
@@ -88,17 +73,14 @@ def extract_fn_name(fn_signature: str) -> str:
 def _evaluate_code(code: str, score_fn, inputs: list, fn_name: str) -> dict:
     """Runs in subprocess: parse code, extract callable, call score_fn."""
     namespace = {}
-    exec(code, namespace)
+    try:
+        exec(code, namespace)
+    except SyntaxError as e:
+        return {"error": f"Syntax error: {e}"}
 
     fn = namespace.get(fn_name)
-    if fn is None:
-        for name, obj in namespace.items():
-            if callable(obj) and not name.startswith('_'):
-                fn = obj
-                break
-
-    if fn is None:
-        return {"error": f"Function '{fn_name}' not found in generated code"}
+    if not isinstance(fn, types.FunctionType):
+        return {"error": f"Function '{fn_name}' not found (got {type(fn).__name__})"}
 
     return score_fn(fn, inputs)
 
@@ -190,8 +172,7 @@ class IslandDiversifier:
                         f"(pool: {len(pool)})"
                     )
                 else:
-                    logger.warning(f"  [Candidate {i+1}] Failed: {result['error']}")
-                    logger.warning(f"  [Candidate {i+1}] Code:\n{new_code}")
+                    logger.warning(f"  [Candidate {i+1}] Failed: {result['error'][:80]}")
 
             except Exception as e:
                 logger.warning(f"  [Candidate {i+1}] Error: {e}")
