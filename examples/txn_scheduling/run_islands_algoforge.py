@@ -101,9 +101,9 @@ HEAVY_MODEL = "openrouter/deepseek/deepseek-v3.2"
 
 # --- Island Config ---
 N_ISLANDS = 4
-CULLING_CHECKPOINTS = [0.25, 0.50, 0.75]  # Cull bottom half of islands at these budget %
+CULLING_CHECKPOINTS = [x/10 for x in range (2,10, 2)]  # Cull bottom half of islands at these budget %
 MIGRATION_INTERVAL = 999999999  # Effectively disable migration (set to 100 to enable)
-BUDGET_USD = 5.0
+BUDGET_USD = 10.0
 
 RUN_DIR = f"runs/islands_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
