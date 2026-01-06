@@ -59,7 +59,7 @@ LIGHT_MODELS = [
 HEAVY_MODEL = "openrouter/deepseek/deepseek-v3.2"
 
 # --- Island Config ---
-N_ISLANDS = 4
+N_ISLANDS = 3
 CULLING_CHECKPOINTS = [0.5]  # Cull at 50% budget
 MIGRATION_INTERVAL = 999999999  # Effectively disable migration
 BUDGET_USD = 3.0
@@ -80,9 +80,9 @@ config = AlgoforgeConfig(
         SamplerModelPair(sampler="cyclic_annealing", model=LIGHT_MODELS[2], weight=1.0),
         SamplerModelPair(sampler="cyclic_annealing", model=HEAVY_MODEL, weight=1.0),
     ],
-    cvt=CVTConfig(n_centroids=15, defer_centroids=True),
+    cvt=CVTConfig(n_centroids=20, defer_centroids=True),
     init=InitConfig(
-        n_diverse_seeds=8,  # Generate 8 seeds, best 4 become islands
+        n_diverse_seeds=8,  
         n_variants_per_seed=30,
         diversity_model="openrouter/deepseek/deepseek-v3.2",
         variant_model=LIGHT_MODELS[1],
