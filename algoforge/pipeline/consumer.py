@@ -3,6 +3,7 @@
 import asyncio
 import re
 import logging
+import types
 from typing import Callable, Optional
 
 from ..config import AlgoforgeConfig
@@ -53,29 +54,23 @@ Keep it SHORT and DIRECT:
 
 
 def extract_fn_name(fn_signature: str) -> str:
-    match = re.match(r'def\s+(\w+)\s*\(', fn_signature)
+    match = re.search(r'def\s+(\w+)\s*\(', fn_signature)
     if match:
         return match.group(1)
-    for name in ['solve', 'main', 'solution', 'get_best_schedule', 'get_random_costs']:
-        if name in fn_signature:
-            return name
     return 'solve'
 
 
 def _evaluate_code(code: str, score_fn: Callable, inputs: list, fn_name: str) -> dict:
     """Runs in subprocess: parse code, extract callable, call score_fn."""
     namespace = {}
-    exec(code, namespace)
+    try:
+        exec(code, namespace)
+    except SyntaxError as e:
+        return {"error": f"Syntax error: {e}"}
 
     fn = namespace.get(fn_name)
-    if fn is None:
-        for name, obj in namespace.items():
-            if callable(obj) and not name.startswith('_'):
-                fn = obj
-                break
-
-    if fn is None:
-        return {"error": f"Function '{fn_name}' not found in generated code"}
+    if not isinstance(fn, types.FunctionType):
+        return {"error": f"Function '{fn_name}' not found (got {type(fn).__name__})"}
 
     return score_fn(fn, inputs)
 
