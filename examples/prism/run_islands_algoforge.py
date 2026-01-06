@@ -138,11 +138,11 @@ config = AlgoforgeConfig(
     init=InitConfig(
         n_diverse_seeds=8,  # Generate 8 seeds, best 4 become islands
         n_variants_per_seed=30,
-        diversity_model="openrouter/google/gemini-2.5-pro",
+        diversity_model="openrouter/deepseek/deepseek-v3.2",
         variant_model=LIGHT_MODELS[1],
     ),
     meta_advice=MetaAdviceConfig(enabled=True, interval=50, model=HEAVY_MODEL),
-    pipeline=PipelineConfig(n_llm_workers=12, n_eval_processes=12, n_inspirations=1),
+    pipeline=PipelineConfig(n_llm_workers=8, n_eval_processes=8, n_inspirations=1),
     output_dir=RUN_DIR,
 )
 
