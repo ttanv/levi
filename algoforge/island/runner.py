@@ -530,7 +530,19 @@ async def run_islands_async(
         )
         runner.state.total_cost = init_cost if config.init.enabled else 0.0
 
-        return await runner.run()
+        result = await runner.run()
+
+        logger.info(f"[Islands] Complete - best score: {result.best_score:.1f}, "
+                    f"evals: {result.total_evaluations}, cost: ${result.total_cost:.3f}, "
+                    f"archive: {result.archive_size}")
+        if config.output_dir:
+            logger.info(f"[Islands] Snapshot: {config.output_dir}/snapshot.json")
+        code_preview = result.best_program[:500]
+        if len(result.best_program) > 500:
+            code_preview += "..."
+        logger.info(f"[Islands] Best program:\n{code_preview}")
+
+        return result
 
     finally:
         executor.shutdown()

@@ -1,6 +1,13 @@
 """
-Prompts for Transaction Scheduling evolution.
+Transaction Scheduling Problem Definition.
+
+Contains problem description, prompts, scoring function, and test inputs.
 """
+
+from txn_simulator import Workload
+from workloads import WORKLOAD_1, WORKLOAD_2, WORKLOAD_3
+
+# --- Prompts ---
 
 PROBLEM_DESCRIPTION = """
 # Transaction Scheduling Optimization
@@ -166,3 +173,36 @@ Keep it SHORT and DIRECT:
 {metrics_data}
 
 Provide your lessons (150-200 words max):"""
+
+# --- Test Inputs ---
+
+INPUTS = [Workload(WORKLOAD_1), Workload(WORKLOAD_2), Workload(WORKLOAD_3)]
+
+# Scoring reference points: sequential ordering = 0 pts, theoretical optimal = 100 pts
+BASELINE = sum(w.get_opt_seq_cost(list(range(w.num_txns))) for w in INPUTS)
+OPTIMAL = sum(max(txn[0][3] for txn in w.txns) for w in INPUTS)
+EFFECTIVE_OPTIMAL = OPTIMAL + 0.10 * (BASELINE - OPTIMAL)  # Shifted to make 100 achievable
+
+
+# --- Score Function ---
+
+def score_fn(get_best_schedule, inputs):
+    """Evaluate scheduling algorithm: returns 0-100 score based on total makespan."""
+    try:
+        total = 0
+        for w in inputs:
+            _, schedule = get_best_schedule(w, 10)
+            if set(schedule) != set(range(w.num_txns)):
+                return {"error": "Invalid schedule: not a permutation"}
+            total += w.get_opt_seq_cost(schedule)
+
+        if total >= BASELINE:
+            score = 0.0
+        elif total <= EFFECTIVE_OPTIMAL:
+            score = 100.0
+        else:
+            score = ((BASELINE - total) / (BASELINE - EFFECTIVE_OPTIMAL)) * 100
+
+        return {"score": score, "makespan": total}
+    except Exception as e:
+        return {"error": str(e)}

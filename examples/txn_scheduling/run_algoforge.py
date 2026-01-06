@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Test AlgoForge on Transaction Scheduling Problem."""
+"""Run AlgoForge on Transaction Scheduling Problem."""
 
 from datetime import datetime
 
@@ -39,41 +39,8 @@ litellm.register_model({
     },
 })
 
-from txn_simulator import Workload
-from workloads import WORKLOAD_1, WORKLOAD_2, WORKLOAD_3
-from prompts import PROBLEM_DESCRIPTION, FUNCTION_SIGNATURE, SEED_PROGRAM
+from problem import PROBLEM_DESCRIPTION, FUNCTION_SIGNATURE, SEED_PROGRAM, INPUTS, score_fn
 from algoforge import run, AlgoforgeConfig, BudgetConfig, SamplerModelPair, InitConfig, MetaAdviceConfig, PipelineConfig, CVTConfig
-
-# --- Problem Setup ---
-WORKLOADS = [Workload(WORKLOAD_1), Workload(WORKLOAD_2), Workload(WORKLOAD_3)]
-
-# Scoring reference points: sequential ordering = 0 pts, theoretical optimal = 100 pts
-BASELINE = sum(w.get_opt_seq_cost(list(range(w.num_txns))) for w in WORKLOADS)
-OPTIMAL = sum(max(txn[0][3] for txn in w.txns) for w in WORKLOADS)
-EFFECTIVE_OPTIMAL = OPTIMAL + 0.10 * (BASELINE - OPTIMAL)  # Shifted to make 100 achievable
-
-
-def score_fn(get_best_schedule, inputs):
-    """Evaluate scheduling algorithm: returns 0-100 score based on total makespan."""
-    try:
-        total = 0
-        for w in inputs:
-            _, schedule = get_best_schedule(w, 10)
-            if set(schedule) != set(range(w.num_txns)):
-                return {"error": "Invalid schedule: not a permutation"}
-            total += w.get_opt_seq_cost(schedule)
-
-        if total >= BASELINE:
-            score = 0.0
-        elif total <= EFFECTIVE_OPTIMAL:
-            score = 100.0
-        else:
-            score = ((BASELINE - total) / (BASELINE - EFFECTIVE_OPTIMAL)) * 100
-
-        return {"score": score, "makespan": total}
-    except Exception as e:
-        return {"error": str(e)}
-
 
 # --- Config ---
 LIGHT_MODELS = [
@@ -89,7 +56,7 @@ config = AlgoforgeConfig(
     problem_description=PROBLEM_DESCRIPTION,
     function_signature=FUNCTION_SIGNATURE,
     seed_program=SEED_PROGRAM,
-    inputs=WORKLOADS,
+    inputs=INPUTS,
     score_fn=score_fn,
     budget=BudgetConfig(dollars=3.0),
     sampler_model_pairs=[
@@ -113,9 +80,4 @@ config = AlgoforgeConfig(
 
 # --- Run ---
 if __name__ == "__main__":
-    print(f"Budget: ${config.budget.dollars} | Baseline: {BASELINE} | Target: {EFFECTIVE_OPTIMAL:.0f}")
-    print(f"Output: {RUN_DIR}/snapshot.json\n")
-    result = run(config)
-    print(f"\nBest: {result.best_score:.1f} pts | Evals: {result.total_evaluations} | Cost: ${result.total_cost:.4f}")
-    print(f"Snapshot: {RUN_DIR}/snapshot.json")
-    print(f"\n{result.best_program[:800]}{'...' if len(result.best_program) > 800 else ''}")
+    run(config)

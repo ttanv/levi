@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run AlgoForge on PRISM (ML Model Placement) Problem."""
+"""Run AlgoForge on LLM SQL (CSV Column Reordering) Problem."""
 
 from datetime import datetime
 
@@ -11,14 +11,6 @@ litellm.register_model({
         "max_output_tokens": 32768,
         "input_cost_per_token": 0.0000001,
         "output_cost_per_token": 0.0000004,
-        "litellm_provider": "openrouter",
-    },
-    "openrouter/google/gemini-2.5-pro": {
-        "max_tokens": 65536,
-        "max_input_tokens": 1048576,
-        "max_output_tokens": 65536,
-        "input_cost_per_token": 0.00000125,
-        "output_cost_per_token": 0.000010,
         "litellm_provider": "openrouter",
     },
     "openrouter/deepseek/deepseek-v3.2": {
@@ -35,6 +27,14 @@ litellm.register_model({
         "max_output_tokens": 32768,
         "input_cost_per_token": 0.00000007,
         "output_cost_per_token": 0.00000027,
+        "litellm_provider": "openrouter",
+    },
+    "openrouter/z-ai/glm-4.7": {
+        "max_tokens": 32768,
+        "max_input_tokens": 202752,
+        "max_output_tokens": 32768,
+        "input_cost_per_token": 0.0000004,
+        "output_cost_per_token": 0.0000015,
         "litellm_provider": "openrouter",
     },
 })
@@ -71,13 +71,13 @@ config = AlgoforgeConfig(
     ],
     cvt=CVTConfig(n_centroids=50, defer_centroids=True),
     init=InitConfig(
-        n_diverse_seeds=6,
-        n_variants_per_seed=20,
-        diversity_model=HEAVY_MODEL,
+        n_diverse_seeds=8,
+        n_variants_per_seed=15,
+        diversity_model="openrouter/z-ai/glm-4.7",
         variant_model=LIGHT_MODELS[1],
     ),
     meta_advice=MetaAdviceConfig(interval=50, model=HEAVY_MODEL),
-    pipeline=PipelineConfig(n_llm_workers=12, n_eval_processes=12, n_inspirations=1),
+    pipeline=PipelineConfig(n_llm_workers=4, n_eval_processes=8, n_inspirations=1),
     output_dir=RUN_DIR,
 )
 
