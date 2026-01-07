@@ -13,6 +13,14 @@ litellm.register_model({
         "output_cost_per_token": 0.0000004,
         "litellm_provider": "openrouter",
     },
+    "openrouter/google/gemini-2.5-pro": {
+        "max_tokens": 65536,
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 65536,
+        "input_cost_per_token": 0.00000125,
+        "output_cost_per_token": 0.000010,
+        "litellm_provider": "openrouter",
+    },
     "openrouter/deepseek/deepseek-v3.2": {
         "max_tokens": 163840,
         "max_input_tokens": 163840,
@@ -29,20 +37,12 @@ litellm.register_model({
         "output_cost_per_token": 0.00000027,
         "litellm_provider": "openrouter",
     },
-    "openrouter/z-ai/glm-4.7": {
-        "max_tokens": 32768,
-        "max_input_tokens": 202752,
-        "max_output_tokens": 32768,
-        "input_cost_per_token": 0.0000004,
-        "output_cost_per_token": 0.0000015,
-        "litellm_provider": "openrouter",
-    },
 })
 
 from problem import PROBLEM_DESCRIPTION, FUNCTION_SIGNATURE, SEED_PROGRAM, INPUTS, score_fn
 from algoforge import (
     run, AlgoforgeConfig, BudgetConfig, SamplerModelPair,
-    InitConfig, MetaAdviceConfig, PipelineConfig, CVTConfig
+    InitConfig, MetaAdviceConfig, PipelineConfig, CVTConfig, CascadeConfig
 )
 
 # --- Config ---
@@ -61,7 +61,7 @@ config = AlgoforgeConfig(
     seed_program=SEED_PROGRAM,
     inputs=INPUTS,
     score_fn=score_fn,
-    budget=BudgetConfig(dollars=3.0),
+    budget=BudgetConfig(dollars=4.0),
     sampler_model_pairs=[
         SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[0], weight=1.0, temperature=0.7),
         SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[1], weight=1.0, temperature=0.7),
@@ -71,13 +71,14 @@ config = AlgoforgeConfig(
     ],
     cvt=CVTConfig(n_centroids=50, defer_centroids=True),
     init=InitConfig(
-        n_diverse_seeds=8,
-        n_variants_per_seed=15,
-        diversity_model="openrouter/z-ai/glm-4.7",
+        n_diverse_seeds=6,
+        n_variants_per_seed=20,
+        diversity_model=HEAVY_MODEL,
         variant_model=LIGHT_MODELS[1],
     ),
     meta_advice=MetaAdviceConfig(interval=50, model=HEAVY_MODEL),
-    pipeline=PipelineConfig(n_llm_workers=4, n_eval_processes=8, n_inspirations=1),
+    pipeline=PipelineConfig(n_llm_workers=12, n_eval_processes=12, n_inspirations=1),
+    cascade=CascadeConfig(quick_inputs=[INPUTS[0], INPUTS[4]]),
     output_dir=RUN_DIR,
 )
 

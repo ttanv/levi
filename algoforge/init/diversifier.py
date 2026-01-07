@@ -104,6 +104,40 @@ class Diversifier:
         self.config = config
         self.executor = executor
         self.total_cost = 0.0
+        self.best_score = 0.0
+
+    async def _cascade_eval(self, code: str, fn_name: str) -> dict:
+        """Evaluate with cascade: quick test first, full eval only if promising."""
+        cascade = self.config.cascade
+        if cascade.enabled and cascade.quick_inputs:
+            quick_result = await self.executor.run(
+                _evaluate_code,
+                code,
+                self.config.score_fn,
+                cascade.quick_inputs,
+                fn_name,
+                timeout=cascade.quick_timeout
+            )
+            if "error" in quick_result:
+                return quick_result
+            quick_score = quick_result.get('score', 0)
+            threshold = self.best_score * cascade.min_score_ratio
+            if quick_score < threshold:
+                return {"error": f"Cascade rejected: {quick_score:.1f} < {threshold:.1f}"}
+
+        result = await self.executor.run(
+            _evaluate_code,
+            code,
+            self.config.score_fn,
+            self.config.inputs,
+            fn_name,
+            timeout=self.config.pipeline.eval_timeout
+        )
+        if "error" not in result:
+            score = result.get('score', 0)
+            if score > self.best_score:
+                self.best_score = score
+        return result
 
     async def run(
         self,
@@ -119,6 +153,7 @@ class Diversifier:
         """
         fn_name = extract_fn_name(self.config.function_signature)
         seed_score = seed_result.get('score', 0.0)
+        self.best_score = seed_score
 
         # Phase 1: Generate diverse seeds
         diverse_seeds = await self._generate_diverse_seeds(
@@ -192,6 +227,8 @@ class Diversifier:
 
                 if "error" not in result:
                     new_score = result.get('score', 0.0)
+                    if new_score > self.best_score:
+                        self.best_score = new_score
                     diverse_seeds.append((new_code, new_score))
                     logger.info(f"  [Seed {i+1}] OK - score: {new_score:.1f}")
                 else:
@@ -278,14 +315,7 @@ class Diversifier:
         # Parallel evaluation
         async def eval_candidate(cand: dict) -> tuple[int, dict]:
             try:
-                result = await self.executor.run(
-                    _evaluate_code,
-                    cand["code"],
-                    self.config.score_fn,
-                    self.config.inputs,
-                    fn_name,
-                    timeout=self.config.pipeline.eval_timeout
-                )
+                result = await self._cascade_eval(cand["code"], fn_name)
                 return cand["idx"], {"code": cand["code"], "result": result}
             except Exception as e:
                 return cand["idx"], {"code": cand["code"], "result": {"error": str(e)}}
@@ -310,17 +340,10 @@ class Diversifier:
             })
             behavior_vectors.append(np.array([behavior[f] for f in extractor.features]))
 
-        # Also add diverse seeds
+        # Also add diverse seeds (already evaluated, just need behavior vectors)
         for seed_code, seed_score in diverse_seeds:
             try:
-                result = await self.executor.run(
-                    _evaluate_code,
-                    seed_code,
-                    self.config.score_fn,
-                    self.config.inputs,
-                    fn_name,
-                    timeout=self.config.pipeline.eval_timeout
-                )
+                result = await self._cascade_eval(seed_code, fn_name)
                 if "error" not in result:
                     program = Program(code=seed_code, metadata={"primary_score": seed_score})
                     behavior = extractor.extract(program, result)

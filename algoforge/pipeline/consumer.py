@@ -98,14 +98,41 @@ async def eval_consumer(
 
         state.eval_in_flight += 1
         try:
-            result = await executor.run(
-                _evaluate_code,
-                item["code"],
-                config.score_fn,
-                config.inputs,
-                fn_name,
-                timeout=config.pipeline.eval_timeout
-            )
+            cascade = config.cascade
+            if cascade.enabled and cascade.quick_inputs:
+                quick_result = await executor.run(
+                    _evaluate_code,
+                    item["code"],
+                    config.score_fn,
+                    cascade.quick_inputs,
+                    fn_name,
+                    timeout=cascade.quick_timeout
+                )
+                if "error" in quick_result:
+                    result = quick_result
+                else:
+                    quick_score = quick_result.get('score', 0)
+                    threshold = state.best_score_so_far * cascade.min_score_ratio
+                    if quick_score < threshold:
+                        result = {"cascade_rejected": True, "quick_score": quick_score, "threshold": threshold}
+                    else:
+                        result = await executor.run(
+                            _evaluate_code,
+                            item["code"],
+                            config.score_fn,
+                            config.inputs,
+                            fn_name,
+                            timeout=config.pipeline.eval_timeout
+                        )
+            else:
+                result = await executor.run(
+                    _evaluate_code,
+                    item["code"],
+                    config.score_fn,
+                    config.inputs,
+                    fn_name,
+                    timeout=config.pipeline.eval_timeout
+                )
         except TimeoutError:
             result = {"error": "Timeout"}
         except Exception as e:
@@ -114,7 +141,14 @@ async def eval_consumer(
             state.eval_in_flight -= 1
 
         async with archive_lock:
-            if "error" not in result:
+            if "cascade_rejected" in result:
+                pool.update_sampler(item["sampler"], item["source_cell"], success=False)
+                state.record_reject()
+                logger.info(
+                    f"[Eval #{state.eval_count}] {item['sampler']:15s} "
+                    f"CASCADE SKIP  | quick: {result['quick_score']:.1f} < {result['threshold']:.1f}"
+                )
+            elif "error" not in result:
                 program = Program(code=item["code"])
                 eval_result = EvaluationResult(
                     program_id=program.id,
@@ -131,10 +165,8 @@ async def eval_consumer(
 
                 score = result.get('score', 0)
 
-                # Check if this is a new best before recording
                 is_new_best = score > state.best_score_so_far
 
-                # Record score in history
                 state.record_score(
                     score=score,
                     accepted=accepted,
@@ -142,7 +174,6 @@ async def eval_consumer(
                     archive_size=pool.size(),
                 )
 
-                # Determine status string
                 if is_new_best:
                     status = "NEW BEST ★"
                 elif accepted:

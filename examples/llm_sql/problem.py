@@ -30,7 +30,7 @@ Find optimal column ordering to maximize prefix hits across all rows.
 - Better orderings group similar values together
 
 ## Input
-- `df`: pandas DataFrame to reorder
+- `df`: pandas DataFrame to reorder (up to 30K rows, up to 60 columns)
 - `col_merge`: Column groups to merge, e.g., [["col1", "col2"]]
 - `row_stop`, `col_stop`: Recursion depth limits
 - `distinct_value_threshold`: Filter high-cardinality columns
@@ -38,7 +38,12 @@ Find optimal column ordering to maximize prefix hits across all rows.
 ## Evaluation
 Your function is called on 5 datasets. Score combines hit rate (95%) and runtime (5%).
 
-## You can import standard library modules (pandas, numpy, collections, random, math, concurrent.futures, etc.)
+## Requirements
+- Return a valid pd.DataFrame with the same number of rows as input
+- Must complete within 60 seconds per dataset (5 datasets total)
+- Use only thread-based parallelism (no process-based parallelism)
+- Do not use print statements or logging
+- Handle edge cases: empty DataFrames, single-column DataFrames, etc.
 """
 
 FUNCTION_SIGNATURE = """
@@ -68,100 +73,147 @@ def reorder(
 """
 
 SEED_PROGRAM = '''import pandas as pd
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import lru_cache
 from collections import Counter
-import numpy as np
 
 
-@lru_cache(maxsize=None)
 def calculate_length(value):
-    """Calculate squared length for scoring."""
-    if isinstance(value, str):
-        return len(value) ** 2
+    if isinstance(value, bool):
+        return 4 ** 2
     if isinstance(value, (int, float)):
         return len(str(value)) ** 2
-    return 16
+    if isinstance(value, str):
+        return len(value) ** 2
+    return 0
 
 
-def merging_columns(df: pd.DataFrame, col_names: list[str]) -> pd.DataFrame:
-    """Merge multiple columns into one."""
-    existing_cols = [c for c in col_names if c in df.columns]
-    if len(existing_cols) < 2:
+def calculate_col_stats(df, enable_index=False):
+    num_rows = len(df)
+    column_stats = []
+    for col in df.columns:
+        if col == "original_index":
+            continue
+        num_groups = df[col].nunique()
+        if df[col].dtype == "object" or df[col].dtype == "string":
+            avg_length = df[col].astype(str).str.len().mean()
+        elif df[col].dtype == "bool":
+            avg_length = 4
+        elif df[col].dtype in ["int64", "float64"]:
+            avg_length = df[col].astype(str).str.len().mean()
+        else:
+            avg_length = 0
+        avg_length = avg_length ** 2
+        if num_groups == 0:
+            score = 0
+        else:
+            avg_size_per_group = num_rows / num_groups
+            score = avg_length * (avg_size_per_group - 1)
+            if num_rows == num_groups:
+                score = 0
+        column_stats.append((col, num_groups, avg_length, score))
+    if enable_index and "original_index" in df.columns:
+        column_stats.append(("original_index", len(df), 0, 0))
+    column_stats.sort(key=lambda x: x[3], reverse=True)
+    return num_rows, column_stats
+
+
+def merging_columns(df, col_names):
+    if not all(col in df.columns for col in col_names):
         return df
-    merged_name = "_".join(existing_cols)
-    df[merged_name] = df[existing_cols].apply(lambda x: "".join([str(val) for val in x]), axis=1)
-    return df.drop(columns=existing_cols)
+    merged_names = "_".join(col_names)
+    df[merged_names] = df[col_names].apply(lambda x: "".join([f"{val}" for val in x]), axis=1)
+    df = df.drop(columns=col_names)
+    return df
 
 
 class Reorderer:
-    """GGR (Greedy Group Reordering) algorithm for maximizing prefix hit rate."""
-
     def __init__(self):
-        self.val_len = {}
-        self.base = 5000
+        self.num_rows = 0
+        self.num_cols = 0
+        self.column_stats = None
+        self.val_len = None
         self.row_stop = None
         self.col_stop = None
+        self.base = 2000
 
-    def find_max_group_value(self, value_counts: dict, early_stop: int = 0):
-        """Find the value with maximum weighted count (length^2 * (count-1))."""
-        best_val, best_score = None, -1
-        for val, count in value_counts.items():
-            if count <= 1:
-                continue
-            vl = self.val_len.get(val, calculate_length(val))
-            self.val_len[val] = vl
-            score = vl * (count - 1)
-            if score > best_score:
-                best_score, best_val = score, val
-        return best_val if best_score >= early_stop else None
+    def find_max_group_value(self, df, value_counts, early_stop=0):
+        value_counts = Counter(df.stack())
+        weighted_counts = {val: self.val_len[val] * (count - 1) for val, count in value_counts.items()}
+        if not weighted_counts:
+            return None
+        max_group_val, max_weighted_count = max(weighted_counts.items(), key=lambda x: x[1])
+        if max_weighted_count < early_stop:
+            return None
+        return max_group_val
 
-    def column_recursion(self, max_value, grouped_rows, row_stop, col_stop, early_stop):
-        values = grouped_rows.values
-        mask = (values == max_value)
-        idx = np.argsort(~mask, axis=1, kind='stable')
-        sorted_values = values[np.arange(len(grouped_rows))[:, None], idx]
-        remainder_values = sorted_values[:, 1:]
-        remainder_counts = Counter(remainder_values.ravel())
-        reordered_remainder = self.recursive_reorder(
-            pd.DataFrame(remainder_values), remainder_counts, early_stop, row_stop, col_stop + 1
-        )
-        result_df = pd.DataFrame(np.hstack([
-            np.full((len(grouped_rows), 1), max_value, dtype=object),
-            reordered_remainder.values
-        ]))
-        return result_df, remainder_counts
+    def reorder_columns_for_value(self, row, value, column_names, grouped_rows_len=1):
+        cols_with_value = []
+        for idx, col in enumerate(column_names):
+            if hasattr(row, col) and getattr(row, col) == value:
+                cols_with_value.append(col)
+            elif hasattr(row, col.replace(" ", "_")) and getattr(row, col.replace(" ", "_")) == value:
+                cols_with_value.append(col)
+            else:
+                attr_name = f"_{idx}"
+                if hasattr(row, attr_name) and getattr(row, attr_name) == value:
+                    cols_with_value.append(attr_name)
+        cols_without_value = []
+        for idx, col in enumerate(column_names):
+            if hasattr(row, col) and getattr(row, col) != value:
+                cols_without_value.append(col)
+            elif hasattr(row, col.replace(" ", "_")) and getattr(row, col.replace(" ", "_")) != value:
+                cols_without_value.append(col)
+            else:
+                attr_name = f"_{idx}"
+                if hasattr(row, attr_name) and getattr(row, attr_name) != value:
+                    cols_without_value.append(attr_name)
+        reordered_cols = cols_with_value + cols_without_value
+        return [getattr(row, col) for col in reordered_cols], cols_with_value
 
-    def fixed_reorder(self, df: pd.DataFrame, row_sort: bool = True) -> pd.DataFrame:
-        cols = [c for c in df.columns if c != "original_index"]
-        if not cols:
-            return df
-        sample = df.sample(min(len(df), 1000), random_state=42) if len(df) > 1000 else df
-        scores = {}
-        for col in cols:
-            try:
-                vc = sample[col].value_counts(normalize=True)
-                p = (vc ** 2).sum()
-                avg_sq_len = (sample[col].astype(str).str.len() ** 2).mean()
-                scores[col] = avg_sq_len * p / (1 - p + 1e-9) if not pd.isna(avg_sq_len) else 0
-            except:
-                scores[col] = 0
-        sorted_cols = sorted(cols, key=lambda x: scores.get(x, 0), reverse=True)
-        if "original_index" in df.columns:
-            sorted_cols.append("original_index")
-        reordered_df = df[sorted_cols]
+    def fixed_reorder(self, df, row_sort=True):
+        num_rows, column_stats = calculate_col_stats(df, enable_index=True)
+        reordered_columns = [col for col, _, _, _ in column_stats]
+        reordered_df = df[reordered_columns]
         if row_sort:
-            sort_cols = [c for c in sorted_cols if c != "original_index"]
-            if sort_cols:
-                reordered_df = reordered_df.sort_values(by=sort_cols)
+            reordered_df = reordered_df.sort_values(by=reordered_columns, axis=0)
         return reordered_df
 
-    def recursive_reorder(self, df: pd.DataFrame, value_counts: dict, early_stop: int = 0, row_stop: int = 0, col_stop: int = 0) -> pd.DataFrame:
-        if df.empty or df.shape[1] <= 1:
+    def column_recursion(self, result_df, max_value, grouped_rows, row_stop, col_stop, early_stop):
+        cols_settled = []
+        with ThreadPoolExecutor() as executor:
+            futures = [
+                executor.submit(self.reorder_columns_for_value, row, max_value, grouped_rows.columns.tolist(), len(grouped_rows))
+                for row in grouped_rows.itertuples(index=False)
+            ]
+            for i, future in enumerate(as_completed(futures)):
+                reordered_row, cols_settled = future.result()
+                result_df.loc[i] = reordered_row
+        grouped_value_counts = Counter()
+        if not result_df.empty:
+            grouped_result_df = result_df.groupby(result_df.columns[0])
+            grouped_value_counts = Counter(grouped_rows.stack())
+            for _, group in grouped_result_df:
+                if group[group.columns[0]].iloc[0] != max_value:
+                    continue
+                group_remainder = group.iloc[:, 1:]
+                grouped_remainder_value_counts = Counter(group_remainder.stack())
+                reordered_group_remainder = self.recursive_reorder(
+                    group_remainder, grouped_remainder_value_counts, early_stop=early_stop, row_stop=row_stop, col_stop=col_stop + 1
+                )
+                group.iloc[:, 1:] = reordered_group_remainder.values
+                result_df.update(group)
+                break
+        return result_df, grouped_value_counts
+
+    def recursive_reorder(self, df, value_counts, early_stop=0, row_stop=0, col_stop=0):
+        if df.empty or len(df.columns) == 0 or len(df) == 0:
+            return df
+        if self.row_stop is not None and row_stop >= self.row_stop:
             return self.fixed_reorder(df)
-        if (self.row_stop and row_stop >= self.row_stop) or (self.col_stop and col_stop >= self.col_stop):
+        if self.col_stop is not None and col_stop >= self.col_stop:
             return self.fixed_reorder(df)
-        max_value = self.find_max_group_value(value_counts, early_stop)
+        max_value = self.find_max_group_value(df, value_counts, early_stop=early_stop)
         if max_value is None:
             return self.fixed_reorder(df)
         mask = (df.values == max_value).any(axis=1)
@@ -169,7 +221,8 @@ class Reorderer:
             return self.fixed_reorder(df)
         grouped_rows = df[mask]
         remaining_rows = df[~mask]
-        reordered_grouped, grouped_counts = self.column_recursion(max_value, grouped_rows, row_stop, col_stop, early_stop)
+        result_df = pd.DataFrame(columns=df.columns)
+        reordered_grouped, grouped_counts = self.column_recursion(result_df, max_value, grouped_rows, row_stop, col_stop, early_stop)
         if not remaining_rows.empty:
             remaining_counts = value_counts.copy()
             remaining_counts[max_value] -= len(grouped_rows)
@@ -181,10 +234,10 @@ class Reorderer:
                     if remaining_counts[k] <= 0:
                         del remaining_counts[k]
             reordered_remaining = self.recursive_reorder(remaining_rows, remaining_counts, early_stop, row_stop + 1, col_stop)
-            return pd.DataFrame(np.vstack([reordered_grouped.values, reordered_remaining.values]))
+            return pd.concat([reordered_grouped, reordered_remaining], axis=0, ignore_index=True)
         return reordered_grouped
 
-    def recursive_split_and_reorder(self, df: pd.DataFrame, early_stop: int = 0):
+    def recursive_split_and_reorder(self, df, early_stop=0):
         if len(df) <= self.base:
             return self.recursive_reorder(df, Counter(df.values.ravel()), early_stop)
         mid = len(df) // 2
@@ -204,17 +257,23 @@ def reorder(
     distinct_value_threshold: float = 0.7,
     parallel: bool = True,
 ) -> pd.DataFrame:
-    """Main entry point for column reordering."""
     df = df.copy()
-
-    # Apply column merges
-    if col_merge:
-        for group in col_merge:
-            df = merging_columns(df, group)
-
     reorderer = Reorderer()
+
+    # Apply column merges (use col_stats order like ADRS)
+    if col_merge:
+        _, column_stats = calculate_col_stats(df, enable_index=True)
+        reordered_columns = [col for col, _, _, _ in column_stats]
+        for col_to_merge in col_merge:
+            final_col_order = [col for col in reordered_columns if col in col_to_merge]
+            if len(final_col_order) > 1:
+                df = merging_columns(df, final_col_order)
     reorderer.row_stop = row_stop if row_stop else len(df)
     reorderer.col_stop = col_stop if col_stop else len(df.columns)
+
+    # Calculate column stats
+    reorderer.num_rows, column_stats_list = calculate_col_stats(df, enable_index=True)
+    reorderer.column_stats = {col: (num_groups, avg_len, score) for col, num_groups, avg_len, score in column_stats_list}
 
     # Add tracking index
     df["original_index"] = range(len(df))
@@ -223,19 +282,26 @@ def reorder(
     threshold = len(df) * distinct_value_threshold
     cols_to_keep = [c for c in df.columns if c == "original_index" or df[c].nunique() <= threshold]
     cols_to_discard = [c for c in df.columns if c != "original_index" and df[c].nunique() > threshold]
+    cols_to_discard = sorted(cols_to_discard, key=lambda x: reorderer.column_stats.get(x, (0, 0, 0))[2], reverse=True)
 
     df_recurse = df[cols_to_keep]
     df_discard = df[["original_index"] + cols_to_discard] if cols_to_discard else None
 
+    # Update column_stats to exclude discarded columns
+    reorderer.column_stats = {col: stats for col, stats in reorderer.column_stats.items() if col not in cols_to_discard}
+
     # Pre-compute value lengths
-    for v in pd.unique(df_recurse.values.ravel()):
-        reorderer.val_len[v] = calculate_length(v)
+    initial_value_counts = Counter(df_recurse.values.ravel())
+    reorderer.val_len = {val: calculate_length(val) for val in initial_value_counts.keys()}
+
+    # Initial fixed reorder (matches ADRS)
+    df_recurse = reorderer.fixed_reorder(df_recurse)
 
     # Reorder
     if parallel:
         reordered = reorderer.recursive_split_and_reorder(df_recurse, early_stop)
     else:
-        reordered = reorderer.recursive_reorder(df_recurse, Counter(df_recurse.values.ravel()), early_stop)
+        reordered = reorderer.recursive_reorder(df_recurse, initial_value_counts, early_stop)
 
     reordered.columns = list(range(len(reordered.columns) - 1)) + ["original_index"]
 
@@ -261,7 +327,7 @@ Reorder DataFrame columns to maximize prefix hit rate for LLM prompt caching.
 - Hit score = sum of squared lengths of matching prefix fields
 
 ## Input
-- `df`: pandas DataFrame with text data
+- `df`: pandas DataFrame (up to 30K rows, up to 60 columns)
 - `col_merge`: Column groups to merge
 - `row_stop`, `col_stop`: Recursion limits
 
@@ -281,7 +347,11 @@ def reorder(
     pass
 ```
 
-## You can import standard library modules (pandas, numpy, collections, random, math, concurrent.futures, etc.)
+## Requirements
+- Return a valid pd.DataFrame with the same number of rows as input
+- Must complete within 60 seconds per dataset
+- Use only thread-based parallelism (no process-based parallelism)
+- Do not use print statements or logging
 
 ## Your Task: ALGORITHMIC DIVERSITY
 
@@ -347,7 +417,7 @@ DATASETS_DIR = Path(__file__).parent.parent.parent.parent / "ADRS/openevolve/exa
 DATASET_SPECS = [
     ("movies.csv", [["movieinfo", "movietitle", "rottentomatoeslink"]], None),
     ("beer.csv", [["beer/beerId", "beer/name"]], None),
-    ("BIRD.csv", [["PostId", "Body"]], 3000),  # Sample to 3K rows for speed
+    ("BIRD.csv", [["PostId", "Body"]], None),
     ("PDMX.csv", [["path", "metadata"], ["hasmetadata", "isofficial", "isuserpublisher", "isdraft", "hasannotations", "subsetall"]], None),
     ("products.csv", [["product_title", "parent_asin"]], None),
 ]
@@ -359,40 +429,16 @@ def load_datasets():
     for filename, col_merge, sample_size in DATASET_SPECS:
         path = DATASETS_DIR / filename
         if not path.exists():
-            print(f"Warning: Dataset not found: {path}")
             continue
         df = pd.read_csv(path, low_memory=False)
         if sample_size and len(df) > sample_size:
             df = df.sample(sample_size, random_state=42)
         datasets.append((df, col_merge, filename))
-        print(f"  {filename}: {len(df)} rows, {len(df.columns)} cols")
     return datasets
 
 
-def calculate_baseline(datasets):
-    """Calculate baseline hit rate using original column order."""
-    hit_rates = []
-    for df, col_merge, filename in datasets:
-        df_eval = df.copy()
-        if col_merge:
-            for group in col_merge:
-                valid = [c for c in group if c in df_eval.columns]
-                if len(valid) > 1:
-                    merged_name = "_".join(valid)
-                    df_eval[merged_name] = df_eval[valid].apply(
-                        lambda x: "".join(str(v) for v in x), axis=1
-                    )
-                    df_eval = df_eval.drop(columns=valid)
-        _, hit_rate = evaluate_df_prefix_hit_cnt(df_eval)
-        hit_rates.append(hit_rate / 100.0)
-    return sum(hit_rates) / len(hit_rates) if hit_rates else 0.0
-
-
 # --- Load Data ---
-print("Loading datasets...")
 INPUTS = load_datasets()
-print("Calculating baseline...")
-BASELINE = calculate_baseline(INPUTS)
 
 
 # --- Score Function ---
@@ -400,6 +446,8 @@ BASELINE = calculate_baseline(INPUTS)
 def score_fn(reorder_fn, inputs):
     """Evaluate reordering function: returns 0-100 score based on prefix hit improvement."""
     import time
+    import warnings
+    warnings.filterwarnings("ignore")
 
     try:
         hit_rates = []
@@ -433,18 +481,9 @@ def score_fn(reorder_fn, inputs):
         avg_hit = sum(hit_rates) / len(hit_rates)
         avg_runtime = sum(runtimes) / len(runtimes)
 
-        # Normalized hit score (0-100)
-        if BASELINE >= 1.0:
-            normalized_hit_score = 100.0 if avg_hit >= 1.0 else 0.0
-        else:
-            normalized_hit_score = ((avg_hit - BASELINE) / (1.0 - BASELINE)) * 100
-            normalized_hit_score = max(0.0, min(100.0, normalized_hit_score))
-
-        # Runtime component (100 at 0s, 0 at 10s)
-        runtime_component = (10.0 - min(10.0, avg_runtime)) / 10.0 * 100
-
-        # Combined score: 95% hit rate, 5% runtime
-        score = 0.95 * normalized_hit_score + 0.05 * runtime_component
+        # Match ADRS leaderboard formula exactly
+        score = 0.95 * avg_hit + 0.05 * (12 - min(12, avg_runtime)) / 12
+        score = score * 100  # Scale to 0-100
 
         return {"score": score, "hit_rate": avg_hit * 100, "runtime": avg_runtime}
     except Exception as e:

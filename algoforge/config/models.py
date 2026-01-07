@@ -58,6 +58,13 @@ class CheckpointConfig(BaseModel):
     path: Optional[str] = None
 
 
+class CascadeConfig(BaseModel):
+    enabled: bool = True
+    quick_inputs: list[Any] = Field(default_factory=list)
+    min_score_ratio: float = 0.8
+    quick_timeout: float = 30.0
+
+
 class PipelineConfig(BaseModel):
     n_llm_workers: int = 4
     n_eval_processes: int = 4
@@ -85,6 +92,7 @@ class AlgoforgeConfig(BaseModel):
     behavior: BehaviorConfig = Field(default_factory=BehaviorConfig)
     checkpoint: CheckpointConfig = Field(default_factory=CheckpointConfig)
     pipeline: PipelineConfig = Field(default_factory=PipelineConfig)
+    cascade: CascadeConfig = Field(default_factory=CascadeConfig)
 
     n_islands: int = 1
     migration_interval: Optional[int] = None

@@ -55,6 +55,7 @@ from .config import (
     MetaAdviceConfig,
     BehaviorConfig,
     CheckpointConfig,
+    CascadeConfig,
     PipelineConfig,
 )
 
@@ -146,6 +147,7 @@ __all__ = [
     'MetaAdviceConfig',
     'BehaviorConfig',
     'CheckpointConfig',
+    'CascadeConfig',
     'PipelineConfig',
     # Methods
     'run',
