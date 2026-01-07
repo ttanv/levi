@@ -297,13 +297,17 @@ def reorder(
     # Initial fixed reorder (matches ADRS)
     df_recurse = reorderer.fixed_reorder(df_recurse)
 
+    # Save column order before recursive processing (excluding original_index)
+    kept_col_names = [c for c in df_recurse.columns if c != "original_index"]
+
     # Reorder
     if parallel:
         reordered = reorderer.recursive_split_and_reorder(df_recurse, early_stop)
     else:
         reordered = reorderer.recursive_reorder(df_recurse, initial_value_counts, early_stop)
 
-    reordered.columns = list(range(len(reordered.columns) - 1)) + ["original_index"]
+    # Restore original column names (algorithm uses integer indices internally)
+    reordered.columns = kept_col_names + ["original_index"]
 
     # Merge back discarded columns
     if df_discard is not None:
