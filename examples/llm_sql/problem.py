@@ -411,7 +411,7 @@ Provide your lessons (150-200 words max):"""
 
 # --- Dataset Configuration ---
 
-DATASETS_DIR = Path(__file__).parent.parent.parent.parent / "ADRS/openevolve/examples/ADRS/llm_sql/datasets"
+DATASETS_DIR = Path(__file__).parent / "datasets"
 
 # Dataset specs: (filename, col_merge, sample_size or None for full)
 DATASET_SPECS = [
