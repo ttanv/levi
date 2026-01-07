@@ -29,7 +29,7 @@ class Trie:
         common_prefix_length = 0
         for char in word:
             if char in node.children:
-                common_prefix_length += 1
+                common_prefix_length += len(char)
                 node = node.children[char]
             else:
                 break

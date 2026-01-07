@@ -13,21 +13,14 @@ from utils import evaluate_df_prefix_hit_cnt
 # --- Prompts ---
 
 PROBLEM_DESCRIPTION = """
-# CSV Column Reordering Optimization
+# LLM SQL Problem
 
-## Problem
-Reorder DataFrame columns to maximize prefix hit rate for LLM prompt caching.
+Optimize CSV column ordering to maximize prefix hit rate. Reorder columns so concatenated row values have maximum common prefix overlap between consecutive rows.
 
 ## Key Concepts
-- Rows are concatenated into strings: col1_val + col2_val + ...
+- Rows are concatenated into strings (no spaces): col1_val + col2_val + ...
 - Prefix hit = matching characters from start between consecutive rows
-- Hit score = sum of squared lengths of matching prefix fields
 - Higher prefix reuse = better caching efficiency
-
-## Objective
-Find optimal column ordering to maximize prefix hits across all rows.
-- Baseline (original order) gives ~7% hit rate
-- Better orderings group similar values together
 
 ## Input
 - `df`: pandas DataFrame to reorder (up to 30K rows, up to 60 columns)
@@ -35,12 +28,25 @@ Find optimal column ordering to maximize prefix hits across all rows.
 - `row_stop`, `col_stop`: Recursion depth limits
 - `distinct_value_threshold`: Filter high-cardinality columns
 
-## Evaluation
-Your function is called on 5 datasets. Score combines hit rate (95%) and runtime (5%).
+## Scoring
+
+```
+baseline_hit_rate = Average prefix hit rate using original column order
+avg_hit_rate = Your solution's average prefix hit rate
+avg_runtime = Average runtime per dataset (seconds)
+
+normalized_hit_score = ((avg_hit_rate - baseline_hit_rate) / (1.0 - baseline_hit_rate)) × 100
+normalized_hit_score = clamp(normalized_hit_score, 0, 100)
+
+runtime_component = (10.0 - min(10.0, avg_runtime)) / 10.0 × 100
+
+final_score = 0.95 × normalized_hit_score + 0.05 × runtime_component
+```
+
+Runtime component: 100 at 0s, 0 at 10s. Solutions ≥10s get 0 runtime component.
 
 ## Requirements
 - Return a valid pd.DataFrame with the same number of rows as input
-- Must complete within 60 seconds per dataset (5 datasets total)
 - Use only thread-based parallelism (no process-based parallelism)
 - Do not use print statements or logging
 - Handle edge cases: empty DataFrames, single-column DataFrames, etc.
@@ -320,20 +326,21 @@ def reorder(
 SEED_INSPIRATIONS = []
 
 DIVERSITY_SEED_PROMPT = """
-# CSV Column Reordering Optimization
+# LLM SQL Problem
 
-## Problem
-Reorder DataFrame columns to maximize prefix hit rate for LLM prompt caching.
+Optimize CSV column ordering to maximize prefix hit rate. Reorder columns so concatenated row values have maximum common prefix overlap between consecutive rows.
 
 ## Key Concepts
-- Rows become strings: col1_val + col2_val + ...
+- Rows become strings (no spaces): col1_val + col2_val + ...
 - Prefix hit = matching chars from start between consecutive rows
-- Hit score = sum of squared lengths of matching prefix fields
+- Higher prefix reuse = better caching efficiency
 
-## Input
-- `df`: pandas DataFrame (up to 30K rows, up to 60 columns)
-- `col_merge`: Column groups to merge
-- `row_stop`, `col_stop`: Recursion limits
+## Scoring
+```
+normalized_hit_score = ((avg_hit_rate - baseline_hit_rate) / (1.0 - baseline_hit_rate)) × 100
+runtime_component = (10.0 - min(10.0, avg_runtime)) / 10.0 × 100
+final_score = 0.95 × normalized_hit_score + 0.05 × runtime_component
+```
 
 ## Function Signature
 ```python
@@ -353,7 +360,6 @@ def reorder(
 
 ## Requirements
 - Return a valid pd.DataFrame with the same number of rows as input
-- Must complete within 60 seconds per dataset
 - Use only thread-based parallelism (no process-based parallelism)
 - Do not use print statements or logging
 
@@ -445,10 +451,37 @@ def load_datasets():
 INPUTS = load_datasets()
 
 
+# --- Baseline Calculation ---
+
+_BASELINE_HIT_RATE = None
+
+def _calculate_baseline_hit_rate(inputs):
+    baseline_hit_rates = []
+    for df, col_merge, filename in inputs:
+        df_copy = df.copy()
+        if col_merge:
+            for col_to_merge in col_merge:
+                if all(col in df_copy.columns for col in col_to_merge):
+                    merged_name = "_".join(col_to_merge)
+                    df_copy[merged_name] = df_copy[col_to_merge].apply(
+                        lambda x: "".join([f"{val}" for val in x]), axis=1
+                    )
+                    df_copy = df_copy.drop(columns=col_to_merge)
+        _, hit_rate = evaluate_df_prefix_hit_cnt(df_copy)
+        baseline_hit_rates.append(hit_rate / 100.0)
+    return sum(baseline_hit_rates) / len(baseline_hit_rates) if baseline_hit_rates else 0.0
+
+
+def _get_baseline_hit_rate(inputs):
+    global _BASELINE_HIT_RATE
+    if _BASELINE_HIT_RATE is None:
+        _BASELINE_HIT_RATE = _calculate_baseline_hit_rate(inputs)
+    return _BASELINE_HIT_RATE
+
+
 # --- Score Function ---
 
 def score_fn(reorder_fn, inputs):
-    """Evaluate reordering function: returns 0-100 score based on prefix hit improvement."""
     import time
     import warnings
     warnings.filterwarnings("ignore")
@@ -479,31 +512,55 @@ def score_fn(reorder_fn, inputs):
             if len(reordered) != len(df):
                 return {"error": f"Row count mismatch: {len(reordered)} vs {len(df)}"}
 
-            # Validate columns match (accounting for col_merge)
-            expected_cols = set(df.columns)
-            if col_merge:
-                for group in col_merge:
-                    if all(col in expected_cols for col in group):
-                        # Remove merged columns, add merged name
-                        expected_cols -= set(group)
-                        expected_cols.add("_".join(group))
+            # Validate columns: structure-based (allows any merged column naming)
+            original_cols = set(df.columns)
+            merged_away = set()
+            num_merge_groups = 0
+            for group in (col_merge or []):
+                if all(c in original_cols for c in group):
+                    merged_away.update(group)
+                    num_merge_groups += 1
 
+            non_merged = original_cols - merged_away
             result_cols = set(reordered.columns)
-            if result_cols != expected_cols:
-                missing = expected_cols - result_cols
-                extra = result_cols - expected_cols
-                return {"error": f"Column mismatch. Missing: {missing}, Extra: {extra}"}
+
+            # 1. Non-merged columns must be present
+            missing_non_merged = non_merged - result_cols
+            if missing_non_merged:
+                return {"error": f"Missing columns: {missing_non_merged}"}
+
+            # 2. Merged columns must be absent (they should be merged)
+            present_merged = merged_away & result_cols
+            if present_merged:
+                return {"error": f"Columns should have been merged: {present_merged}"}
+
+            # 3. Column count must be correct (non-merged + one per merge group)
+            expected_count = len(non_merged) + num_merge_groups
+            if len(result_cols) != expected_count:
+                return {"error": f"Column count mismatch: expected {expected_count}, got {len(result_cols)}"}
 
             _, hit_rate = evaluate_df_prefix_hit_cnt(reordered)
             hit_rates.append(hit_rate / 100.0)
 
-        avg_hit = sum(hit_rates) / len(hit_rates)
+        avg_hit_rate = sum(hit_rates) / len(hit_rates)
         avg_runtime = sum(runtimes) / len(runtimes)
+        baseline_hit_rate = _get_baseline_hit_rate(inputs)
 
-        # Match ADRS leaderboard formula exactly
-        score = 0.95 * avg_hit + 0.05 * (12 - min(12, avg_runtime)) / 12
-        score = score * 100  # Scale to 0-100
+        if baseline_hit_rate >= 1.0:
+            normalized_hit_score = 100.0 if avg_hit_rate >= 1.0 else 0.0
+        else:
+            normalized_hit_score = ((avg_hit_rate - baseline_hit_rate) / (1.0 - baseline_hit_rate)) * 100
+            normalized_hit_score = max(0, min(100, normalized_hit_score))
 
-        return {"score": score, "hit_rate": avg_hit * 100, "runtime": avg_runtime}
+        runtime_component = (10.0 - min(10.0, avg_runtime)) / 10.0 * 100
+        score = 0.95 * normalized_hit_score + 0.05 * runtime_component
+
+        return {
+            "score": score,
+            "hit_rate": avg_hit_rate * 100,
+            "normalized_hit_score": normalized_hit_score,
+            "baseline_hit_rate": baseline_hit_rate * 100,
+            "runtime": avg_runtime,
+        }
     except Exception as e:
         return {"error": str(e)}
