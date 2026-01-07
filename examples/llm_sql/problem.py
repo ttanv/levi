@@ -475,6 +475,21 @@ def score_fn(reorder_fn, inputs):
             if len(reordered) != len(df):
                 return {"error": f"Row count mismatch: {len(reordered)} vs {len(df)}"}
 
+            # Validate columns match (accounting for col_merge)
+            expected_cols = set(df.columns)
+            if col_merge:
+                for group in col_merge:
+                    if all(col in expected_cols for col in group):
+                        # Remove merged columns, add merged name
+                        expected_cols -= set(group)
+                        expected_cols.add("_".join(group))
+
+            result_cols = set(reordered.columns)
+            if result_cols != expected_cols:
+                missing = expected_cols - result_cols
+                extra = result_cols - expected_cols
+                return {"error": f"Column mismatch. Missing: {missing}, Extra: {extra}"}
+
             _, hit_rate = evaluate_df_prefix_hit_cnt(reordered)
             hit_rates.append(hit_rate / 100.0)
 
