@@ -163,23 +163,33 @@ def _merge_columns(df, col_merge):
     return df
 
 
-def load_datasets():
-    """Load all datasets with column merging pre-applied."""
+def load_datasets(sample_size: int = None):
+    """Load all datasets with column merging pre-applied.
+
+    Args:
+        sample_size: If provided, sample each dataset to this many rows.
+    """
     datasets = []
-    for filename, col_merge, sample_size in DATASET_SPECS:
+    for filename, col_merge, spec_sample_size in DATASET_SPECS:
         path = DATASETS_DIR / filename
         if not path.exists():
             continue
         df = pd.read_csv(path, low_memory=False)
-        if sample_size and len(df) > sample_size:
-            df = df.sample(sample_size, random_state=42)
+        # Use provided sample_size, fall back to spec_sample_size
+        effective_sample = sample_size or spec_sample_size
+        if effective_sample and len(df) > effective_sample:
+            df = df.sample(effective_sample, random_state=42)
         # Pre-merge columns so LLM doesn't have to
         df = _merge_columns(df, col_merge)
         datasets.append((df, filename))
     return datasets
 
 
+# Full datasets for final evaluation
 INPUTS = load_datasets()
+
+# Sampled datasets (1.5K rows each) for quick cascade evaluation
+INPUTS_SAMPLED = load_datasets(sample_size=1500)
 
 
 # --- Baseline Calculation ---

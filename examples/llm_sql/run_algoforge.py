@@ -47,7 +47,7 @@ litellm.register_model({
     },
 })
 
-from problem import PROBLEM_DESCRIPTION, FUNCTION_SIGNATURE, SEED_PROGRAM, INPUTS, score_fn
+from problem import PROBLEM_DESCRIPTION, FUNCTION_SIGNATURE, SEED_PROGRAM, INPUTS, INPUTS_SAMPLED, score_fn
 from algoforge import (
     run, AlgoforgeConfig, BudgetConfig, SamplerModelPair,
     InitConfig, MetaAdviceConfig, PipelineConfig, CVTConfig, CascadeConfig
@@ -86,7 +86,7 @@ config = AlgoforgeConfig(
     ),
     meta_advice=MetaAdviceConfig(interval=50, model=HEAVY_MODEL),
     pipeline=PipelineConfig(n_llm_workers=12, n_eval_processes=12, n_inspirations=1, output_mode="diff", eval_timeout=360.0),
-    cascade=CascadeConfig(quick_inputs=[INPUTS[0], INPUTS[4]], quick_timeout=180.0),
+    cascade=CascadeConfig(quick_inputs=INPUTS_SAMPLED, quick_timeout=60.0, min_score_ratio=0.85),
     output_dir=RUN_DIR,
 )
 
