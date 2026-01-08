@@ -73,6 +73,7 @@ class PipelineConfig(BaseModel):
     max_tokens: int = 30000
     n_parents: int = 1
     n_inspirations: int = 2
+    output_mode: str = "full"  # "full" or "diff"
 
 
 class AlgoforgeConfig(BaseModel):

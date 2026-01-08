@@ -43,6 +43,29 @@ def extract_code(response: str) -> Optional[str]:
     return None
 
 
+def apply_diff(original: str, diff_response: str) -> Optional[str]:
+    """Apply SEARCH/REPLACE diff blocks to original code."""
+    result = original
+
+    pattern = r'<<<<<<< SEARCH\s*(.*?)\s*=======\s*(.*?)\s*>>>>>>> REPLACE'
+    matches = re.findall(pattern, diff_response, re.DOTALL)
+
+    if not matches:
+        # No diff blocks found, try to extract full code
+        return extract_code(diff_response)
+
+    for search, replace in matches:
+        search = search.strip()
+        replace = replace.strip()
+        if search in result:
+            result = result.replace(search, replace, 1)
+        else:
+            # Search block not found in original - diff failed
+            return None
+
+    return result
+
+
 async def llm_producer(
     worker_id: int,
     code_queue: asyncio.Queue,
@@ -67,11 +90,15 @@ async def llm_producer(
             inspirations = [p for p in sample.inspirations if random.random() < 0.8]
             parents = [parent] + inspirations
 
+            # Determine output mode from config
+            use_diff = config.pipeline.output_mode == "diff"
+            output_mode = OutputMode.DIFF if use_diff else OutputMode.FULL
+
             builder = PromptBuilder()
             builder.add_section("Problem", config.problem_description, priority=10)
             builder.add_section("Signature", f"```python\n{config.function_signature}\n```", priority=20)
             builder.add_parents([ProgramWithScore(p, None) for p in parents], priority=30)
-            builder.set_output_mode(OutputMode.FULL)
+            builder.set_output_mode(output_mode)
 
             if state.current_meta_advice and random.random() < 0.8:
                 builder.add_section("Meta-Advice", state.current_meta_advice, priority=100)
@@ -102,7 +129,11 @@ async def llm_producer(
                 stop_event.set()
                 break
 
-            code = extract_code(content)
+            # Extract or apply code based on mode
+            if use_diff:
+                code = apply_diff(parent.code, content)
+            else:
+                code = extract_code(content)
             if not code:
                 continue
 

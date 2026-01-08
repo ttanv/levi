@@ -167,7 +167,8 @@ class Diversifier:
 
         # Phase 3: Build centroids and populate archive
         await self._populate_archive(
-            pool, valid_programs, behavior_vectors, extractor
+            pool, valid_programs, behavior_vectors, extractor,
+            seed_program, seed_result  # Always pass seed as fallback
         )
 
         return self.total_cost
@@ -365,10 +366,23 @@ class Diversifier:
         valid_programs: list[dict],
         behavior_vectors: list[np.ndarray],
         extractor: BehaviorExtractor,
+        seed_program: str = None,
+        seed_result: dict = None,
     ) -> None:
         """Phase 3: Build centroids and populate archive."""
         if len(behavior_vectors) < 3:
             logger.warning("[Init Phase 3] Not enough valid programs to build centroids")
+            # Still add the seed program as fallback so archive isn't empty
+            if seed_program and seed_result and "error" not in seed_result:
+                program = Program(code=seed_program, metadata={"primary_score": seed_result.get('score', 0.0)})
+                eval_result = EvaluationResult(
+                    program_id=program.id,
+                    scores=seed_result,
+                    is_valid=True,
+                )
+                pool.add(program, eval_result)
+                logger.info(f"[Init Phase 3] Added seed program as fallback, archive size: {pool.size()}")
+            extractor.set_phase('evolution')
             return
 
         # Build centroids from behavior data
