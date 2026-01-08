@@ -47,6 +47,7 @@ Runtime component: 100 at 0s, 0 at 10s. Solutions ≥10s get 0 runtime component
 
 ## Requirements
 - Return a valid pd.DataFrame with the same number of rows as input
+- **CRITICAL: Must complete in <10 seconds per dataset (30K rows). Solutions that timeout get score=0**
 - Use only thread-based parallelism (no process-based parallelism)
 - Do not use print statements or logging
 - Handle edge cases: empty DataFrames, single-column DataFrames, etc.
@@ -360,6 +361,7 @@ def reorder(
 
 ## Requirements
 - Return a valid pd.DataFrame with the same number of rows as input
+- **CRITICAL: Must complete in <10 seconds per dataset (30K rows). Solutions that timeout get score=0**
 - Use only thread-based parallelism (no process-based parallelism)
 - Do not use print statements or logging
 
