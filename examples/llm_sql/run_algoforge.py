@@ -81,7 +81,7 @@ config = AlgoforgeConfig(
     init=InitConfig(
         n_diverse_seeds=5,
         n_variants_per_seed=25,
-        diversity_model="openrouter/z-ai/glm-4.6",
+        diversity_model="openrouter/google/gemini-2.5-pro",
         variant_model=LIGHT_MODELS[1],
     ),
     meta_advice=MetaAdviceConfig(interval=50, model=HEAVY_MODEL),
