@@ -37,7 +37,7 @@ litellm.register_model({
         "output_cost_per_token": 0.00000027,
         "litellm_provider": "openrouter",
     },
-    "openrouter/zhipu-ai/glm-4.6": {
+    "openrouter/z-ai/glm-4.6": {
         "max_tokens": 32768,
         "max_input_tokens": 128000,
         "max_output_tokens": 32768,
@@ -81,7 +81,7 @@ config = AlgoforgeConfig(
     init=InitConfig(
         n_diverse_seeds=6,
         n_variants_per_seed=20,
-        diversity_model="openrouter/zhipu-ai/glm-4.6",
+        diversity_model="openrouter/z-ai/glm-4.6",
         variant_model=LIGHT_MODELS[1],
     ),
     meta_advice=MetaAdviceConfig(interval=50, model=HEAVY_MODEL),
