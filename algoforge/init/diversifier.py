@@ -157,7 +157,7 @@ class Diversifier:
 
         # Phase 1: Generate diverse seeds
         diverse_seeds = await self._generate_diverse_seeds(
-            seed_program, seed_score, fn_name
+            seed_program, seed_score, seed_result, fn_name
         )
 
         # Phase 2: Generate variants
@@ -177,20 +177,22 @@ class Diversifier:
         self,
         seed_program: str,
         seed_score: float,
+        seed_result: dict,
         fn_name: str,
-    ) -> list[tuple[str, float]]:
+    ) -> list[tuple[str, float, dict]]:
         """Phase 1: Generate diverse seeds sequentially with context accumulation."""
         n_seeds = self.config.init.n_diverse_seeds
         model = self.config.init.diversity_model or "gpt-4"
 
         logger.info(f"[Init Phase 1] Generating {n_seeds} diverse seeds with {model}")
 
-        diverse_seeds = [(seed_program, seed_score)]
+        # Store (code, score, full_result) tuples - include full result to avoid re-evaluation
+        diverse_seeds = [(seed_program, seed_score, seed_result)]
 
         for i in range(n_seeds):
             existing_seeds_text = "\n\n---\n\n".join([
                 f"### Seed {j+1} (Score: {score:.1f}):\n```python\n{code}\n```"
-                for j, (code, score) in enumerate(diverse_seeds)
+                for j, (code, score, _) in enumerate(diverse_seeds)
             ])
 
             prompt = DIVERSITY_SEED_PROMPT.format(
@@ -230,7 +232,7 @@ class Diversifier:
                     new_score = result.get('score', 0.0)
                     if new_score > self.best_score:
                         self.best_score = new_score
-                    diverse_seeds.append((new_code, new_score))
+                    diverse_seeds.append((new_code, new_score, result))
                     logger.info(f"  [Seed {i+1}] OK - score: {new_score:.1f}")
                 else:
                     logger.info(f"  [Seed {i+1}] Eval failed: {result['error'][:50]}")
@@ -243,7 +245,7 @@ class Diversifier:
 
     async def _generate_variants(
         self,
-        diverse_seeds: list[tuple[str, float]],
+        diverse_seeds: list[tuple[str, float, dict]],
         fn_name: str,
         extractor: BehaviorExtractor,
     ) -> tuple[list[dict], list[np.ndarray]]:
@@ -259,7 +261,7 @@ class Diversifier:
         n_inspirations = self.config.pipeline.n_inspirations
 
         seed_programs = []
-        for seed_code, seed_score in diverse_seeds:
+        for seed_code, seed_score, _ in diverse_seeds:
             prog = Program(code=seed_code, metadata={"score": seed_score})
             eval_res = EvaluationResult(
                 program_id=prog.id,
@@ -268,7 +270,7 @@ class Diversifier:
             )
             seed_programs.append(ProgramWithScore(prog, eval_res))
 
-        for seed_idx, (seed_code, seed_score) in enumerate(diverse_seeds):
+        for seed_idx, (seed_code, seed_score, _) in enumerate(diverse_seeds):
             parent = seed_programs[seed_idx]
             other_seeds = [sp for i, sp in enumerate(seed_programs) if i != seed_idx]
 
@@ -327,9 +329,15 @@ class Diversifier:
         # Collect valid programs and behavior vectors
         valid_programs = []
         behavior_vectors = []
+        failure_errors = []  # Track unique failure reasons
+
         for _, data in eval_results:
             result = data["result"]
             if "error" in result:
+                # Collect unique failure errors for logging
+                error_msg = result["error"]
+                if len(failure_errors) < 5 and error_msg not in [e for e, _ in failure_errors]:
+                    failure_errors.append((error_msg, data["code"][:100]))
                 continue
             score = result.get('score', 0.0)
             program = Program(code=data["code"], metadata={"primary_score": score})
@@ -341,23 +349,25 @@ class Diversifier:
             })
             behavior_vectors.append(np.array([behavior[f] for f in extractor.features]))
 
-        # Also add diverse seeds (already evaluated, just need behavior vectors)
-        for seed_code, seed_score in diverse_seeds:
-            try:
-                result = await self._cascade_eval(seed_code, fn_name)
-                if "error" not in result:
-                    program = Program(code=seed_code, metadata={"primary_score": seed_score})
-                    behavior = extractor.extract(program, result)
-                    valid_programs.append({
-                        "code": seed_code,
-                        "score": seed_score,
-                        "result": result,
-                    })
-                    behavior_vectors.append(np.array([behavior[f] for f in extractor.features]))
-            except Exception:
-                pass
+        # Add diverse seeds directly (already evaluated in Phase 1, no need to re-evaluate)
+        for seed_code, seed_score, seed_result in diverse_seeds:
+            program = Program(code=seed_code, metadata={"primary_score": seed_score})
+            behavior = extractor.extract(program, seed_result)
+            valid_programs.append({
+                "code": seed_code,
+                "score": seed_score,
+                "result": seed_result,
+            })
+            behavior_vectors.append(np.array([behavior[f] for f in extractor.features]))
 
         logger.info(f"[Init Phase 2] Valid programs: {len(valid_programs)}")
+
+        # Log sample of failure reasons if there were failures
+        if failure_errors:
+            logger.info(f"[Init Phase 2] Sample failures ({len(failure_errors)} unique errors shown):")
+            for error_msg, code_preview in failure_errors:
+                logger.info(f"  - {error_msg[:100]}")
+                logger.info(f"    Code: {code_preview}...")
         return valid_programs, behavior_vectors
 
     async def _populate_archive(

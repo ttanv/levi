@@ -112,6 +112,7 @@ async def _run_async(config: AlgoforgeConfig) -> AlgoforgeResult:
         logger.info(f"[AlgoForge] Seed score: {seed_score:.1f}")
 
         # Init phase
+        init_cost = 0.0
         if config.init.enabled:
             logger.info("[AlgoForge] Running init phase")
             diversifier = Diversifier(config, executor)
@@ -130,7 +131,7 @@ async def _run_async(config: AlgoforgeConfig) -> AlgoforgeResult:
 
         # Run main pipeline
         logger.info("[AlgoForge] Starting evolution pipeline")
-        runner = PipelineRunner(config, pool, executor, output_dir=config.output_dir)
+        runner = PipelineRunner(config, pool, executor, output_dir=config.output_dir, init_cost=init_cost)
         result = await runner.run()
 
         logger.info(f"[AlgoForge] Complete - best score: {result.best_score:.1f}, "

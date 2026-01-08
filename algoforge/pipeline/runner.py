@@ -24,6 +24,7 @@ class PipelineRunner:
         pool: CVTMAPElitesPool,
         executor: ResilientProcessPool,
         output_dir: Optional[str] = None,
+        init_cost: float = 0.0,
     ):
         self.config = config
         self.pool = pool
@@ -31,6 +32,7 @@ class PipelineRunner:
         self.archive_lock = asyncio.Lock()
         self.code_queue = asyncio.Queue()
         self.state = PipelineState(config.budget)
+        self.state.total_cost = init_cost  # Include init phase cost
         self.state.best_score_so_far = pool.get_stats().get("best_score", float('-inf'))
         self.stop_event = asyncio.Event()
 
