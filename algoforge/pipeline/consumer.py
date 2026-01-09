@@ -1,8 +1,9 @@
 """Eval consumers: evaluate code and update archive."""
 
 import asyncio
-import re
 import logging
+import re
+import resource
 import types
 from typing import Callable, Optional
 
@@ -62,11 +63,20 @@ def extract_fn_name(fn_signature: str) -> str:
 
 def _evaluate_code(code: str, score_fn: Callable, inputs: list, fn_name: str) -> dict:
     """Runs in subprocess: parse code, extract callable, call score_fn."""
+    # Limit process memory to 2GB to prevent VM crashes
+    try:
+        memory_bytes = 2 * 1024 * 1024 * 1024
+        resource.setrlimit(resource.RLIMIT_AS, (memory_bytes, memory_bytes))
+    except (ValueError, resource.error):
+        pass  # May fail on some platforms
+
     namespace = {}
     try:
         exec(code, namespace)
     except SyntaxError as e:
         return {"error": f"Syntax error: {e}"}
+    except MemoryError:
+        return {"error": "MemoryError: code exceeded 2GB limit"}
 
     fn = namespace.get(fn_name)
     if not isinstance(fn, types.FunctionType):
