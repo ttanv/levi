@@ -122,40 +122,36 @@ def compute_model_placement(gpu_num, models):
 
 SEED_PROGRAM = '''def compute_model_placement(gpu_num, models):
     """Greedy placement: assign each model to GPU with lowest current KVPR."""
+    GPU_MEM_SIZE = 80
+
     # Sort by req_rate/slo descending (high priority first)
     sorted_models = sorted(models, key=lambda m: m.req_rate / m.slo, reverse=True)
 
     # Initialize placement and tracking
-    placement = {i: [] for i in range(gpu_num)}
-    mem_used = [0] * gpu_num      # memory used per GPU
-    load = [0.0] * gpu_num        # sum of req_rate/slo per GPU
+    placement = {gpu_id: [] for gpu_id in range(gpu_num)}
+    shared_kv = [GPU_MEM_SIZE for _ in range(gpu_num)]  # remaining memory per GPU
+    weighted_req_rate = [0.0 for _ in range(gpu_num)]   # sum of req_rate/slo per GPU
 
     for model in sorted_models:
-        best_gpu = None
-        best_kvpr = float('inf')
+        best_idx = None
+        best_ratio = float('inf')
 
         for gpu_id in range(gpu_num):
-            # Check memory constraint
-            if mem_used[gpu_id] + model.model_size > 80:
-                continue
+            if model.model_size <= shared_kv[gpu_id] and shared_kv[gpu_id] > 0:
+                current_ratio = weighted_req_rate[gpu_id] / shared_kv[gpu_id]
+                if current_ratio < best_ratio:
+                    best_ratio = current_ratio
+                    best_idx = gpu_id
 
-            # Calculate KVPR if we add this model
-            new_load = load[gpu_id] + model.req_rate / model.slo
-            new_mem = mem_used[gpu_id] + model.model_size
-            remaining = 80 - new_mem
-            if remaining > 0:
-                kvpr = new_load / remaining
-                if kvpr < best_kvpr:
-                    best_kvpr = kvpr
-                    best_gpu = gpu_id
+        if best_idx is None:
+            raise ValueError(
+                f"Unable to place model of size {model.model_size} GB on any GPU. "
+                f"Remaining per-GPU memory: {shared_kv}"
+            )
 
-        if best_gpu is None:
-            # Fallback: pick GPU with most free memory
-            best_gpu = min(range(gpu_num), key=lambda g: mem_used[g])
-
-        placement[best_gpu].append(model)
-        mem_used[best_gpu] += model.model_size
-        load[best_gpu] += model.req_rate / model.slo
+        placement[best_idx].append(model)
+        weighted_req_rate[best_idx] += model.req_rate / model.slo
+        shared_kv[best_idx] -= model.model_size
 
     return placement
 '''

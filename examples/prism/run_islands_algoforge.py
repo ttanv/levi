@@ -59,10 +59,10 @@ LIGHT_MODELS = [
 HEAVY_MODEL = "openrouter/deepseek/deepseek-v3.2"
 
 # --- Island Config ---
-N_ISLANDS = 3
+N_ISLANDS = 4
 CULLING_CHECKPOINTS = [0.5]  # Cull at 50% budget
 MIGRATION_INTERVAL = 999999999  # Effectively disable migration
-BUDGET_USD = 3.0
+BUDGET_USD = 5.0
 
 RUN_DIR = f"runs/islands_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
@@ -75,20 +75,21 @@ config = AlgoforgeConfig(
     score_fn=score_fn,
     budget=BudgetConfig(dollars=BUDGET_USD),
     sampler_model_pairs=[
-        SamplerModelPair(sampler="cyclic_annealing", model=LIGHT_MODELS[0], weight=1.0),
-        SamplerModelPair(sampler="cyclic_annealing", model=LIGHT_MODELS[1], weight=1.0),
-        SamplerModelPair(sampler="cyclic_annealing", model=LIGHT_MODELS[2], weight=1.0),
-        SamplerModelPair(sampler="cyclic_annealing", model=HEAVY_MODEL, weight=1.0),
+        SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[0], weight=1.0, temperature=0.7),
+        SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[1], weight=1.0, temperature=0.7),
+        SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[2], weight=1.0, temperature=0.7),
+        SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[0], weight=1.0, temperature=1.2),
+        SamplerModelPair(sampler="softmax", model=HEAVY_MODEL, weight=1.0, temperature=0.3),
     ],
-    cvt=CVTConfig(n_centroids=20, defer_centroids=True),
+    cvt=CVTConfig(n_centroids=30, defer_centroids=True),
     init=InitConfig(
-        n_diverse_seeds=8,  
+        n_diverse_seeds=4,
         n_variants_per_seed=30,
-        diversity_model="openrouter/deepseek/deepseek-v3.2",
+        diversity_model="openrouter/google/gemini-2.5-pro",
         variant_model=LIGHT_MODELS[1],
     ),
     meta_advice=MetaAdviceConfig(enabled=True, interval=50, model=HEAVY_MODEL),
-    pipeline=PipelineConfig(n_llm_workers=8, n_eval_processes=8, n_inspirations=1),
+    pipeline=PipelineConfig(n_llm_workers=6, n_eval_processes=6, n_inspirations=1),
     output_dir=RUN_DIR,
 )
 

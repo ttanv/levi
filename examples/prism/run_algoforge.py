@@ -29,6 +29,14 @@ litellm.register_model({
         "output_cost_per_token": 0.00000027,
         "litellm_provider": "openrouter",
     },
+    "openrouter/google/gemini-2.5-pro": {
+        "max_tokens": 65536,
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 65536,
+        "input_cost_per_token": 0.00000125,
+        "output_cost_per_token": 0.000010,
+        "litellm_provider": "openrouter",
+    },
 })
 
 from problem import PROBLEM_DESCRIPTION, FUNCTION_SIGNATURE, SEED_PROGRAM, INPUTS, score_fn
@@ -65,7 +73,7 @@ config = AlgoforgeConfig(
     init=InitConfig(
         n_diverse_seeds=5,
         n_variants_per_seed=25,
-        diversity_model=HEAVY_MODEL,
+        diversity_model="openrouter/google/gemini-2.5-pro",
         variant_model=LIGHT_MODELS[1],
     ),
     meta_advice=MetaAdviceConfig(interval=50, model=HEAVY_MODEL),
