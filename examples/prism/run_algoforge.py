@@ -72,12 +72,12 @@ config = AlgoforgeConfig(
     cvt=CVTConfig(n_centroids=50, defer_centroids=True),
     init=InitConfig(
         n_diverse_seeds=5,
-        n_variants_per_seed=25,
-        diversity_model="openrouter/google/gemini-2.5-pro",
+        n_variants_per_seed=30,
+        diversity_model="openrouter/deepseek/deepseek-v3.2",
         variant_model=LIGHT_MODELS[1],
     ),
     meta_advice=MetaAdviceConfig(interval=50, model=HEAVY_MODEL),
-    pipeline=PipelineConfig(n_llm_workers=5, n_eval_processes=5, n_inspirations=1),
+    pipeline=PipelineConfig(n_llm_workers=8, n_eval_processes=8, n_inspirations=1),
     output_dir=RUN_DIR,
 )
 
