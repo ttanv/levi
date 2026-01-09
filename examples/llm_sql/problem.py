@@ -273,5 +273,7 @@ def score_fn(reorder_fn, inputs):
             "baseline_hit_rate": baseline_hit_rate * 100,
             "runtime": avg_runtime,
         }
+    except MemoryError:
+        return {"error": "MemoryError: code used too much memory"}
     except Exception as e:
-        return {"error": str(e)}
+        return {"error": str(e) or type(e).__name__}

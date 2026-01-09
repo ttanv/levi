@@ -3,7 +3,6 @@
 import asyncio
 import logging
 import re
-import resource
 import types
 
 from ..config import AlgoforgeConfig, AlgoforgeResult
@@ -37,30 +36,18 @@ def _extract_fn_name(fn_signature: str) -> str:
 
 
 def _evaluate_code(code: str, score_fn, inputs: list, fn_name: str) -> dict:
-    """Runs in subprocess: parse code, extract callable, call score_fn."""
-    # Limit process memory to 2GB to prevent VM crashes
-    try:
-        memory_bytes = 8 * 1024 * 1024 * 1024
-        resource.setrlimit(resource.RLIMIT_AS, (memory_bytes, memory_bytes))
-    except (ValueError, resource.error):
-        pass  # May fail on some platforms
-
+    """Runs in subprocess for seed evaluation (no memory limit - trusted code)."""
     namespace = {}
     try:
         exec(code, namespace)
     except SyntaxError as e:
         return {"error": f"Syntax error: {e}"}
-    except MemoryError:
-        return {"error": "MemoryError: code exceeded 8GB limit"}
 
     fn = namespace.get(fn_name)
     if not isinstance(fn, types.FunctionType):
         return {"error": f"Function '{fn_name}' not found (got {type(fn).__name__})"}
 
-    try:
-        return score_fn(fn, inputs)
-    except MemoryError:
-        return {"error": "MemoryError: code exceeded 8GB limit"}
+    return score_fn(fn, inputs)
 
 
 def run(config: AlgoforgeConfig) -> AlgoforgeResult:
