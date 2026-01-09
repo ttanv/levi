@@ -323,18 +323,26 @@ class Diversifier:
             if code:
                 candidates.append({"idx": res["idx"], "code": code})
 
-        logger.info(f"[Init Phase 2] Evaluating {len(candidates)} candidates")
+        total_candidates = len(candidates)
+        print(f"[Init Phase 2] Evaluating: 0/{total_candidates}", end='', flush=True)
 
-        # Parallel evaluation
+        # Parallel evaluation with progress logging
+        eval_count = 0
+
         async def eval_candidate(cand: dict) -> tuple[int, dict]:
+            nonlocal eval_count
             try:
                 result = await self._cascade_eval(cand["code"], fn_name)
                 return cand["idx"], {"code": cand["code"], "result": result}
             except Exception as e:
                 return cand["idx"], {"code": cand["code"], "result": {"error": str(e)}}
+            finally:
+                eval_count += 1
+                print(f"\r[Init Phase 2] Evaluating: {eval_count}/{total_candidates}", end='', flush=True)
 
         eval_tasks = [eval_candidate(c) for c in candidates]
         eval_results = await asyncio.gather(*eval_tasks)
+        print()  # Newline after progress complete
 
         # Collect valid programs and behavior vectors
         valid_programs = []
