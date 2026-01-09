@@ -65,7 +65,7 @@ def _evaluate_code(code: str, score_fn: Callable, inputs: list, fn_name: str) ->
     """Runs in subprocess: parse code, extract callable, call score_fn."""
     # Limit process memory to 2GB to prevent VM crashes
     try:
-        memory_bytes = 2 * 1024 * 1024 * 1024
+        memory_bytes = 4 * 1024 * 1024 * 1024
         resource.setrlimit(resource.RLIMIT_AS, (memory_bytes, memory_bytes))
     except (ValueError, resource.error):
         pass  # May fail on some platforms
@@ -76,13 +76,16 @@ def _evaluate_code(code: str, score_fn: Callable, inputs: list, fn_name: str) ->
     except SyntaxError as e:
         return {"error": f"Syntax error: {e}"}
     except MemoryError:
-        return {"error": "MemoryError: code exceeded 2GB limit"}
+        return {"error": "MemoryError: code exceeded 4GB limit"}
 
     fn = namespace.get(fn_name)
     if not isinstance(fn, types.FunctionType):
         return {"error": f"Function '{fn_name}' not found (got {type(fn).__name__})"}
 
-    return score_fn(fn, inputs)
+    try:
+        return score_fn(fn, inputs)
+    except MemoryError:
+        return {"error": "MemoryError: code exceeded 4GB limit"}
 
 
 async def eval_consumer(
