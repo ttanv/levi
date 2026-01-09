@@ -83,7 +83,7 @@ def _evaluate_code(code: str, score_fn, inputs: list, fn_name: str) -> dict:
     """Runs in subprocess: parse code, extract callable, call score_fn."""
     # Limit process memory to 2GB to prevent VM crashes
     try:
-        memory_bytes = 4 * 1024 * 1024 * 1024
+        memory_bytes = 8 * 1024 * 1024 * 1024
         resource.setrlimit(resource.RLIMIT_AS, (memory_bytes, memory_bytes))
     except (ValueError, resource.error):
         pass  # May fail on some platforms
@@ -94,7 +94,7 @@ def _evaluate_code(code: str, score_fn, inputs: list, fn_name: str) -> dict:
     except SyntaxError as e:
         return {"error": f"Syntax error: {e}"}
     except MemoryError:
-        return {"error": "MemoryError: code exceeded 4GB limit"}
+        return {"error": "MemoryError: code exceeded 8GB limit"}
 
     fn = namespace.get(fn_name)
     if not isinstance(fn, types.FunctionType):
@@ -103,7 +103,7 @@ def _evaluate_code(code: str, score_fn, inputs: list, fn_name: str) -> dict:
     try:
         return score_fn(fn, inputs)
     except MemoryError:
-        return {"error": "MemoryError: code exceeded 4GB limit"}
+        return {"error": "MemoryError: code exceeded 8GB limit"}
 
 
 class Diversifier:

@@ -85,7 +85,7 @@ config = AlgoforgeConfig(
         variant_model=LIGHT_MODELS[1],
     ),
     meta_advice=MetaAdviceConfig(interval=50, model=HEAVY_MODEL),
-    pipeline=PipelineConfig(n_llm_workers=12, n_eval_processes=6, n_inspirations=1, output_mode="diff", eval_timeout=360.0),
+    pipeline=PipelineConfig(n_llm_workers=12, n_eval_processes=3, n_inspirations=1, output_mode="diff", eval_timeout=360.0),
     cascade=CascadeConfig(quick_inputs=INPUTS_SAMPLED, quick_timeout=60.0, min_score_ratio=0.75),
     output_dir=RUN_DIR,
 )
