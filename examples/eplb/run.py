@@ -25,9 +25,9 @@ from algoforge.core import Program, EvaluationResult
 from algoforge.pool import CVTMAPElitesPool
 from algoforge.budget import BudgetManager, BudgetExhausted
 from algoforge.llm import LLMClient, LLMConfig, PromptBuilder, ProgramWithScore, OutputMode
-from algoforge.behavior import BehaviorExtractor, GeneralizedBehaviorExtractor
+from algoforge.behavior import BehaviorExtractor
 from algoforge.behavior.extractor import FeatureVector
-from algoforge.methods.alphaevolve import extract_code
+from algoforge.utils import extract_code
 import re
 import json
 import numpy as np
@@ -588,15 +588,10 @@ def main():
     n_workers = 8
     n_inspirations = 1  # Number of inspiration programs to use alongside parent
 
-    # Use generalized behavior extractor with standard features
-    # Features: execution_time, primary_score, loop_count, branch_count,
-    #           function_count, loop_nesting_max, early_exit_count
-    extractor = GeneralizedBehaviorExtractor(
-        feature_set='standard',
-        time_key='execution_time',
-        score_key='primary_score',
-        max_time=60.0,
-        max_score=100.0,
+    # Use behavior extractor with AST and score features
+    extractor = BehaviorExtractor(
+        ast_features=['loop_count', 'branch_count', 'function_count'],
+        score_keys=['execution_time', 'score'],
     )
 
     # Single archive with deferred centroid initialization

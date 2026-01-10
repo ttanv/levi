@@ -4,19 +4,20 @@ AlgoForge: Evolutionary optimization framework for algorithms.
 Example:
     import algoforge as af
 
-    af.configure(models=[
-        af.ModelWeight('gpt-4o-mini', 0.8),
-        af.ModelWeight('gpt-4o', 0.2),
-    ])
-
-    best = af.alphaevolve(
-        score_functions={'score': lambda out, inp, t: -len(out)},
+    config = af.AlgoforgeConfig(
+        problem_description="Optimize bin packing",
+        function_signature="def solve(items) -> list[list[int]]",
+        seed_program="def solve(items): ...",
         inputs=[...],
-        seed_program='def solve(x): ...',
-        problem_description='Optimize bin packing',
-        function_signature='def solve(items) -> list[list[int]]',
-        budget_evaluations=100,
+        score_fn=lambda fn, inputs: {'score': ...},
+        sampler_model_pairs=[
+            af.SamplerModelPair(sampler="weighted", model="gpt-4o-mini", weight=0.8),
+            af.SamplerModelPair(sampler="weighted", model="gpt-4o", weight=0.2),
+        ],
+        budget=af.BudgetConfig(dollars=10.0),
     )
+
+    result = af.run(config)
 """
 
 from typing import Callable, Any, Optional
@@ -28,7 +29,7 @@ from .core import Program, EvaluationResult, MetricDict, OutputDict
 from .budget import BudgetManager, BudgetExhausted, ResourceType
 
 # Protocols and pools
-from .pool import ProgramPool, SampleResult, SimplePool, CVTMAPElitesPool
+from .pool import ProgramPool, SampleResult, CVTMAPElitesPool
 from .evaluator import Evaluator, EvaluationStage, SandboxedEvaluator
 from .database import RawStorage, StorageRecord, InMemoryStorage
 
@@ -41,10 +42,7 @@ from .llm import (
 # Behavior
 from .behavior import BehaviorExtractor, FeatureVector
 
-# Configuration
-from ._config import configure, get_config, AlgoForgeConfig
-
-# New config types
+# Config types
 from .config import (
     AlgoforgeConfig,
     AlgoforgeResult,
@@ -60,43 +58,9 @@ from .config import (
 )
 
 # Methods
-from .methods import alphaevolve, run
+from .methods import run
 
 __version__ = "0.1.0"
-
-# Stubs for unimplemented methods
-
-def funsearch(
-    evaluate: Callable[[Any, Any], float],
-    instances: list,
-    budget_rollouts: Optional[int] = None,
-    budget_dollars: Optional[float] = None,
-    budget_seconds: Optional[float] = None,
-    **kwargs
-) -> Program:
-    """Run FunSearch algorithm."""
-    raise NotImplementedError("FunSearch method not yet implemented")
-
-
-def gepa(
-    evaluate: Callable[[Any, Any], float],
-    instances: list,
-    budget_rollouts: Optional[int] = None,
-    budget_dollars: Optional[float] = None,
-    budget_seconds: Optional[float] = None,
-    **kwargs
-) -> Program:
-    """Run GEPA algorithm with reflective evolution."""
-    raise NotImplementedError("GEPA method not yet implemented")
-
-
-def discover(
-    evaluate: Callable[[Any, Any], float],
-    instances: list,
-    **kwargs
-) -> Program:
-    """Auto-select best method and run discovery."""
-    raise NotImplementedError("Discovery method not yet implemented")
 
 
 __all__ = [
@@ -112,7 +76,6 @@ __all__ = [
     # Pool
     'ProgramPool',
     'SampleResult',
-    'SimplePool',
     'CVTMAPElitesPool',
     # Evaluator
     'Evaluator',
@@ -133,11 +96,7 @@ __all__ = [
     # Behavior
     'BehaviorExtractor',
     'FeatureVector',
-    # Legacy config
-    'configure',
-    'get_config',
-    'AlgoForgeConfig',
-    # New config types
+    # Config types
     'AlgoforgeConfig',
     'AlgoforgeResult',
     'BudgetConfig',
@@ -151,8 +110,4 @@ __all__ = [
     'PipelineConfig',
     # Methods
     'run',
-    'alphaevolve',
-    'funsearch',
-    'gepa',
-    'discover',
 ]

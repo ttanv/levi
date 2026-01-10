@@ -4,7 +4,6 @@ import asyncio
 import json
 import logging
 import random
-import re
 import types
 from datetime import datetime
 from itertools import cycle
@@ -29,36 +28,13 @@ from ..config import AlgoforgeConfig, AlgoforgeResult, BudgetConfig
 from ..core import Program, EvaluationResult
 from ..behavior import BehaviorExtractor
 from ..llm import PromptBuilder, ProgramWithScore, OutputMode
-from ..utils import ResilientProcessPool
+from ..utils import ResilientProcessPool, extract_code, extract_fn_name
 from ..pipeline.state import PipelineState
 from ..pipeline.consumer import _generate_meta_advice
 from .coordinator import IslandCoordinator
 from .diversifier import IslandDiversifier
 
 logger = logging.getLogger(__name__)
-
-
-def _extract_code(response: str) -> Optional[str]:
-    """Extract Python code from LLM response."""
-    response = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL)
-    response = re.sub(r'<thinking>.*?</thinking>', '', response, flags=re.DOTALL)
-
-    matches = re.findall(r'```python\s*(.*?)```', response, re.DOTALL)
-    if matches:
-        return matches[0].strip()
-
-    matches = re.findall(r'```\s*(.*?)```', response, re.DOTALL)
-    if matches:
-        return matches[0].strip()
-
-    return None
-
-
-def _extract_fn_name(fn_signature: str) -> str:
-    match = re.search(r'def\s+(\w+)\s*\(', fn_signature)
-    if match:
-        return match.group(1)
-    return 'solve'
 
 
 def _evaluate_code(code: str, score_fn, inputs: list, fn_name: str) -> dict:
@@ -226,7 +202,7 @@ class IslandPipelineRunner:
                     self.stop_event.set()
                     break
 
-                code = _extract_code(content)
+                code = extract_code(content)
                 if not code:
                     continue
 
@@ -246,7 +222,7 @@ class IslandPipelineRunner:
 
     async def _eval_consumer(self, worker_id: int) -> None:
         """Evaluate code and add to source island."""
-        fn_name = _extract_fn_name(self.config.function_signature)
+        fn_name = extract_fn_name(self.config.function_signature)
 
         while not self.stop_event.is_set() or not self.code_queue.empty():
             try:
@@ -492,7 +468,7 @@ async def run_islands_async(
     executor = ResilientProcessPool(max_workers=config.pipeline.n_eval_processes)
 
     try:
-        fn_name = _extract_fn_name(config.function_signature)
+        fn_name = extract_fn_name(config.function_signature)
         logger.info("[Islands] Evaluating seed program")
 
         seed_result = await executor.run(

@@ -2,7 +2,6 @@
 
 import asyncio
 import logging
-import re
 import types
 
 from ..config import AlgoforgeConfig, AlgoforgeResult
@@ -11,7 +10,7 @@ from ..pool import CVTMAPElitesPool
 from ..behavior import BehaviorExtractor
 from ..pipeline import PipelineRunner
 from ..init import Diversifier
-from ..utils import ResilientProcessPool
+from ..utils import ResilientProcessPool, extract_fn_name
 
 logger = logging.getLogger(__name__)
 
@@ -26,13 +25,6 @@ def _setup_logging() -> None:
     logging.getLogger("LiteLLM").setLevel(logging.ERROR)
     logging.getLogger("litellm").setLevel(logging.ERROR)
     logging.getLogger("httpx").setLevel(logging.WARNING)
-
-
-def _extract_fn_name(fn_signature: str) -> str:
-    match = re.search(r'def\s+(\w+)\s*\(', fn_signature)
-    if match:
-        return match.group(1)
-    return 'solve'
 
 
 def _evaluate_code(code: str, score_fn, inputs: list, fn_name: str) -> dict:
@@ -89,7 +81,7 @@ async def _run_async(config: AlgoforgeConfig) -> AlgoforgeResult:
 
     try:
         # Evaluate seed program
-        fn_name = _extract_fn_name(config.function_signature)
+        fn_name = extract_fn_name(config.function_signature)
         logger.info("[AlgoForge] Evaluating seed program")
 
         try:

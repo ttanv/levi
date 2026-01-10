@@ -11,7 +11,6 @@ Flow:
 import asyncio
 import logging
 import random
-import re
 import types
 from typing import Optional
 
@@ -23,7 +22,7 @@ from ..core import Program, EvaluationResult
 from ..pool import CVTMAPElitesPool
 from ..behavior import BehaviorExtractor
 from ..llm import PromptBuilder, ProgramWithScore, OutputMode
-from ..utils import ResilientProcessPool
+from ..utils import ResilientProcessPool, extract_code, extract_fn_name
 from .coordinator import IslandCoordinator
 
 logger = logging.getLogger(__name__)
@@ -55,29 +54,6 @@ Design a solution using a **FUNDAMENTALLY DIFFERENT ALGORITHM** than the existin
 ## Output
 Output ONLY the complete Python code in a ```python block.
 """
-
-
-def extract_code(response: str) -> Optional[str]:
-    """Extract Python code from LLM response."""
-    response = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL)
-    response = re.sub(r'<thinking>.*?</thinking>', '', response, flags=re.DOTALL)
-
-    matches = re.findall(r'```python\s*(.*?)```', response, re.DOTALL)
-    if matches:
-        return matches[0].strip()
-
-    matches = re.findall(r'```\s*(.*?)```', response, re.DOTALL)
-    if matches:
-        return matches[0].strip()
-
-    return None
-
-
-def extract_fn_name(fn_signature: str) -> str:
-    match = re.search(r'def\s+(\w+)\s*\(', fn_signature)
-    if match:
-        return match.group(1)
-    return 'solve'
 
 
 def _evaluate_code(code: str, score_fn, inputs: list, fn_name: str) -> dict:

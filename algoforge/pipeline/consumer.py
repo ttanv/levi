@@ -2,7 +2,6 @@
 
 import asyncio
 import logging
-import re
 import resource
 import types
 from typing import Callable, Optional
@@ -10,7 +9,7 @@ from typing import Callable, Optional
 from ..config import AlgoforgeConfig
 from ..core import Program, EvaluationResult
 from ..pool import CVTMAPElitesPool
-from ..utils import ResilientProcessPool
+from ..utils import ResilientProcessPool, extract_fn_name
 from .state import PipelineState
 
 SNAPSHOT_INTERVAL = 10  # Save snapshot every N evaluations
@@ -52,13 +51,6 @@ Keep it SHORT and DIRECT:
 
 {metrics_data}
 """
-
-
-def extract_fn_name(fn_signature: str) -> str:
-    match = re.search(r'def\s+(\w+)\s*\(', fn_signature)
-    if match:
-        return match.group(1)
-    return 'solve'
 
 
 def _evaluate_code(code: str, score_fn: Callable, inputs: list, fn_name: str) -> dict:

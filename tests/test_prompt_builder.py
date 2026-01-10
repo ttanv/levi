@@ -397,7 +397,7 @@ class TestPromptBuilderIntegration:
         assert "<<<<<<< SEARCH" in prompt
         assert "=======" in prompt
         assert ">>>>>>> REPLACE" in prompt
-        assert "ONE format" in prompt
+        assert "SEARCH/REPLACE" in prompt
 
     def test_feedback_driven_prompt(self):
         """Builds a prompt with execution feedback."""

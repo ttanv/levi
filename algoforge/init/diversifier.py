@@ -3,7 +3,6 @@
 import asyncio
 import logging
 import random
-import re
 import resource
 import types
 from typing import Optional
@@ -16,7 +15,7 @@ from ..core import Program, EvaluationResult
 from ..pool import CVTMAPElitesPool
 from ..behavior import BehaviorExtractor
 from ..llm import PromptBuilder, ProgramWithScore, OutputMode
-from ..utils import ResilientProcessPool
+from ..utils import ResilientProcessPool, extract_code, extract_fn_name
 
 logger = logging.getLogger(__name__)
 
@@ -54,29 +53,6 @@ The goal is to explore different regions of the algorithm design space. A popula
 ## Output
 Output ONLY the complete Python code in a ```python block.
 """
-
-
-def extract_code(response: str) -> Optional[str]:
-    """Extract Python code from LLM response."""
-    response = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL)
-    response = re.sub(r'<thinking>.*?</thinking>', '', response, flags=re.DOTALL)
-
-    matches = re.findall(r'```python\s*(.*?)```', response, re.DOTALL)
-    if matches:
-        return matches[0].strip()
-
-    matches = re.findall(r'```\s*(.*?)```', response, re.DOTALL)
-    if matches:
-        return matches[0].strip()
-
-    return None
-
-
-def extract_fn_name(fn_signature: str) -> str:
-    match = re.search(r'def\s+(\w+)\s*\(', fn_signature)
-    if match:
-        return match.group(1)
-    return 'solve'
 
 
 def _evaluate_code(code: str, score_fn, inputs: list, fn_name: str) -> dict:

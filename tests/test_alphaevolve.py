@@ -1,5 +1,5 @@
 """
-Tests for alphaevolve method: extract_code and apply_diff helpers.
+Tests for code extraction and diff helpers.
 
 These are critical for the refactoring since they handle code extraction
 from LLM responses and DIFF application.
@@ -7,7 +7,8 @@ from LLM responses and DIFF application.
 
 import pytest
 
-from algoforge.methods.alphaevolve import extract_code, apply_diff
+from algoforge.utils import extract_code
+from algoforge.pipeline.producer import apply_diff
 
 
 class TestExtractCode:

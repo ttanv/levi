@@ -11,36 +11,10 @@ import litellm
 from ..config import AlgoforgeConfig
 from ..pool import CVTMAPElitesPool
 from ..llm import PromptBuilder, ProgramWithScore, OutputMode
+from ..utils import extract_code
 from .state import PipelineState
 
 logger = logging.getLogger(__name__)
-
-
-def extract_code(response: str) -> Optional[str]:
-    """Extract Python code from LLM response."""
-    response = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL)
-    response = re.sub(r'<thinking>.*?</thinking>', '', response, flags=re.DOTALL)
-
-    matches = re.findall(r'```python\s*(.*?)```', response, re.DOTALL)
-    if matches:
-        return matches[0].strip()
-
-    matches = re.findall(r'```\s*(.*?)```', response, re.DOTALL)
-    if matches:
-        return matches[0].strip()
-
-    stripped = response.strip()
-    for pattern in ['def ', 'import ', 'from ', '# ', '"""', "'''"]:
-        if stripped.startswith(pattern):
-            return stripped
-
-    for line in stripped.split('\n'):
-        line = line.strip()
-        if line.startswith(('def ', 'import ', 'from ', 'class ')):
-            idx = stripped.find(line)
-            return stripped[idx:].strip()
-
-    return None
 
 
 def apply_diff(original: str, diff_response: str) -> Optional[str]:
