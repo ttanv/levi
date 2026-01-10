@@ -238,12 +238,12 @@ class Diversifier:
         fn_name: str,
         extractor: BehaviorExtractor,
     ) -> tuple[list[dict], list[np.ndarray]]:
-        """Phase 2: Generate variants in parallel using light model."""
+        """Phase 2: Generate variants in parallel using light model(s)."""
         n_variants_per_seed = self.config.init.n_variants_per_seed
-        model = self.config.init.variant_model or "gpt-4o-mini"
+        models = self.config.init.variant_models or ["gpt-4o-mini"]
         n_variants = n_variants_per_seed * len(diverse_seeds)
 
-        logger.info(f"[Init Phase 2] Generating {n_variants} variants with {model}")
+        logger.info(f"[Init Phase 2] Generating {n_variants} variants with {models}")
 
         # Build prompts for all variants with inspirations from other seeds
         prompts = []
@@ -273,8 +273,8 @@ class Diversifier:
                 builder.set_output_mode(OutputMode.FULL)
                 prompts.append(builder.build())
 
-        # Parallel LLM calls
-        async def generate_variant(idx: int, prompt: str) -> dict:
+        # Parallel LLM calls (cycle through models)
+        async def generate_variant(idx: int, prompt: str, model: str) -> dict:
             try:
                 response = await litellm.acompletion(
                     model=model,
@@ -289,7 +289,7 @@ class Diversifier:
             except Exception as e:
                 return {"idx": idx, "error": str(e)}
 
-        tasks = [generate_variant(i, prompts[i]) for i in range(n_variants)]
+        tasks = [generate_variant(i, prompts[i], models[i % len(models)]) for i in range(n_variants)]
         results = await asyncio.gather(*tasks)
 
         # Extract code from responses

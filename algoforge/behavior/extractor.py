@@ -16,6 +16,13 @@ from .features import (
     compute_math_operators,
     compute_branch_count,
     compute_loop_nesting_max,
+    compute_function_def_count,
+    compute_numeric_literal_count,
+    compute_comparison_count,
+    compute_subscript_count,
+    compute_call_count,
+    compute_comprehension_count,
+    compute_range_max_arg,
 )
 
 
@@ -41,6 +48,13 @@ class BehaviorExtractor:
         "math_operators": compute_math_operators,
         "branch_count": compute_branch_count,
         "loop_nesting_max": compute_loop_nesting_max,
+        "function_def_count": compute_function_def_count,
+        "numeric_literal_count": compute_numeric_literal_count,
+        "comparison_count": compute_comparison_count,
+        "subscript_count": compute_subscript_count,
+        "call_count": compute_call_count,
+        "comprehension_count": compute_comprehension_count,
+        "range_max_arg": compute_range_max_arg,
     }
 
     def __init__(

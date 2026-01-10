@@ -32,7 +32,7 @@ class InitConfig(BaseModel):
     n_diverse_seeds: int = 5
     n_variants_per_seed: int = 25
     diversity_model: Optional[str] = None
-    variant_model: Optional[str] = None
+    variant_models: Optional[list[str]] = None  # Models to cycle through for variant generation
     temperature: float = 0.8
 
 
