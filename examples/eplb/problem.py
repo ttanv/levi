@@ -1,7 +1,24 @@
 """
-Prompts for EPLB (Expert Parallelism Load Balancer) evolution.
+EPLB (Expert Parallelism Load Balancer) Problem Definition.
+
+Contains problem description, prompts, scoring function, and test inputs.
 """
 
+import os
+import json
+import time
+from pathlib import Path
+
+import torch
+
+# --- EPLB Constants ---
+NUM_REPLICAS = 288
+NUM_GROUPS = 8
+NUM_GPUS = 32
+NUM_NODES = 4
+REBALANCE_INTERVAL = 100
+
+# --- Prompts ---
 PROBLEM_DESCRIPTION = """
 # Expert Parallelism Load Balancer (EPLB)
 
@@ -272,9 +289,7 @@ def rebalance_experts(
     return phy2log, log2phy, logcnt
 '''
 
-# Inspiration seeds varying in complexity and approach
 SEED_INSPIRATIONS = [
-    # === SIMPLE SEEDS ===
     # 1. Minimal: uniform distribution (very simple baseline)
     '''import torch
 
@@ -501,3 +516,192 @@ def rebalance_experts(
     return phy2log, log2phy, logcnt
 ''',
 ]
+
+# --- Workload Loading ---
+_WORKLOADS = None
+
+
+def _find_workload_path() -> str:
+    """Find the expert-load.json file."""
+    # Try Docker path first
+    docker_path = "/datasets/eplb/expert-load.json"
+    if os.path.exists(docker_path):
+        return docker_path
+
+    # Try relative to this file
+    this_dir = Path(__file__).parent
+    possible_paths = [
+        this_dir.parent.parent.parent / "ADRS-Leaderboard" / "datasets" / "eplb" / "expert-load.json",
+        this_dir.parent.parent.parent.parent / "ADRS-Leaderboard" / "datasets" / "eplb" / "expert-load.json",
+        Path.home() / "ADRS-Leaderboard" / "datasets" / "eplb" / "expert-load.json",
+    ]
+
+    for path in possible_paths:
+        if path.exists():
+            return str(path)
+
+    raise FileNotFoundError(
+        f"expert-load.json not found. Tried: {docker_path}, {[str(p) for p in possible_paths]}"
+    )
+
+
+def _load_workloads():
+    """Load workloads from JSON file (cached)."""
+    global _WORKLOADS
+    if _WORKLOADS is None:
+        workload_path = _find_workload_path()
+        with open(workload_path, "r") as f:
+            data = json.load(f)
+
+        total_len = len(data['load_history'])
+        workloads = []
+        for i in range(0, total_len, REBALANCE_INTERVAL):
+            start = i
+            end = min(start + REBALANCE_INTERVAL, total_len)
+            load = torch.tensor([x['logical_expert_load'] for x in data['load_history'][start:end]]).sum(dim=0)
+            workloads.append(load)
+
+        _WORKLOADS = workloads
+    return _WORKLOADS
+
+
+def get_inputs():
+    """Return the workloads as inputs for the scoring function."""
+    return _load_workloads()
+
+
+# --- Simulation ---
+def simulate_inference(log2phy, logcnt, workload):
+    """Simulate MoE inference and return balancedness scores."""
+    num_layers, num_logical_experts = workload.shape
+
+    # Initialize physical expert load accumulator
+    num_physical_experts = NUM_REPLICAS
+    total_physical_load = torch.zeros(num_layers, num_physical_experts, dtype=torch.float, device=workload.device)
+
+    # For each logical expert, distribute load to its physical replicas
+    for layer_id in range(num_layers):
+        for logical_id in range(num_logical_experts):
+            logical_load = workload[layer_id][logical_id].item()
+            if logical_load <= 0:
+                continue
+
+            num_replicas = int(logcnt[layer_id][logical_id].item())
+            if num_replicas <= 0:
+                continue
+
+            physical_ids = log2phy[layer_id][logical_id][:num_replicas]
+            replica_load = logical_load / num_replicas
+            total_physical_load[layer_id, physical_ids] += replica_load
+
+    # Calculate balancedness
+    total_load = total_physical_load.sum()
+    if total_load == 0:
+        return 0.0, 0.0
+
+    # Compute expert load
+    expert_layer_avg = total_physical_load.mean(dim=1).sum().item()
+    expert_layer_max = total_physical_load.max(dim=1).values.sum().item()
+    balancedness_expert = expert_layer_avg / expert_layer_max if expert_layer_max > 0 else 0.0
+
+    # Compute GPU load
+    gpu_load = total_physical_load.view(num_layers, NUM_GPUS, -1).sum(dim=2)
+
+    layer_avg = gpu_load.mean(dim=1)
+    layer_max = gpu_load.max(dim=1).values
+
+    avg_load = layer_avg.sum().item()
+    max_load = layer_max.sum().item()
+
+    balancedness_gpu = avg_load / max_load if max_load > 0 else 0.0
+
+    return balancedness_gpu, balancedness_expert
+
+
+# --- Score Function ---
+def score_fn(rebalance_experts, inputs):
+    """
+    Evaluate EPLB algorithm.
+
+    Args:
+        rebalance_experts: The function to evaluate
+        inputs: List of workload tensors
+
+    Returns:
+        dict with 'score' or 'error' key
+    """
+    try:
+        workloads = inputs
+
+        balancedness_scores_gpu = []
+        balancedness_scores_expert = []
+        times_algorithm = []
+
+        for i in range(len(workloads) - 1):
+            start_time = time.perf_counter()
+            phy2log, log2phy, logcnt = rebalance_experts(
+                workloads[i],
+                NUM_REPLICAS,
+                NUM_GROUPS,
+                NUM_NODES,
+                NUM_GPUS,
+            )
+            end_time = time.perf_counter()
+
+            # Validate outputs
+            if phy2log.shape[1] != NUM_REPLICAS:
+                return {"error": f"phy2log shape wrong: {phy2log.shape}"}
+
+            if not torch.all(logcnt.sum(dim=1) == NUM_REPLICAS):
+                sums = logcnt.sum(dim=1)
+                return {"error": f"logcnt sums != {NUM_REPLICAS}: {sums[:5].tolist()}..."}
+
+            balancedness_gpu, balancedness_expert = simulate_inference(
+                log2phy, logcnt, workloads[i + 1]
+            )
+
+            balancedness_scores_gpu.append(balancedness_gpu)
+            balancedness_scores_expert.append(balancedness_expert)
+            times_algorithm.append(end_time - start_time)
+
+        avg_balancedness_gpu = sum(balancedness_scores_gpu) / len(balancedness_scores_gpu)
+        avg_balancedness_expert = sum(balancedness_scores_expert) / len(balancedness_scores_expert)
+        avg_time = sum(times_algorithm) / len(times_algorithm)
+
+        # Scoring formula from evaluator
+        balancedness_score = avg_balancedness_gpu * 90
+        speed_raw = 0.002 / avg_time if avg_time > 0 else 2.0
+        speed_capped = min(speed_raw, 2.0)
+        speed_score = speed_capped * 5
+
+        if avg_time > 0.01:  # > 10ms
+            slow_penalty = min(avg_time * 20, 20)
+        else:
+            slow_penalty = 0
+
+        score = balancedness_score + speed_score - slow_penalty
+
+        return {
+            "score": score,
+            "balancedness_gpu": avg_balancedness_gpu,
+            "balancedness_expert": avg_balancedness_expert,
+            "avg_time": avg_time,
+            "execution_time": avg_time,  # Alias for behavior extraction
+            "balancedness_score": balancedness_score,
+            "speed_score": speed_score,
+            "slow_penalty": slow_penalty,
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+# --- Test Inputs (lazy loaded) ---
+INPUTS = None
+
+
+def get_lazy_inputs():
+    """Get inputs, loading them lazily on first access."""
+    global INPUTS
+    if INPUTS is None:
+        INPUTS = get_inputs()
+    return INPUTS
