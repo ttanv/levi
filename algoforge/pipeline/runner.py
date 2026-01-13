@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Optional
 
 from ..config import AlgoforgeConfig, AlgoforgeResult
+from ..equilibrium import PunctuatedEquilibrium
 from ..pool import CVTMAPElitesPool
 from ..utils import ResilientProcessPool
 from .state import PipelineState
@@ -41,6 +42,16 @@ class PipelineRunner:
         if output_dir:
             self.output_dir = Path(output_dir)
             self.output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Initialize Punctuated Equilibrium if enabled
+        self.pe: Optional[PunctuatedEquilibrium] = None
+        if config.punctuated_equilibrium.enabled:
+            self.pe = PunctuatedEquilibrium(
+                config=config,
+                pool=pool,
+                executor=executor,
+                archive_lock=self.archive_lock,
+            )
 
     async def run(self) -> AlgoforgeResult:
         logger.info(f"[Pipeline] Starting with {self.config.pipeline.n_llm_workers} LLM workers, "
@@ -80,6 +91,12 @@ class PipelineRunner:
 
         status_task = asyncio.create_task(self._status_monitor())
 
+        # Launch Punctuated Equilibrium monitor if enabled
+        pe_task = None
+        if self.pe:
+            pe_task = asyncio.create_task(self._pe_monitor())
+            logger.info(f"[Pipeline] Punctuated equilibrium enabled (interval={self.config.punctuated_equilibrium.interval})")
+
         try:
             await self._wait_for_completion()
         finally:
@@ -103,6 +120,14 @@ class PipelineRunner:
             except asyncio.CancelledError:
                 pass
 
+            # Cancel PE task if running
+            if pe_task:
+                pe_task.cancel()
+                try:
+                    await pe_task
+                except asyncio.CancelledError:
+                    pass
+
             # Final snapshot on completion
             if self.output_dir:
                 self.save_snapshot(final=True)
@@ -125,6 +150,32 @@ class PipelineRunner:
                 f"Archive: {self.pool.size()} | "
                 f"Best: {best_score:.1f}"
             )
+
+    async def _pe_monitor(self) -> None:
+        """Monitor for punctuated equilibrium trigger conditions."""
+        pe_config = self.config.punctuated_equilibrium
+
+        while not self.stop_event.is_set():
+            await asyncio.sleep(2.0)  # Check every 2 seconds
+
+            if self.state.budget_exhausted:
+                break
+
+            # Check if we should trigger PE
+            if (self.state.eval_count > 0 and
+                self.state.eval_count % pe_config.interval == 0 and
+                self.state.eval_count != self.state.last_pe_eval_count):
+
+                self.state.last_pe_eval_count = self.state.eval_count
+                self.state.pe_trigger_count += 1
+
+                logger.info(f"[PE] Triggering punctuated equilibrium #{self.state.pe_trigger_count} "
+                           f"at eval {self.state.eval_count}")
+
+                stats = await self.pe.trigger(self.state.eval_count)
+
+                # Add PE cost to total
+                self.state.add_cost(stats["total_cost"])
 
     def save_snapshot(self, final: bool = False) -> None:
         """Save current archive state to JSON file (overwrites previous)."""
@@ -155,6 +206,8 @@ class PipelineRunner:
                 "accepted": entry.accepted,
                 "sampler": entry.sampler,
                 "archive_size": entry.archive_size,
+                "cell_index": entry.cell_index,
+                "is_punctuated_equilibrium": entry.is_punctuated_equilibrium,
             }
             for entry in self.state.score_history
         ]
