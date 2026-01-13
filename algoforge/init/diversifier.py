@@ -245,11 +245,8 @@ class Diversifier:
 
         logger.info(f"[Init Phase 2] Generating {n_variants} variants with {models}")
 
-        # Build prompts for all variants with inspirations from other seeds
-        prompts = []
-        n_inspirations = self.config.pipeline.n_inspirations
-
-        seed_programs = []
+        # Build all seeds as ProgramWithScore for sampling
+        all_parents = []
         for seed_code, seed_score, _ in diverse_seeds:
             prog = Program(code=seed_code, metadata={"score": seed_score})
             eval_res = EvaluationResult(
@@ -257,19 +254,21 @@ class Diversifier:
                 scores={'score': seed_score},
                 is_valid=True,
             )
-            seed_programs.append(ProgramWithScore(prog, eval_res))
+            all_parents.append(ProgramWithScore(prog, eval_res))
+
+        # Build prompts - each variant randomly samples 2 seeds as inspirations
+        prompts = []
+        n_inspirations = min(2, len(all_parents))  # Sample 2 seeds as inspirations
 
         for seed_idx, (seed_code, seed_score, _) in enumerate(diverse_seeds):
-            parent = seed_programs[seed_idx]
-            other_seeds = [sp for i, sp in enumerate(seed_programs) if i != seed_idx]
-
             for _ in range(n_variants_per_seed):
-                inspirations = random.sample(other_seeds, min(n_inspirations, len(other_seeds))) if other_seeds and n_inspirations > 0 else []
+                # Randomly sample inspirations from all seeds
+                inspirations = random.sample(all_parents, n_inspirations)
 
                 builder = PromptBuilder()
                 builder.add_section("Problem", self.config.problem_description, priority=10)
                 builder.add_section("Signature", f"```python\n{self.config.function_signature}\n```", priority=20)
-                builder.add_parents([parent] + inspirations, priority=30)
+                builder.add_parents(inspirations, priority=30)
                 builder.set_output_mode(OutputMode.FULL)
                 prompts.append(builder.build())
 
@@ -343,6 +342,7 @@ class Diversifier:
                 "code": data["code"],
                 "score": score,
                 "result": result,
+                "behavior": behavior,
             })
             behavior_vectors.append(np.array([behavior[f] for f in extractor.features]))
 
@@ -354,6 +354,7 @@ class Diversifier:
                 "code": seed_code,
                 "score": seed_score,
                 "result": seed_result,
+                "behavior": behavior,
             })
             behavior_vectors.append(np.array([behavior[f] for f in extractor.features]))
 
@@ -376,10 +377,9 @@ class Diversifier:
         seed_program: str = None,
         seed_result: dict = None,
     ) -> None:
-        """Phase 3: Build centroids and populate archive."""
+        """Phase 3: Build centroids and populate archive using k-means labels directly."""
         if len(behavior_vectors) < 3:
             logger.warning("[Init Phase 3] Not enough valid programs to build centroids")
-            # Still add the seed program as fallback so archive isn't empty
             if seed_program and seed_result and "error" not in seed_result:
                 program = Program(code=seed_program, metadata={"primary_score": seed_result.get('score', 0.0)})
                 eval_result = EvaluationResult(
@@ -387,37 +387,41 @@ class Diversifier:
                     scores=seed_result,
                     is_valid=True,
                 )
-                pool.add(program, eval_result)
-                logger.info(f"[Init Phase 3] Added seed program as fallback, archive size: {pool.size()}")
+                accepted, _ = pool.add(program, eval_result)
+                logger.info(f"[Init Phase 3] Added seed program as fallback (accepted={accepted}), archive size: {pool.size()}")
             extractor.set_phase('evolution')
             return
 
-        # Build centroids from behavior data
-        n_centroids = pool.set_centroids_from_data(
+        # Build centroids and get k-means labels for each program
+        n_centroids, labels = pool.set_centroids_from_data(
             behavior_vectors,
-            percentile_low=5.0,
-            percentile_high=95.0,
             n_centroids=self.config.cvt.n_centroids,
         )
         logger.info(f"[Init Phase 3] Built {n_centroids} centroids")
 
-        # Sort by score and add top programs
-        valid_programs.sort(key=lambda x: x["score"], reverse=True)
-        top_programs = valid_programs[:self.config.cvt.n_centroids]
+        # Group programs by their assigned cell (from k-means labels)
+        cell_to_programs: dict[int, list[dict]] = {}
+        for idx, prog in enumerate(valid_programs):
+            cell = int(labels[idx])
+            if cell not in cell_to_programs:
+                cell_to_programs[cell] = []
+            cell_to_programs[cell].append(prog)
 
+        # For each cell, add the best-scoring program directly (no re-extraction)
         n_accepted = 0
-        for prog in top_programs:
-            program = Program(code=prog["code"], metadata={"primary_score": prog["score"]})
+        for cell_idx, progs in cell_to_programs.items():
+            best_prog = max(progs, key=lambda x: x["score"])
+            program = Program(code=best_prog["code"], metadata={"primary_score": best_prog["score"]})
             eval_result = EvaluationResult(
                 program_id=program.id,
-                scores=prog["result"],
+                scores=best_prog["result"],
                 is_valid=True,
             )
-            if pool.add(program, eval_result):
+            if pool.add_at_cell(cell_idx, program, eval_result, best_prog["behavior"]):
                 n_accepted += 1
 
-        best_score = valid_programs[0]["score"] if valid_programs else 0.0
-        logger.info(f"[Init Phase 3] Done: {n_accepted} accepted, archive size: {pool.size()}, best: {best_score:.1f}, cost: ${self.total_cost:.3f}")
+        best_score = max(p["score"] for p in valid_programs) if valid_programs else 0.0
+        logger.info(f"[Init Phase 3] Done: {n_accepted} cells filled, archive size: {pool.size()}, best: {best_score:.1f}, cost: ${self.total_cost:.3f}")
 
         # Switch extractor to evolution phase
         extractor.set_phase('evolution')
