@@ -13,6 +13,14 @@ litellm.register_model({
         "output_cost_per_token": 0.0000004,
         "litellm_provider": "openrouter",
     },
+    "openrouter/google/gemini-2.5-flash": {
+        "max_tokens": 65536,
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 65536,
+        "input_cost_per_token": 0.0000003,
+        "output_cost_per_token": 0.0000025,
+        "litellm_provider": "openrouter",
+    },
     "openrouter/deepseek/deepseek-v3.2": {
         "max_tokens": 163840,
         "max_input_tokens": 163840,
@@ -29,21 +37,17 @@ litellm.register_model({
         "output_cost_per_token": 0.00000027,
         "litellm_provider": "openrouter",
     },
-    "openrouter/google/gemini-2.5-pro": {
-        "max_tokens": 65536,
-        "max_input_tokens": 1048576,
-        "max_output_tokens": 65536,
-        "input_cost_per_token": 0.00000125,
-        "output_cost_per_token": 0.000010,
-        "litellm_provider": "openrouter",
-    },
 })
 
 from problem import PROBLEM_DESCRIPTION, FUNCTION_SIGNATURE, SEED_PROGRAM, INPUTS, score_fn
 from algoforge import (
     run, AlgoforgeConfig, BudgetConfig, SamplerModelPair,
-    InitConfig, MetaAdviceConfig, PipelineConfig, CVTConfig
+    InitConfig, MetaAdviceConfig, PipelineConfig, CVTConfig, BehaviorConfig
 )
+from algoforge.config.models import PunctuatedEquilibriumConfig
+
+PRISM_AST_FEATURES = ['loop_nesting_max', 'subscript_count', 'comparison_count', 'function_def_count']
+PRISM_SCORE_KEYS = ['execution_time']
 
 # --- Config ---
 LIGHT_MODELS = [
@@ -51,7 +55,7 @@ LIGHT_MODELS = [
     "openrouter/google/gemini-2.5-flash-lite",
     "openrouter/deepseek/deepseek-v3.2",
 ]
-HEAVY_MODEL = "openrouter/deepseek/deepseek-v3.2"
+HEAVY_MODEL = "openrouter/google/gemini-2.5-flash"
 
 RUN_DIR = f"runs/{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
@@ -61,7 +65,7 @@ config = AlgoforgeConfig(
     seed_program=SEED_PROGRAM,
     inputs=INPUTS,
     score_fn=score_fn,
-    budget=BudgetConfig(dollars=4.0),
+    budget=BudgetConfig(dollars=3.0),
     sampler_model_pairs=[
         SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[0], weight=1.0, temperature=0.7),
         SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[1], weight=1.0, temperature=0.7),
@@ -69,15 +73,26 @@ config = AlgoforgeConfig(
         SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[0], weight=1.0, temperature=1.2),
         SamplerModelPair(sampler="softmax", model=HEAVY_MODEL, weight=1.0, temperature=0.3),
     ],
-    cvt=CVTConfig(n_centroids=50, defer_centroids=True),
+    cvt=CVTConfig(n_centroids=40, defer_centroids=True),
     init=InitConfig(
         n_diverse_seeds=5,
-        n_variants_per_seed=30,
-        diversity_model="openrouter/deepseek/deepseek-v3.2",
-        variant_model=LIGHT_MODELS[1],
+        n_variants_per_seed=40,
+        diversity_model=HEAVY_MODEL,
+        variant_models=LIGHT_MODELS,  # Cycle through all light models
     ),
     meta_advice=MetaAdviceConfig(interval=50, model=HEAVY_MODEL),
     pipeline=PipelineConfig(n_llm_workers=8, n_eval_processes=8, n_inspirations=1),
+    behavior=BehaviorConfig(ast_features=PRISM_AST_FEATURES, score_keys=PRISM_SCORE_KEYS),
+    punctuated_equilibrium=PunctuatedEquilibriumConfig(
+        enabled=True,
+        interval=50,  # Trigger every 50 evaluations
+        n_clusters=3,  # Divide centroids into 3 behavioral clusters
+        n_variants=5,  # Generate 5 variants per paradigm shift
+        heavy_model=HEAVY_MODEL,
+        variant_models=LIGHT_MODELS,
+        behavior_noise=0.05,
+        temperature=1.0,
+    ),
     output_dir=RUN_DIR,
 )
 

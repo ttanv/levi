@@ -5,6 +5,7 @@ Contains problem description, prompts, scoring function, and test inputs.
 """
 
 from dataclasses import dataclass
+import time
 import numpy as np
 
 # --- Problem Infrastructure ---
@@ -236,10 +237,13 @@ def score_fn(compute_model_placement, inputs):
     """Evaluate placement algorithm: returns 0-100 score with sqrt scaling."""
     try:
         all_scores = []
+        total_time = 0.0
 
         for gpu_num, models in inputs:
             # Run solution
+            start_time = time.perf_counter()
             result = compute_model_placement(gpu_num, models)
+            total_time += time.perf_counter() - start_time
 
             # Validate return type
             if not isinstance(result, dict):
@@ -283,7 +287,8 @@ def score_fn(compute_model_placement, inputs):
 
             all_scores.append(test_score)
 
-        return {"score": sum(all_scores) / len(all_scores), "num_tests": len(all_scores)}
+        avg_time = total_time / len(all_scores)
+        return {"score": sum(all_scores) / len(all_scores), "num_tests": len(all_scores), "execution_time": avg_time}
 
     except Exception as e:
         return {"error": str(e)}
