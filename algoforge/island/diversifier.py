@@ -242,8 +242,8 @@ class IslandDiversifier:
             f"({n_variants_per_seed} per seed) with {model}"
         )
 
-        # Build seed programs for prompt building
-        seed_programs = []
+        # Build all seed programs as ProgramWithScore for sampling
+        all_parents = []
         for seed_code, seed_score in diverse_seeds:
             prog = Program(code=seed_code, metadata={"score": seed_score})
             eval_res = EvaluationResult(
@@ -251,22 +251,16 @@ class IslandDiversifier:
                 scores={'score': seed_score},
                 is_valid=True,
             )
-            seed_programs.append(ProgramWithScore(prog, eval_res))
+            all_parents.append(ProgramWithScore(prog, eval_res))
 
-        # Build prompts with cross-inspiration
+        # Build prompts - each variant randomly samples 2 seeds as inspirations
         prompts = []
-        n_inspirations = self.config.pipeline.n_inspirations
+        n_inspirations = min(2, len(all_parents))  # Sample 2 seeds as inspirations
 
         for seed_idx, (seed_code, seed_score) in enumerate(diverse_seeds):
-            parent = seed_programs[seed_idx]
-            other_seeds = [sp for i, sp in enumerate(seed_programs) if i != seed_idx]
-
             for _ in range(n_variants_per_seed):
-                inspirations = (
-                    random.sample(other_seeds, min(n_inspirations, len(other_seeds)))
-                    if other_seeds and n_inspirations > 0
-                    else []
-                )
+                # Randomly sample inspirations from all seeds
+                inspirations = random.sample(all_parents, n_inspirations)
 
                 builder = PromptBuilder()
                 builder.add_section("Problem", self.config.problem_description, priority=10)
@@ -275,7 +269,7 @@ class IslandDiversifier:
                     f"```python\n{self.config.function_signature}\n```",
                     priority=20
                 )
-                builder.add_parents([parent] + inspirations, priority=30)
+                builder.add_parents(inspirations, priority=30)
                 builder.set_output_mode(OutputMode.FULL)
                 prompts.append(builder.build())
 
@@ -425,7 +419,8 @@ class IslandDiversifier:
                 scores=prog["result"],
                 is_valid=True,
             )
-            if pool.add(program, eval_result):
+            accepted, _ = pool.add(program, eval_result)
+            if accepted:
                 n_accepted += 1
                 island.acceptance_count += 1
 
