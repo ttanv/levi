@@ -7,6 +7,7 @@ class SamplerModelPair(BaseModel):
     model: str
     weight: float = 1.0
     temperature: Optional[float] = None  # For softmax sampler
+    n_cycles: Optional[int] = None  # For cyclic_annealing sampler
 
     @field_validator('weight')
     @classmethod
@@ -65,6 +66,23 @@ class CascadeConfig(BaseModel):
     quick_timeout: float = 30.0
 
 
+class PunctuatedEquilibriumConfig(BaseModel):
+    """Configuration for Punctuated Equilibrium feature.
+
+    Periodically triggers paradigm-shift generation using a heavy model,
+    creating fundamentally new solutions to escape local optima.
+    """
+    enabled: bool = False
+    interval: int = 50  # Trigger every N evaluations
+    n_clusters: int = 3  # Number of behavioral clusters
+    n_variants: int = 5  # Variants per paradigm shift
+    heavy_model: Optional[str] = None  # Defaults to first sampler model
+    variant_models: Optional[list[str]] = None  # Defaults to lighter models
+    behavior_noise: float = 0.05  # Noise scale for behavior perturbation
+    temperature: float = 1.0
+    reasoning_effort: Optional[str] = None  # "low", "medium", "high" for DeepSeek reasoning
+
+
 class PipelineConfig(BaseModel):
     n_llm_workers: int = 4
     n_eval_processes: int = 4
@@ -94,6 +112,7 @@ class AlgoforgeConfig(BaseModel):
     checkpoint: CheckpointConfig = Field(default_factory=CheckpointConfig)
     pipeline: PipelineConfig = Field(default_factory=PipelineConfig)
     cascade: CascadeConfig = Field(default_factory=CascadeConfig)
+    punctuated_equilibrium: PunctuatedEquilibriumConfig = Field(default_factory=PunctuatedEquilibriumConfig)
 
     n_islands: int = 1
     migration_interval: Optional[int] = None
