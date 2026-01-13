@@ -160,7 +160,7 @@ async def eval_consumer(
                     scores=result,
                     is_valid=True,
                 )
-                accepted = pool.add(program, eval_result)
+                accepted, cell_index = pool.add(program, eval_result)
                 pool.update_sampler(item["sampler"], item["source_cell"], success=accepted)
 
                 if accepted:
@@ -177,6 +177,7 @@ async def eval_consumer(
                     accepted=accepted,
                     sampler=item["sampler"],
                     archive_size=pool.size(),
+                    cell_index=cell_index,
                 )
 
                 if is_new_best:
