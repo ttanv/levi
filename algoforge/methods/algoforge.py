@@ -74,7 +74,7 @@ async def _run_async(config: AlgoforgeConfig) -> AlgoforgeResult:
     )
 
     for pair in config.sampler_model_pairs:
-        pool.register_sampler_model_pair(pair.sampler, pair.model, pair.weight, pair.temperature)
+        pool.register_sampler_model_pair(pair.sampler, pair.model, pair.weight, pair.temperature, pair.n_cycles)
 
     # Create executor
     executor = ResilientProcessPool(max_workers=config.pipeline.n_eval_processes)
@@ -118,7 +118,7 @@ async def _run_async(config: AlgoforgeConfig) -> AlgoforgeResult:
                 scores=seed_result,
                 is_valid=True,
             )
-            pool.add(program, eval_result)
+            pool.add(program, eval_result)  # Ignore return tuple for seed
             extractor.set_phase('evolution')
 
         # Run main pipeline

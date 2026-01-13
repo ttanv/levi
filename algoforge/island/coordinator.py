@@ -168,7 +168,7 @@ class IslandCoordinator:
         Returns True if the program was accepted.
         """
         island = self.islands[island_idx]
-        accepted = island.pool.add(program, result)
+        accepted, _ = island.pool.add(program, result)
 
         island.eval_count += 1
         if accepted:

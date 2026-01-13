@@ -462,7 +462,7 @@ async def run_islands_async(
     for island in coordinator.islands:
         for pair in config.sampler_model_pairs:
             island.pool.register_sampler_model_pair(
-                pair.sampler, pair.model, pair.weight, pair.temperature
+                pair.sampler, pair.model, pair.weight, pair.temperature, pair.n_cycles
             )
 
     executor = ResilientProcessPool(max_workers=config.pipeline.n_eval_processes)
