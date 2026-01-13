@@ -388,53 +388,24 @@ class CVTMAPElitesPool:
     def set_centroids_from_data(
         self,
         behavior_vectors: list[np.ndarray],
-        percentile_low: float = 5.0,
-        percentile_high: float = 95.0,
         n_centroids: int = 50,
-    ) -> int:
+    ) -> tuple[int, np.ndarray]:
         """
-        Set centroids from actual behavior data using k-means clustering.
+        Set centroids from behavior data using k-means clustering.
 
         Args:
-            behavior_vectors: List of raw behavior vectors (not normalized)
-            percentile_low: Lower percentile to exclude (default 5%)
-            percentile_high: Upper percentile to exclude (default 95%)
+            behavior_vectors: List of behavior vectors (already normalized via z-score+sigmoid)
             n_centroids: Number of centroids to create via k-means
 
         Returns:
-            Number of centroids created
+            Tuple of (number of centroids created, labels array for each input vector)
         """
         if len(behavior_vectors) < 3:
             raise ValueError("Need at least 3 behavior vectors to build centroids")
 
         data = np.array(behavior_vectors)
+        actual_n_centroids = min(n_centroids, len(data))
 
-        # Compute percentile bounds for each dimension
-        low_bounds = np.percentile(data, percentile_low, axis=0)
-        high_bounds = np.percentile(data, percentile_high, axis=0)
-
-        # Filter out outliers
-        mask = np.all((data >= low_bounds) & (data <= high_bounds), axis=1)
-        filtered_data = data[mask]
-
-        # Use original data if filtering removes too many points for desired centroids
-        if len(filtered_data) < n_centroids:
-            filtered_data = data
-
-        # Set bounds from filtered data
-        self._mins = filtered_data.min(axis=0)
-        self._maxs = filtered_data.max(axis=0)
-        padding = np.maximum(np.abs(self._maxs - self._mins) * self._bounds_padding, 1e-6)
-        self._mins -= padding
-        self._maxs += padding
-        self._ranges = self._maxs - self._mins
-        self._ranges[self._ranges == 0] = 1
-
-        # Normalize filtered data
-        normalized_data = (filtered_data - self._mins) / self._ranges
-
-        # Use k-means to create well-spread centroids in the actual behavior space
-        actual_n_centroids = min(n_centroids, len(filtered_data))
         kmeans = KMeans(
             n_clusters=actual_n_centroids,
             init='k-means++',
@@ -442,11 +413,16 @@ class CVTMAPElitesPool:
             max_iter=100,
             random_state=42
         )
-        kmeans.fit(normalized_data)
+        kmeans.fit(data)
         self._centroids = kmeans.cluster_centers_
         self._n_centroids = actual_n_centroids
 
-        return self._n_centroids
+        # No extra normalization - data is already [0,1] from z-score+sigmoid
+        self._mins = np.zeros(self._n_dims)
+        self._maxs = np.ones(self._n_dims)
+        self._ranges = np.ones(self._n_dims)
+
+        return self._n_centroids, kmeans.labels_
 
     @staticmethod
     def select_most_diverse(
@@ -516,10 +492,10 @@ class CVTMAPElitesPool:
         distances = np.sum((self._centroids - vec) ** 2, axis=1)
         return int(np.argmin(distances))
 
-    def add(self, program: Program, evaluation_result: EvaluationResult) -> bool:
-        """Add program to archive. Returns True if accepted."""
+    def add(self, program: Program, evaluation_result: EvaluationResult) -> tuple[bool, int]:
+        """Add program to archive. Returns (accepted, cell_index)."""
         if not evaluation_result.is_valid:
-            return False
+            return False, -1
 
         behavior = self._extractor.extract(program)
         raw_behavior = behavior.values.copy()  # Store for cross-island migration
@@ -529,14 +505,14 @@ class CVTMAPElitesPool:
         if cell_index not in self._elites:
             self._elites[cell_index] = Elite(program, evaluation_result, behavior, raw_behavior)
             self._best_score = max(self._best_score, new_score)
-            return True
+            return True, cell_index
 
         if new_score > self._elites[cell_index].result.primary_score:
             self._elites[cell_index] = Elite(program, evaluation_result, behavior, raw_behavior)
             self._best_score = max(self._best_score, new_score)
-            return True
+            return True, cell_index
 
-        return False
+        return False, cell_index
 
     def add_with_raw_behavior(
         self,
@@ -570,6 +546,88 @@ class CVTMAPElitesPool:
             return True
 
         return False
+
+    def add_at_cell(
+        self,
+        cell_index: int,
+        program: Program,
+        evaluation_result: EvaluationResult,
+        behavior: FeatureVector,
+    ) -> bool:
+        """
+        Add elite directly at a specific cell index (no re-extraction).
+
+        Used during init when we already have behavior vectors and k-means labels.
+        Only accepts if cell is empty or new score beats existing.
+        """
+        if not evaluation_result.is_valid:
+            return False
+
+        new_score = evaluation_result.primary_score
+        raw_behavior = behavior.values.copy()
+
+        if cell_index not in self._elites:
+            self._elites[cell_index] = Elite(program, evaluation_result, behavior, raw_behavior)
+            self._best_score = max(self._best_score, new_score)
+            return True
+
+        if new_score > self._elites[cell_index].result.primary_score:
+            self._elites[cell_index] = Elite(program, evaluation_result, behavior, raw_behavior)
+            self._best_score = max(self._best_score, new_score)
+            return True
+
+        return False
+
+    def add_with_behavior_noise(
+        self,
+        program: Program,
+        evaluation_result: EvaluationResult,
+        noise_scale: float = 0.05,
+    ) -> tuple[bool, int]:
+        """
+        Add program with noise applied to behavior vector before cell assignment.
+
+        This allows PE solutions to potentially land in nearby cells,
+        increasing exploration of the behavior space.
+
+        Args:
+            program: The program to add
+            evaluation_result: Evaluation results for the program
+            noise_scale: Standard deviation of Gaussian noise to add (default 0.05)
+
+        Returns:
+            Tuple of (accepted: bool, cell_index: int)
+        """
+        if not evaluation_result.is_valid:
+            return False, -1
+
+        behavior = self._extractor.extract(program)
+
+        # Apply noise to normalized behavior before cell assignment
+        noisy_values = {}
+        for feature in self._feature_names:
+            original = behavior[feature]
+            noise = np.random.normal(0, noise_scale)
+            noisy_values[feature] = float(np.clip(original + noise, 0.0, 1.0))
+
+        noisy_behavior = FeatureVector(noisy_values)
+        cell_index = self._find_nearest_centroid(noisy_behavior)
+
+        # Store original behavior (not noisy) for the elite record
+        raw_behavior = behavior.values.copy()
+        new_score = evaluation_result.primary_score
+
+        if cell_index not in self._elites:
+            self._elites[cell_index] = Elite(program, evaluation_result, behavior, raw_behavior)
+            self._best_score = max(self._best_score, new_score)
+            return True, cell_index
+
+        if new_score > self._elites[cell_index].result.primary_score:
+            self._elites[cell_index] = Elite(program, evaluation_result, behavior, raw_behavior)
+            self._best_score = max(self._best_score, new_score)
+            return True, cell_index
+
+        return False, cell_index
 
     def get_elites(self) -> dict[int, Elite]:
         """Get all elites in the archive."""
@@ -624,7 +682,8 @@ class CVTMAPElitesPool:
         return self._samplers[name]
 
     def register_sampler_model_pair(
-        self, sampler_name: str, model: str, weight: float = 1.0, temperature: Optional[float] = None
+        self, sampler_name: str, model: str, weight: float = 1.0,
+        temperature: Optional[float] = None, n_cycles: Optional[int] = None
     ) -> None:
         if weight <= 0:
             raise ValueError("Weight must be positive")
@@ -636,6 +695,11 @@ class CVTMAPElitesPool:
             actual_sampler_name = f"softmax_T{temperature}"
             if actual_sampler_name not in self._samplers:
                 self._samplers[actual_sampler_name] = SoftmaxSampler(temperature=temperature)
+        # For cyclic_annealing with custom n_cycles, create a new sampler instance
+        elif sampler_name == "cyclic_annealing" and n_cycles is not None:
+            actual_sampler_name = f"cyclic_annealing_C{n_cycles}"
+            if actual_sampler_name not in self._samplers:
+                self._samplers[actual_sampler_name] = CyclicAnnealingSampler(n_cycles=n_cycles)
         elif sampler_name not in self._samplers:
             raise ValueError(f"Unknown sampler: {sampler_name}. Available: {list(self._samplers.keys())}")
 
