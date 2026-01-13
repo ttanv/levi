@@ -18,6 +18,8 @@ class ScoreHistoryEntry:
     accepted: bool
     sampler: str
     archive_size: int
+    cell_index: int | None = None  # Which cell this evaluation fell into
+    is_punctuated_equilibrium: bool = False  # Whether from PE
 
 
 @dataclass
@@ -51,6 +53,10 @@ class PipelineState:
     # Score history tracking
     score_history: list = field(default_factory=list)
     best_score_so_far: float = float('-inf')
+
+    # Punctuated Equilibrium tracking
+    last_pe_eval_count: int = 0
+    pe_trigger_count: int = 0
 
     @property
     def budget_exhausted(self) -> bool:
@@ -124,6 +130,8 @@ class PipelineState:
         accepted: bool,
         sampler: str,
         archive_size: int,
+        cell_index: int | None = None,
+        is_punctuated_equilibrium: bool = False,
     ) -> None:
         """Record a score in the history."""
         if score > self.best_score_so_far:
@@ -137,6 +145,8 @@ class PipelineState:
             accepted=accepted,
             sampler=sampler,
             archive_size=archive_size,
+            cell_index=cell_index,
+            is_punctuated_equilibrium=is_punctuated_equilibrium,
         )
         self.score_history.append(entry)
 
