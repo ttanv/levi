@@ -50,6 +50,8 @@ class PipelineState:
     period_rejections: int = 0
     period_error_messages: set = field(default_factory=set)
 
+    all_error_counts: dict = field(default_factory=dict)
+
     # Score history tracking
     score_history: list = field(default_factory=list)
     best_score_so_far: float = float('-inf')
@@ -100,8 +102,10 @@ class PipelineState:
         self.eval_count += 1
         self.error_count += 1
         self.period_errors += 1
+        short_error = error[:100]
         if len(self.period_error_messages) < 10:
-            self.period_error_messages.add(error[:100])
+            self.period_error_messages.add(short_error)
+        self.all_error_counts[short_error] = self.all_error_counts.get(short_error, 0) + 1
 
     def should_generate_meta_advice(self, interval: int) -> bool:
         return (
@@ -111,11 +115,13 @@ class PipelineState:
         )
 
     def reset_period_metrics(self) -> dict:
+        top_errors = sorted(self.all_error_counts.items(), key=lambda x: -x[1])[:10]
         metrics = {
             'errors': self.period_errors,
             'acceptances': self.period_acceptances,
             'rejections': self.period_rejections,
             'error_messages': set(self.period_error_messages),
+            'top_errors': top_errors,
         }
         self.period_errors = 0
         self.period_acceptances = 0

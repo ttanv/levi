@@ -209,25 +209,37 @@ async def eval_consumer(
                 logger.warning(f"[Snapshot] Failed to save: {e}")
 
 
-def _format_metrics_for_llm(metrics: dict, previous_advice: str, progress_pct: float) -> str:
+def _format_metrics_for_llm(
+    metrics: dict,
+    previous_advice: str,
+    progress_pct: float,
+    problem_description: str = "",
+    function_signature: str = "",
+) -> str:
     total = metrics.get('acceptances', 0) + metrics.get('rejections', 0) + metrics.get('errors', 0)
     error_count = metrics.get('errors', 0)
-    error_messages = metrics.get('error_messages', set())
+    top_errors = metrics.get('top_errors', [])
 
-    data = f"""## Progress: {progress_pct:.0f}% of budget consumed
+    data = ""
+    if problem_description:
+        data += f"## Problem\n{problem_description}\n\n"
+    if function_signature:
+        data += f"## Function Signature\n```python\n{function_signature}\n```\n\n"
+
+    data += f"""## Progress: {progress_pct:.0f}% of budget consumed
 
 ## Recent Results ({total} candidates evaluated this period):
 - Acceptances: {metrics.get('acceptances', 0)}
 - Rejections: {metrics.get('rejections', 0)}
 - Errors/Failures: {error_count}"""
 
-    if error_messages:
-        data += "\n\n## Error Patterns to Avoid:\n"
-        for err in sorted(error_messages):
-            data += f"- {err}\n"
+    if top_errors:
+        data += "\n\n## Most Common Errors (across entire run):\n"
+        for err, count in top_errors:
+            data += f"- ({count}x) {err}\n"
 
     if previous_advice:
-        data += f"\n\n## Your Previous Lessons (learn from these - did they help reduce errors?):\n{previous_advice}"
+        data += f"\n\n## Your Previous Lessons:\n{previous_advice}"
 
     return data
 
@@ -243,7 +255,10 @@ async def _generate_meta_advice(config: AlgoforgeConfig, state: PipelineState) -
     if config.budget.dollars:
         progress_pct = (state.total_cost / config.budget.dollars) * 100
 
-    metrics_data = _format_metrics_for_llm(metrics, state.previous_meta_advice, progress_pct)
+    metrics_data = _format_metrics_for_llm(
+        metrics, state.previous_meta_advice, progress_pct,
+        config.problem_description, config.function_signature
+    )
     prompt = META_ADVISOR_PROMPT.format(metrics_data=metrics_data)
 
     try:
