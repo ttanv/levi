@@ -1,6 +1,7 @@
 """Init phase: diverse seed generation and archive initialization."""
 
 import asyncio
+import json
 import logging
 import random
 import resource
@@ -80,6 +81,67 @@ def _evaluate_code(code: str, score_fn, inputs: list, fn_name: str) -> dict:
         return score_fn(fn, inputs)
     except MemoryError:
         return {"error": "MemoryError: code exceeded 8GB limit"}
+
+
+def _load_predefined_centroids(json_path: str, feature_names: list[str]) -> tuple[np.ndarray, dict[str, list[float]]]:
+    """Load predefined centroids from JSON.
+
+    Returns (centroids_array, raw_feature_data) where raw_feature_data can be
+    used to initialize the behavior extractor's z-score statistics.
+    """
+    with open(json_path) as f:
+        data = json.load(f)
+
+    # Map JSON feature names to extractor feature names
+    feature_map = {
+        "max_loop_nesting": "loop_nesting_max",
+        "loop_nesting_max": "loop_nesting_max",
+        "math_operators": "math_operators",
+        "cyclomatic_complexity": "cyclomatic_complexity",
+        "ast_depth": "ast_depth",
+    }
+
+    # Collect raw values per mapped feature
+    raw_feature_data: dict[str, list[float]] = {f: [] for f in feature_names}
+    for entry in data:
+        vec = entry["vector"]
+        for json_feat, val in vec.items():
+            mapped_feat = feature_map.get(json_feat, json_feat)
+            if mapped_feat in raw_feature_data:
+                raw_feature_data[mapped_feat].append(val)
+
+    # Compute mean/std per feature for z-score normalization
+    def zscore_to_01(z: float) -> float:
+        z = max(-10, min(10, z))
+        return 1.0 / (1.0 + np.exp(-z))
+
+    feature_stats = {}
+    for feat, vals in raw_feature_data.items():
+        if vals:
+            mean = np.mean(vals)
+            std = max(np.std(vals, ddof=1), 0.1)
+            feature_stats[feat] = (mean, std)
+        else:
+            feature_stats[feat] = (0.0, 1.0)
+
+    # Build normalized centroid vectors using z-score + sigmoid
+    n_dims = len(feature_names)
+    centroids = []
+    for entry in data:
+        vec = entry["vector"]
+        normalized = np.full(n_dims, 0.5)
+
+        for json_feat, val in vec.items():
+            mapped_feat = feature_map.get(json_feat, json_feat)
+            if mapped_feat in feature_names:
+                idx = feature_names.index(mapped_feat)
+                mean, std = feature_stats[mapped_feat]
+                z = (val - mean) / std
+                normalized[idx] = zscore_to_01(z)
+
+        centroids.append(normalized)
+
+    return np.array(centroids), raw_feature_data
 
 
 class Diversifier:
@@ -378,6 +440,35 @@ class Diversifier:
         seed_result: dict = None,
     ) -> None:
         """Phase 3: Build centroids and populate archive using k-means labels directly."""
+        # Check for predefined centroids file
+        if self.config.cvt.predefined_centroids_file:
+            logger.info(f"[Init Phase 3] Loading predefined centroids from {self.config.cvt.predefined_centroids_file}")
+            centroids, raw_feature_data = _load_predefined_centroids(
+                self.config.cvt.predefined_centroids_file,
+                extractor.features,
+            )
+            extractor.init_stats_from_data(raw_feature_data)
+            pool._centroids = centroids
+            pool._n_centroids = len(centroids)
+            pool._mins = np.zeros(len(extractor.features))
+            pool._maxs = np.ones(len(extractor.features))
+            pool._ranges = np.ones(len(extractor.features))
+            logger.info(f"[Init Phase 3] Loaded {len(centroids)} predefined centroids")
+
+            # Add seed program to archive
+            if seed_program and seed_result and "error" not in seed_result:
+                program = Program(code=seed_program, metadata={"primary_score": seed_result.get('score', 0.0)})
+                eval_result = EvaluationResult(
+                    program_id=program.id,
+                    scores=seed_result,
+                    is_valid=True,
+                )
+                accepted, cell_idx = pool.add(program, eval_result)
+                logger.info(f"[Init Phase 3] Added seed to cell {cell_idx} (accepted={accepted})")
+
+            extractor.set_phase('evolution')
+            return
+
         if len(behavior_vectors) < 3:
             logger.warning("[Init Phase 3] Not enough valid programs to build centroids")
             if seed_program and seed_result and "error" not in seed_result:

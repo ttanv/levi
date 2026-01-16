@@ -111,6 +111,24 @@ async def _run_async(config: AlgoforgeConfig) -> AlgoforgeResult:
             init_cost = await diversifier.run(pool, config.seed_program, seed_result, extractor)
             logger.info(f"[AlgoForge] Init phase complete, cost: ${init_cost:.3f}")
         else:
+            # Load predefined centroids if configured
+            if config.cvt.predefined_centroids_file:
+                from ..init.diversifier import _load_predefined_centroids
+                import numpy as np
+                logger.info(f"[AlgoForge] Loading predefined centroids from {config.cvt.predefined_centroids_file}")
+                centroids, raw_feature_data = _load_predefined_centroids(
+                    config.cvt.predefined_centroids_file,
+                    extractor.features,
+                )
+                # Initialize extractor stats so z-score normalization aligns with centroids
+                extractor.init_stats_from_data(raw_feature_data)
+                pool._centroids = centroids
+                pool._n_centroids = len(centroids)
+                pool._mins = np.zeros(len(extractor.features))
+                pool._maxs = np.ones(len(extractor.features))
+                pool._ranges = np.ones(len(extractor.features))
+                logger.info(f"[AlgoForge] Loaded {len(centroids)} predefined centroids")
+
             # Just add seed to archive
             program = Program(code=config.seed_program)
             eval_result = EvaluationResult(
@@ -118,7 +136,7 @@ async def _run_async(config: AlgoforgeConfig) -> AlgoforgeResult:
                 scores=seed_result,
                 is_valid=True,
             )
-            pool.add(program, eval_result)  # Ignore return tuple for seed
+            pool.add(program, eval_result)
             extractor.set_phase('evolution')
 
         # Run main pipeline

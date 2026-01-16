@@ -90,6 +90,20 @@ class BehaviorExtractor:
         """Set extraction phase: 'init' adds noise, 'evolution' does not."""
         self._phase = phase
 
+    def init_stats_from_data(self, feature_data: dict[str, list[float]]) -> None:
+        """Initialize running stats from provided raw feature values."""
+        for feature, values in feature_data.items():
+            if feature not in self.features:
+                continue
+            n = len(values)
+            if n == 0:
+                continue
+            mean = sum(values) / n
+            variance = sum((v - mean) ** 2 for v in values) / max(n - 1, 1)
+            self._count[feature] = n
+            self._mean[feature] = mean
+            self._M2[feature] = variance * (n - 1)
+
     def _update_stats(self, feature: str, value: float) -> None:
         """Update running mean and variance using Welford's algorithm."""
         self._count[feature] += 1
