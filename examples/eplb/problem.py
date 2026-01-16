@@ -22,43 +22,29 @@ REBALANCE_INTERVAL = 100
 PROBLEM_DESCRIPTION = """
 # EPLB Problem
 
-Optimize expert rearrangement for MoE models in distributed inference. Rearrange and replicate logical experts across physical GPU slots for optimal load balancing.
+Optimize expert placement for MoE models. Map logical experts to physical GPU slots for load balancing.
 
-**Target**: Maximize GPU-level balancedness (avg_load / max_load), minimize execution time
+## Input
+- `weight`: [layers, num_logical_experts] - load per logical expert (typically 64 logical experts)
+- `num_replicas`: 288 total physical slots
+- `num_gpus`: 32 GPUs (each GPU has 288/32 = 9 slots)
+- `num_groups`: 8, `num_nodes`: 4
 
-Evaluates on real workload traces from vLLM server logs.
+## Output (all torch.int64 tensors)
+- `physical_to_logical_map`: [layers, 288] - which logical expert in each physical slot (values 0 to num_logical_experts-1)
+- `logical_to_physical_map`: [layers, num_logical_experts, max_replicas] - physical slots for each logical expert, padded with -1
+- `expert_count`: [layers, num_logical_experts] - replication count per logical expert (sum must equal 288)
 
-## API
-
-- `weight`: [layers, num_logical_experts], load statistics
-- `num_replicas`: 288 (physical experts)
-- `num_groups`: 8
-- `num_nodes`: 4
-- `num_gpus`: 32
-
-Returns:
-- `physical_to_logical_map`: [layers, num_replicas]
-- `logical_to_physical_map`: [layers, num_logical_experts, X]
-- `expert_count`: [layers, num_logical_experts]
+## Constraints
+- Every physical slot must be assigned (no -1 in physical_to_logical_map)
+- expert_count[layer].sum() == 288 for all layers
+- Heavily-loaded experts should have more replicas
 
 ## Scoring
+- 90% balancedness: avg_gpu_load / max_gpu_load (GPU load = sum of weights of experts on that GPU)
+- 10% speed: faster is better, penalty if >10ms
 
-```
-balancedness_score_gpu = Average (avg_load / max_load) across all layers and workloads
-avg_time_algorithm = Average algorithm execution time (seconds)
-
-balancedness_score = balancedness_score_gpu × 90
-speed_score = min(0.002 / time, 2) × 5
-slow_penalty = min(time_seconds × 20, 20) if time > 10ms else 0
-
-final_score = balancedness_score + speed_score - slow_penalty
-```
-
-Speed: ≤1ms = 10 points, 2ms = 5 points, 10ms = 1 point. Algorithms > 10ms receive penalty (up to 20 points).
-
-Mapping from step i is evaluated against workload from step i+1.
-
-Output ONLY the Python code block. No explanations.
+Output ONLY Python code in a ```python block.
 """
 
 FUNCTION_SIGNATURE = """
