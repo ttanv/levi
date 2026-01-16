@@ -19,29 +19,25 @@ Below are the best-performing solutions from each region:
 
 ## Your Challenge: PARADIGM SHIFT
 
-You are tasked with generating a **fundamentally different algorithmic approach**.
+Generate a **fundamentally different algorithmic approach**.
 
-### Analysis Instructions:
-1. Identify the CORE ASSUMPTIONS each solution makes
-2. Find what INFORMATION or STRUCTURE they all IGNORE
-3. Consider ENTIRELY DIFFERENT problem decompositions
-4. Think about alternative DATA STRUCTURES or REPRESENTATIONS
+### Instructions:
+1. Study the function signature carefully - match it EXACTLY
+2. Identify what approaches the existing solutions use
+3. Design a solution using a COMPLETELY DIFFERENT strategy
 
-### Requirements:
-- **DO NOT** make incremental improvements to any existing solution
-- **DO NOT** combine existing approaches
-- **DO** design from FIRST PRINCIPLES
-- **DO** explore an algorithm that uses a completely different:
-  - Data representation
-  - Problem decomposition
-  - Optimization strategy
-  - Mathematical formulation
+### Critical Requirements:
+- Your function signature MUST match exactly: `{function_signature}`
+- Use only standard Python libraries (numpy, collections, itertools, math, etc.)
+- The code must be syntactically valid and complete
+- Include ALL necessary imports at the top
+- Do NOT use placeholders or incomplete code
 
 ### Why This Matters:
 The evolutionary process may be stuck in local optima. Your paradigm shift could open entirely new regions of the solution space that lead to breakthrough performance.
 
 ## Output
-Output ONLY the complete Python code in a ```python block.
+Output ONLY complete, runnable Python code in a ```python block. No explanations.
 """
 
 
