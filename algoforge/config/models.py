@@ -1,5 +1,20 @@
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from typing import Callable, Optional, Any
+
+
+class LLMProviderConfig(BaseModel):
+    """Configuration for the LLM provider abstraction."""
+
+    # Model -> endpoint URL for local models (replaces api_bases)
+    local_endpoints: dict[str, str] = Field(default_factory=dict)
+
+    # Registry for cloud model configs (passed to litellm.register_model)
+    cloud_registry: Optional[dict] = None
+
+    # Retry configuration
+    max_retries: int = 3
+    retry_delay: float = 1.0
+    retry_backoff: float = 2.0
 
 
 class SamplerModelPair(BaseModel):
@@ -118,7 +133,12 @@ class AlgoforgeConfig(BaseModel):
     n_islands: int = 1
     migration_interval: Optional[int] = None
     output_dir: Optional[str] = None  # Directory for snapshots
-    api_bases: dict[str, str] = Field(default_factory=dict)  # Model -> api_base URL mapping
+
+    # LLM provider configuration (new way)
+    llm: LLMProviderConfig = Field(default_factory=LLMProviderConfig)
+
+    # Deprecated: kept for backward compatibility, migrated to llm.local_endpoints
+    api_bases: dict[str, str] = Field(default_factory=dict)
 
     model_config = {"arbitrary_types_allowed": True}
 
@@ -128,6 +148,13 @@ class AlgoforgeConfig(BaseModel):
         if not v:
             raise ValueError('must have at least one sampler_model_pair')
         return v
+
+    @model_validator(mode='after')
+    def migrate_api_bases(self) -> 'AlgoforgeConfig':
+        """Migrate api_bases to llm.local_endpoints for backward compatibility."""
+        if self.api_bases and not self.llm.local_endpoints:
+            self.llm.local_endpoints = self.api_bases
+        return self
 
 
 class AlgoforgeResult(BaseModel):

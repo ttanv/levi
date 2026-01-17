@@ -10,8 +10,6 @@ from itertools import cycle
 from pathlib import Path
 from typing import Optional, Callable
 
-import litellm
-
 
 def _setup_logging() -> None:
     """Configure logging for island runner."""
@@ -27,7 +25,7 @@ def _setup_logging() -> None:
 from ..config import AlgoforgeConfig, AlgoforgeResult, BudgetConfig
 from ..core import Program, EvaluationResult
 from ..behavior import BehaviorExtractor
-from ..llm import PromptBuilder, ProgramWithScore, OutputMode
+from ..llm import PromptBuilder, ProgramWithScore, OutputMode, get_llm_client, LLMRetryExhaustedError
 from ..utils import ResilientProcessPool, extract_code, extract_fn_name
 from ..pipeline.state import PipelineState
 from ..pipeline.consumer import _generate_meta_advice
@@ -180,20 +178,19 @@ class IslandPipelineRunner:
 
                 self.state.llm_in_flight += 1
                 try:
-                    kwargs = {
-                        "model": model,
-                        "messages": [{"role": "user", "content": prompt}],
-                        "temperature": self.config.pipeline.temperature,
-                        "max_tokens": self.config.pipeline.max_tokens,
-                        "timeout": 300,
-                    }
-                    if model in self.config.api_bases:
-                        kwargs["api_base"] = self.config.api_bases[model]
-                        kwargs["api_key"] = "dummy"
-                        kwargs["custom_llm_provider"] = "openai"
-                    response = await litellm.acompletion(**kwargs)
-                    content = response.choices[0].message.content
-                    cost = litellm.completion_cost(completion_response=response)
+                    llm = get_llm_client()
+                    response = await llm.acompletion(
+                        model=model,
+                        messages=[{"role": "user", "content": prompt}],
+                        temperature=self.config.pipeline.temperature,
+                        max_tokens=self.config.pipeline.max_tokens,
+                        timeout=300,
+                    )
+                    content = response.content
+                    cost = response.cost
+                except LLMRetryExhaustedError as e:
+                    logger.warning(f"[LLM-{worker_id}] Error after retries: {e.last_error}")
+                    continue
                 except Exception as e:
                     logger.warning(f"[LLM-{worker_id}] Error: {e}")
                     await asyncio.sleep(1.0)

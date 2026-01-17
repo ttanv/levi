@@ -244,7 +244,7 @@ def _format_metrics_for_llm(
 
 
 async def _generate_meta_advice(config: AlgoforgeConfig, state: PipelineState) -> None:
-    import litellm
+    from ..llm import get_llm_client
 
     if not config.meta_advice.model:
         return
@@ -261,25 +261,22 @@ async def _generate_meta_advice(config: AlgoforgeConfig, state: PipelineState) -
     prompt = META_ADVISOR_PROMPT.format(metrics_data=metrics_data)
 
     try:
-        call_kwargs = {
-            "model": config.meta_advice.model,
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.7,
-            "max_tokens": config.meta_advice.max_tokens,
-            "timeout": 60,
-        }
+        llm = get_llm_client()
 
-        if config.meta_advice.model in config.api_bases:
-            call_kwargs["api_base"] = config.api_bases[config.meta_advice.model]
-            call_kwargs["api_key"] = "dummy"
-            call_kwargs["custom_llm_provider"] = "openai"
-
+        extras = {}
         if "deepseek" in config.meta_advice.model.lower():
-            call_kwargs["reasoning"] = {"enabled": True}
+            extras["reasoning"] = {"enabled": True}
 
-        response = await litellm.acompletion(**call_kwargs)
-        advice = response.choices[0].message.content.strip()
-        cost = litellm.completion_cost(completion_response=response)
+        response = await llm.acompletion(
+            model=config.meta_advice.model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7,
+            max_tokens=config.meta_advice.max_tokens,
+            timeout=60,
+            **extras,
+        )
+        advice = response.content.strip()
+        cost = response.cost
 
         state.previous_meta_advice = state.current_meta_advice
         state.current_meta_advice = advice

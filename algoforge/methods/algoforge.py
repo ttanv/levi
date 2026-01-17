@@ -11,6 +11,8 @@ from ..behavior import BehaviorExtractor
 from ..pipeline import PipelineRunner
 from ..init import Diversifier
 from ..utils import ResilientProcessPool, extract_fn_name
+from ..llm import set_llm_client, clear_llm_client
+from ..llm.unified_client import UnifiedLLMClient, UnifiedLLMClientConfig
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +60,19 @@ async def _run_async(config: AlgoforgeConfig) -> AlgoforgeResult:
     logger.info("[AlgoForge] Starting evolutionary optimization")
     logger.info(f"[AlgoForge] Budget: {config.budget}")
     logger.info(f"[AlgoForge] Sampler-model pairs: {len(config.sampler_model_pairs)}")
+
+    # Initialize unified LLM client
+    llm_config = UnifiedLLMClientConfig(
+        local_endpoints=config.llm.local_endpoints,
+        cloud_registry=config.llm.cloud_registry,
+        max_retries=config.llm.max_retries,
+        retry_delay=config.llm.retry_delay,
+        retry_backoff=config.llm.retry_backoff,
+        default_temperature=config.pipeline.temperature,
+        default_max_tokens=config.pipeline.max_tokens,
+    )
+    llm_client = UnifiedLLMClient(llm_config)
+    set_llm_client(llm_client)
 
     # Create behavior extractor
     extractor = BehaviorExtractor(
@@ -155,4 +170,6 @@ async def _run_async(config: AlgoforgeConfig) -> AlgoforgeResult:
         return result
 
     finally:
+        await llm_client.close()
+        clear_llm_client()
         executor.shutdown()

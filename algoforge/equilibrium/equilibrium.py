@@ -12,7 +12,6 @@ import resource
 import types
 from typing import Optional
 
-import litellm
 import numpy as np
 from sklearn.cluster import KMeans
 
@@ -20,6 +19,7 @@ from ..config import AlgoforgeConfig
 from ..core import Program, EvaluationResult
 from ..pool import CVTMAPElitesPool
 from ..pool.cvt_map_elites import Elite
+from ..llm import get_llm_client
 from ..utils import ResilientProcessPool, extract_code, extract_fn_name
 from .prompts import PARADIGM_SHIFT_PROMPT, VARIANT_GENERATION_PROMPT
 
@@ -247,27 +247,24 @@ class PunctuatedEquilibrium:
 
         try:
             # Build call kwargs
-            call_kwargs = {
-                "model": heavy_model,
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": self.pe_config.temperature,
-                "max_tokens": 4096,
-                "timeout": 300,
-            }
+            llm = get_llm_client()
 
+            extras = {}
             # Add reasoning_effort for DeepSeek models if configured
             if self.pe_config.reasoning_effort:
-                call_kwargs["reasoning_effort"] = self.pe_config.reasoning_effort
+                extras["reasoning_effort"] = self.pe_config.reasoning_effort
                 logger.info(f"[PE] Using reasoning_effort={self.pe_config.reasoning_effort} for paradigm shift")
 
-            if heavy_model in self.config.api_bases:
-                call_kwargs["api_base"] = self.config.api_bases[heavy_model]
-                call_kwargs["api_key"] = "dummy"
-                call_kwargs["custom_llm_provider"] = "openai"
-
-            response = await litellm.acompletion(**call_kwargs)
-            content = response.choices[0].message.content
-            cost = litellm.completion_cost(completion_response=response)
+            response = await llm.acompletion(
+                model=heavy_model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=self.pe_config.temperature,
+                max_tokens=4096,
+                timeout=300,
+                **extras,
+            )
+            content = response.content
+            cost = response.cost
             stats["total_cost"] += cost
             self.total_cost += cost
         except Exception as e:
@@ -334,21 +331,15 @@ class PunctuatedEquilibrium:
 
             async def generate_variant(model: str, idx: int):
                 try:
-                    kwargs = {
-                        "model": model,
-                        "messages": [{"role": "user", "content": variant_prompt}],
-                        "temperature": self.pe_config.temperature,
-                        "max_tokens": 4096,
-                        "timeout": 300,
-                    }
-                    if model in self.config.api_bases:
-                        kwargs["api_base"] = self.config.api_bases[model]
-                        kwargs["api_key"] = "dummy"
-                        kwargs["custom_llm_provider"] = "openai"
-                    response = await litellm.acompletion(**kwargs)
-                    content = response.choices[0].message.content
-                    cost = litellm.completion_cost(completion_response=response)
-                    return {"idx": idx, "content": content, "cost": cost, "model": model}
+                    llm = get_llm_client()
+                    response = await llm.acompletion(
+                        model=model,
+                        messages=[{"role": "user", "content": variant_prompt}],
+                        temperature=self.pe_config.temperature,
+                        max_tokens=4096,
+                        timeout=300,
+                    )
+                    return {"idx": idx, "content": response.content, "cost": response.cost, "model": model}
                 except Exception as e:
                     return {"idx": idx, "error": str(e), "model": model}
 

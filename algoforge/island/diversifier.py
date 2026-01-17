@@ -14,14 +14,13 @@ import random
 import types
 from typing import Optional
 
-import litellm
 import numpy as np
 
 from ..config import AlgoforgeConfig
 from ..core import Program, EvaluationResult
 from ..pool import CVTMAPElitesPool
 from ..behavior import BehaviorExtractor
-from ..llm import PromptBuilder, ProgramWithScore, OutputMode
+from ..llm import PromptBuilder, ProgramWithScore, OutputMode, get_llm_client
 from ..utils import ResilientProcessPool, extract_code, extract_fn_name
 from .coordinator import IslandCoordinator
 
@@ -185,21 +184,16 @@ class IslandDiversifier:
             )
 
             try:
-                kwargs = {
-                    "model": model,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "temperature": self.config.init.temperature,
-                    "max_tokens": 4096,
-                    "timeout": 300,
-                }
-                if model in self.config.api_bases:
-                    kwargs["api_base"] = self.config.api_bases[model]
-                    kwargs["api_key"] = "dummy"
-                    kwargs["custom_llm_provider"] = "openai"
-                response = await litellm.acompletion(**kwargs)
-                content = response.choices[0].message.content
-                cost = litellm.completion_cost(completion_response=response)
-                self.total_cost += cost
+                llm = get_llm_client()
+                response = await llm.acompletion(
+                    model=model,
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=self.config.init.temperature,
+                    max_tokens=4096,
+                    timeout=300,
+                )
+                content = response.content
+                self.total_cost += response.cost
 
                 new_code = extract_code(content)
                 if not new_code:
@@ -280,21 +274,15 @@ class IslandDiversifier:
         # Parallel LLM calls
         async def generate_variant(idx: int, prompt: str) -> dict:
             try:
-                kwargs = {
-                    "model": model,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "temperature": self.config.init.temperature,
-                    "max_tokens": 4096,
-                    "timeout": 300,
-                }
-                if model in self.config.api_bases:
-                    kwargs["api_base"] = self.config.api_bases[model]
-                    kwargs["api_key"] = "dummy"
-                    kwargs["custom_llm_provider"] = "openai"
-                response = await litellm.acompletion(**kwargs)
-                content = response.choices[0].message.content
-                cost = litellm.completion_cost(completion_response=response)
-                return {"idx": idx, "content": content, "cost": cost}
+                llm = get_llm_client()
+                response = await llm.acompletion(
+                    model=model,
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=self.config.init.temperature,
+                    max_tokens=4096,
+                    timeout=300,
+                )
+                return {"idx": idx, "content": response.content, "cost": response.cost}
             except Exception as e:
                 return {"idx": idx, "error": str(e)}
 
