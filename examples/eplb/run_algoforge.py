@@ -46,7 +46,7 @@ config = AlgoforgeConfig(
     ],
     cvt=CVTConfig(n_centroids=40, defer_centroids=True),
     init=InitConfig(
-        n_diverse_seeds=5,
+        n_diverse_seeds=1,
         n_variants_per_seed=50,
         diversity_model=HEAVY_MODEL,
         variant_models=LIGHT_MODELS,  # Cycle through all light models
