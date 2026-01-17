@@ -20,7 +20,7 @@ LIGHT_MODELS = [
     "Qwen/Qwen3-30B-A3B-Instruct-2507",
     "google/gemma-3-27b-it",
 ]
-HEAVY_MODEL = "meta-llama/Llama-3.3-70B-Instruct"
+HEAVY_MODEL = "Qwen/Qwen3-30B-A3B-Instruct-2507",
 
 # Model -> API base URL mapping for local TPU endpoints
 API_BASES = {
