@@ -262,6 +262,8 @@ class PunctuatedEquilibrium:
 
             if heavy_model in self.config.api_bases:
                 call_kwargs["api_base"] = self.config.api_bases[heavy_model]
+                call_kwargs["api_key"] = "dummy"
+                call_kwargs["custom_llm_provider"] = "openai"
 
             response = await litellm.acompletion(**call_kwargs)
             content = response.choices[0].message.content
@@ -341,6 +343,8 @@ class PunctuatedEquilibrium:
                     }
                     if model in self.config.api_bases:
                         kwargs["api_base"] = self.config.api_bases[model]
+                        kwargs["api_key"] = "dummy"
+                        kwargs["custom_llm_provider"] = "openai"
                     response = await litellm.acompletion(**kwargs)
                     content = response.choices[0].message.content
                     cost = litellm.completion_cost(completion_response=response)

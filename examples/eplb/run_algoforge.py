@@ -15,18 +15,18 @@ EPLB_AST_FEATURES = ['loop_nesting_max', 'cyclomatic_complexity', 'math_operator
 EPLB_SCORE_KEYS = ['execution_time', 'workload_main', 'workload_8', 'workload_9']
 
 # --- Config ---
-# Local TPU models (hosted_vllm/ prefix for OpenAI-compatible vLLM endpoints)
+# Local TPU models (raw model names as vLLM expects them)
 LIGHT_MODELS = [
-    "hosted_vllm/Qwen/Qwen3-30B-A3B-Instruct-2507",
-    "hosted_vllm/google/gemma-3-27b-it",
+    "Qwen/Qwen3-30B-A3B-Instruct-2507",
+    "google/gemma-3-27b-it",
 ]
-HEAVY_MODEL = "hosted_vllm/meta-llama/Llama-3.3-70B-Instruct"
+HEAVY_MODEL = "meta-llama/Llama-3.3-70B-Instruct"
 
 # Model -> API base URL mapping for local TPU endpoints
 API_BASES = {
-    "hosted_vllm/Qwen/Qwen3-30B-A3B-Instruct-2507": "http://10.142.0.3:8000/v1",
-    "hosted_vllm/meta-llama/Llama-3.3-70B-Instruct": "http://10.130.0.4:8000/v1",
-    "hosted_vllm/google/gemma-3-27b-it": "http://10.164.0.4:8000/v1",
+    "Qwen/Qwen3-30B-A3B-Instruct-2507": "http://10.142.0.3:8000/v1",
+    "meta-llama/Llama-3.3-70B-Instruct": "http://10.130.0.4:8000/v1",
+    "google/gemma-3-27b-it": "http://10.164.0.4:8000/v1",
 }
 
 RUN_DIR = f"runs/{datetime.now().strftime('%Y%m%d_%H%M%S')}"

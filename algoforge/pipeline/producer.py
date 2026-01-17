@@ -90,6 +90,8 @@ async def llm_producer(
                 }
                 if model in config.api_bases:
                     kwargs["api_base"] = config.api_bases[model]
+                    kwargs["api_key"] = "dummy"
+                    kwargs["custom_llm_provider"] = "openai"
                 response = await litellm.acompletion(**kwargs)
                 content = response.choices[0].message.content
                 cost = litellm.completion_cost(completion_response=response)
