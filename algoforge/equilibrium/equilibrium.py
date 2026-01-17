@@ -251,7 +251,7 @@ class PunctuatedEquilibrium:
                 "model": heavy_model,
                 "messages": [{"role": "user", "content": prompt}],
                 "temperature": self.pe_config.temperature,
-                "max_tokens": 30000,
+                "max_tokens": 8192,
                 "timeout": 300,
             }
 
@@ -336,7 +336,7 @@ class PunctuatedEquilibrium:
                         "model": model,
                         "messages": [{"role": "user", "content": variant_prompt}],
                         "temperature": self.pe_config.temperature,
-                        "max_tokens": 30000,
+                        "max_tokens": 8192,
                         "timeout": 300,
                     }
                     if model in self.config.api_bases:
