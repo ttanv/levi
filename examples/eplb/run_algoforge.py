@@ -3,6 +3,36 @@
 
 from datetime import datetime
 
+import litellm
+
+# Register local models so LiteLLM knows they exist (api_base passed per-call)
+litellm.register_model({
+    "Qwen/Qwen3-30B-A3B-Instruct-2507": {
+        "max_tokens": 4096,
+        "max_input_tokens": 4096,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0,
+        "output_cost_per_token": 0,
+        "litellm_provider": "openai",
+    },
+    "meta-llama/Llama-3.3-70B-Instruct": {
+        "max_tokens": 4096,
+        "max_input_tokens": 4096,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0,
+        "output_cost_per_token": 0,
+        "litellm_provider": "openai",
+    },
+    "google/gemma-3-27b-it": {
+        "max_tokens": 4096,
+        "max_input_tokens": 4096,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0,
+        "output_cost_per_token": 0,
+        "litellm_provider": "openai",
+    },
+})
+
 from problem import PROBLEM_DESCRIPTION, FUNCTION_SIGNATURE, SEED_PROGRAM, get_lazy_inputs, score_fn
 from algoforge import (
     run, AlgoforgeConfig, BudgetConfig, SamplerModelPair,
@@ -20,7 +50,7 @@ LIGHT_MODELS = [
     "Qwen/Qwen3-30B-A3B-Instruct-2507",
     "google/gemma-3-27b-it",
 ]
-HEAVY_MODEL = "Qwen/Qwen3-30B-A3B-Instruct-2507",
+HEAVY_MODEL = "Qwen/Qwen3-30B-A3B-Instruct-2507"
 
 # Model -> API base URL mapping for local TPU endpoints
 API_BASES = {
