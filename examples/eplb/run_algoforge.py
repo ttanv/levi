@@ -2,8 +2,12 @@
 """Run AlgoForge on EPLB (Expert Parallelism Load Balancer) Problem."""
 
 from datetime import datetime
+import os
 
 import litellm
+
+# Set dummy API key for local servers (required by LiteLLM's OpenAI client)
+os.environ["OPENAI_API_KEY"] = "not-needed"
 
 # Local TPU model endpoints (openai/ prefix = use OpenAI-compatible API protocol)
 litellm.register_model({
