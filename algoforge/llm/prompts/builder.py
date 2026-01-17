@@ -15,14 +15,12 @@ from ...core import Program, EvaluationResult
 
 
 class OutputMode(Enum):
-    """How the LLM should output its changes."""
     FULL = "full"
     DIFF = "diff"
 
 
 @dataclass
 class ProgramWithScore:
-    """A program paired with its evaluation result."""
     program: Program
     result: Optional[EvaluationResult] = None
 
@@ -33,7 +31,6 @@ class ProgramWithScore:
 
 @dataclass
 class PromptSection:
-    """A section of the prompt with a priority for ordering."""
     name: str
     content: str
     priority: int = 50
@@ -110,6 +107,7 @@ def your_function(...):
 DO NOT include any explanation, commentary, or text outside the code block.'''
 
         elif self._output_mode == OutputMode.DIFF:
+            # Had to make more detailed; smaller models more likely to struggle here
             return '''Output your improved code using SEARCH/REPLACE blocks.
 
 FORMAT:
@@ -131,9 +129,3 @@ GOOD: Replace a single function or a few lines
 BAD: Replace the entire file or 100+ lines at once'''
 
         return ""
-
-    def clear(self) -> 'PromptBuilder':
-        """Clear all sections."""
-        self._sections = []
-        self._output_mode = OutputMode.FULL
-        return self

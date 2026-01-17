@@ -247,7 +247,6 @@ class IslandDiversifier:
         for seed_code, seed_score in diverse_seeds:
             prog = Program(code=seed_code, metadata={"score": seed_score})
             eval_res = EvaluationResult(
-                program_id=prog.id,
                 scores={'score': seed_score},
                 is_valid=True,
             )
@@ -415,7 +414,6 @@ class IslandDiversifier:
         for prog in programs[:coordinator.n_centroids]:
             program = Program(code=prog["code"], metadata={"primary_score": prog["score"]})
             eval_result = EvaluationResult(
-                program_id=program.id,
                 scores=prog["result"],
                 is_valid=True,
             )

@@ -87,12 +87,9 @@ class SandboxedEvaluator:
         self,
         program: Program,
         inputs: list,
-        generate_traces: bool = False
     ) -> EvaluationResult:
         """Evaluate program in isolated process."""
         self._budget_manager.check_budget()
-
-        start_time = time.time()
 
         queue = mp.Queue()
         process = mp.Process(
@@ -101,8 +98,6 @@ class SandboxedEvaluator:
         )
         process.start()
         process.join(timeout=self._timeout)
-
-        elapsed = time.time() - start_time
 
         if process.is_alive():
             # First try graceful termination (SIGTERM)
@@ -133,10 +128,8 @@ class SandboxedEvaluator:
 
             self._budget_manager.try_consume(ResourceType.EVALUATIONS, 1)
             return EvaluationResult(
-                program_id=program.id,
                 is_valid=False,
                 error=f"Timeout after {self._timeout}s",
-                eval_time_seconds=elapsed,
             )
 
         if queue.empty():
@@ -156,10 +149,8 @@ class SandboxedEvaluator:
 
             self._budget_manager.try_consume(ResourceType.EVALUATIONS, 1)
             return EvaluationResult(
-                program_id=program.id,
                 is_valid=False,
                 error="Process died without result",
-                eval_time_seconds=elapsed,
             )
 
         status, result = queue.get()
@@ -181,13 +172,9 @@ class SandboxedEvaluator:
             # Still an error, but process completed - mild backpressure
             self._consecutive_timeouts = max(0, getattr(self, '_consecutive_timeouts', 0) - 1)
             return EvaluationResult(
-                program_id=program.id,
                 is_valid=False,
                 error=result,
-                eval_time_seconds=elapsed,
             )
-
-        outputs = {k: v['output'] for k, v in result.items()}
 
         scores: MetricDict = {}
         try:
@@ -203,30 +190,16 @@ class SandboxedEvaluator:
                 scores[metric_name] = sum(metric_scores) / len(metric_scores)
         except Exception as e:
             return EvaluationResult(
-                program_id=program.id,
                 is_valid=False,
                 error=f"Scoring error: {e}",
-                eval_time_seconds=elapsed,
             )
-
-        traces = None
-        if generate_traces:
-            trace_lines = []
-            for i, inp in enumerate(inputs):
-                r = result[str(i)]
-                trace_lines.append(f"Input {i}: {inp} -> {r['output']} ({r['exec_time']:.4f}s)")
-            traces = "\n".join(trace_lines)
 
         # Reset consecutive timeout counter on successful evaluation
         self._consecutive_timeouts = 0
 
         return EvaluationResult(
-            program_id=program.id,
             scores=scores,
-            outputs=outputs,
             is_valid=True,
-            eval_time_seconds=elapsed,
-            traces=traces,
         )
 
     def evaluate_cascade(
@@ -236,7 +209,7 @@ class SandboxedEvaluator:
     ) -> Optional[EvaluationResult]:
         """Progressive evaluation with early termination."""
         for stage in stages:
-            result = self.evaluate(program, stage.inputs, generate_traces=True)
+            result = self.evaluate(program, stage.inputs)
             if not result.is_valid:
                 return None
             if stage.validator and not stage.validator(result):

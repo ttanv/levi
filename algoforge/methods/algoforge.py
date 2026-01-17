@@ -132,7 +132,6 @@ async def _run_async(config: AlgoforgeConfig) -> AlgoforgeResult:
             # Just add seed to archive
             program = Program(code=config.seed_program)
             eval_result = EvaluationResult(
-                program_id=program.id,
                 scores=seed_result,
                 is_valid=True,
             )

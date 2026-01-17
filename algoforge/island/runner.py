@@ -255,7 +255,6 @@ class IslandPipelineRunner:
                 if "error" not in result:
                     program = Program(code=item["code"])
                     eval_result = EvaluationResult(
-                        program_id=program.id,
                         scores=result,
                         is_valid=True,
                     )

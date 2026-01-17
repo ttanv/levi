@@ -23,7 +23,7 @@ Example:
 from typing import Callable, Any, Optional
 
 # Core types
-from .core import Program, EvaluationResult, MetricDict, OutputDict
+from .core import Program, EvaluationResult, MetricDict
 
 # Budget management
 from .budget import BudgetManager, BudgetExhausted, ResourceType
@@ -68,7 +68,6 @@ __all__ = [
     'Program',
     'EvaluationResult',
     'MetricDict',
-    'OutputDict',
     # Budget
     'BudgetManager',
     'BudgetExhausted',

@@ -26,7 +26,6 @@ class TestProgramWithScore:
         """ProgramWithScore can be created with a program and result."""
         prog = Program(code="def solve(x): return x")
         result = EvaluationResult(
-            program_id=prog.id,
             scores={"score": 0.85},
         )
 
@@ -50,7 +49,6 @@ class TestProgramWithScore:
         """score property uses result's primary_score."""
         prog = Program(code="def solve(x): return x")
         result = EvaluationResult(
-            program_id=prog.id,
             scores={"accuracy": 0.9, "speed": 0.7},  # No 'score' key
         )
 
@@ -128,7 +126,6 @@ class TestPromptBuilder:
         builder = PromptBuilder()
         prog = Program(code="def solve(x): return x")
         result = EvaluationResult(
-            program_id=prog.id,
             scores={"score": 0.75},
         )
 
@@ -249,28 +246,6 @@ class TestPromptBuilder:
         assert "too slow" in prompt
         assert "SEARCH" in prompt
 
-    def test_clear(self):
-        """clear() removes all sections."""
-        builder = PromptBuilder()
-        builder.add_section("Test", "Content")
-        builder.set_output_mode(OutputMode.DIFF)
-
-        builder.clear()
-
-        prompt = builder.build()
-
-        assert "## Test" not in prompt
-        # Output mode should be reset to FULL
-        assert "SEARCH" not in prompt
-
-    def test_clear_chainable(self):
-        """clear() returns self for chaining."""
-        builder = PromptBuilder()
-
-        result = builder.clear()
-
-        assert result is builder
-
     def test_chained_building(self):
         """All methods can be chained together."""
         prog = Program(code="def solve(x): return x")
@@ -355,7 +330,6 @@ class TestPromptBuilderIntegration:
 
         builder.add_parents(
             [ProgramWithScore(parent, EvaluationResult(
-                program_id=parent.id,
                 scores={"score": 45.2},
             ))],
             priority=30
@@ -410,9 +384,7 @@ class TestPromptBuilderIntegration:
     return result''')
 
         result = EvaluationResult(
-            program_id=parent.id,
             scores={"score": 0.6},
-            traces="Input [1,2,3] -> [2,4,6] (0.001s)\nInput [1..1000] -> [...] (2.5s SLOW)",
         )
 
         builder.add_section("Problem", "Optimize list processing", priority=10)

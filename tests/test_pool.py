@@ -74,12 +74,11 @@ class TestCVTMAPElitesPool:
         """add() accepts valid programs."""
         prog = Program(code="def solve(x): return x")
         result = EvaluationResult(
-            program_id=prog.id,
             scores={"score": 0.8},
             is_valid=True,
         )
 
-        accepted = pool.add(prog, result)
+        accepted, _ = pool.add(prog, result)
 
         assert accepted is True
         assert pool.size() == 1
@@ -88,12 +87,11 @@ class TestCVTMAPElitesPool:
         """add() rejects invalid programs."""
         prog = Program(code="def solve(x): return x")
         result = EvaluationResult(
-            program_id=prog.id,
             is_valid=False,
             error="Error",
         )
 
-        accepted = pool.add(prog, result)
+        accepted, _ = pool.add(prog, result)
 
         assert accepted is False
         assert pool.size() == 0
@@ -105,13 +103,11 @@ class TestCVTMAPElitesPool:
         prog2 = Program(code="def solve(x): return x")  # Same code = same behavior
 
         pool.add(prog1, EvaluationResult(
-            program_id=prog1.id,
-            scores={"score": 0.5},
+                        scores={"score": 0.5},
             is_valid=True,
         ))
         pool.add(prog2, EvaluationResult(
-            program_id=prog2.id,
-            scores={"score": 0.8},  # Higher score
+                        scores={"score": 0.8},  # Higher score
             is_valid=True,
         ))
 
@@ -128,13 +124,11 @@ class TestCVTMAPElitesPool:
         prog2 = Program(code="def solve(x): return x")
 
         pool.add(prog1, EvaluationResult(
-            program_id=prog1.id,
             scores={"score": 0.8},  # Higher score first
             is_valid=True,
         ))
 
-        accepted = pool.add(prog2, EvaluationResult(
-            program_id=prog2.id,
+        accepted, _ = pool.add(prog2, EvaluationResult(
             scores={"score": 0.5},  # Lower score
             is_valid=True,
         ))
@@ -146,7 +140,6 @@ class TestCVTMAPElitesPool:
         """sample() returns a SampleResult."""
         prog = Program(code="def solve(x): return x")
         pool.add(prog, EvaluationResult(
-            program_id=prog.id,
             scores={"score": 0.8},
             is_valid=True,
         ))
@@ -175,7 +168,6 @@ class TestCVTMAPElitesPool:
         for i, code in enumerate(codes):
             prog = Program(code=code)
             pool.add(prog, EvaluationResult(
-                program_id=prog.id,
                 scores={"score": i * 0.3},  # Last has highest
                 is_valid=True,
             ))
@@ -202,7 +194,6 @@ class TestCVTMAPElitesPool:
         """get_stats() returns expected statistics."""
         prog = Program(code="def solve(x): return x")
         pool.add(prog, EvaluationResult(
-            program_id=prog.id,
             scores={"score": 0.8},
             is_valid=True,
         ))
@@ -243,7 +234,6 @@ class TestCVTMAPElitesPool:
         for code in codes:
             prog = Program(code=code)
             pool.add(prog, EvaluationResult(
-                program_id=prog.id,
                 scores={"score": 0.5},
                 is_valid=True,
             ))
@@ -258,7 +248,6 @@ class TestCVTMAPElitesPool:
             code = f"def solve(x): return x + {i}"
             prog = Program(code=code)
             pool.add(prog, EvaluationResult(
-                program_id=prog.id,
                 scores={"score": i * 0.1},
                 is_valid=True,
             ))

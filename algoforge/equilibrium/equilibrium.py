@@ -292,7 +292,6 @@ class PunctuatedEquilibrium:
                 "pe_type": "paradigm_shift",
             })
             eval_result = EvaluationResult(
-                program_id=program.id,
                 scores=result,
                 is_valid=True,
             )
@@ -381,7 +380,6 @@ class PunctuatedEquilibrium:
                         "pe_type": "variant",
                     })
                     eval_result = EvaluationResult(
-                        program_id=program.id,
                         scores=result,
                         is_valid=True,
                     )

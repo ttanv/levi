@@ -63,13 +63,7 @@ class BehaviorExtractor:
         score_keys: Optional[list[str]] = None,
         init_noise: float = 0.15,
         custom_extractors: Optional[dict[str, Callable[[Program, ast.AST], float]]] = None,
-        # Legacy parameter for backward compatibility
-        features: Optional[list[str]] = None,
     ) -> None:
-        # Handle legacy 'features' parameter
-        if features is not None and ast_features is None:
-            ast_features = features
-
         self.ast_features = ast_features or ["loop_count", "branch_count", "math_operators", "loop_nesting_max"]
         self.score_keys = score_keys or []
         self.init_noise = init_noise

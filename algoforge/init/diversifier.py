@@ -312,7 +312,6 @@ class Diversifier:
         for seed_code, seed_score, _ in diverse_seeds:
             prog = Program(code=seed_code, metadata={"score": seed_score})
             eval_res = EvaluationResult(
-                program_id=prog.id,
                 scores={'score': seed_score},
                 is_valid=True,
             )
@@ -459,7 +458,6 @@ class Diversifier:
             if seed_program and seed_result and "error" not in seed_result:
                 program = Program(code=seed_program, metadata={"primary_score": seed_result.get('score', 0.0)})
                 eval_result = EvaluationResult(
-                    program_id=program.id,
                     scores=seed_result,
                     is_valid=True,
                 )
@@ -474,7 +472,6 @@ class Diversifier:
             if seed_program and seed_result and "error" not in seed_result:
                 program = Program(code=seed_program, metadata={"primary_score": seed_result.get('score', 0.0)})
                 eval_result = EvaluationResult(
-                    program_id=program.id,
                     scores=seed_result,
                     is_valid=True,
                 )
@@ -504,7 +501,6 @@ class Diversifier:
             best_prog = max(progs, key=lambda x: x["score"])
             program = Program(code=best_prog["code"], metadata={"primary_score": best_prog["score"]})
             eval_result = EvaluationResult(
-                program_id=program.id,
                 scores=best_prog["result"],
                 is_valid=True,
             )

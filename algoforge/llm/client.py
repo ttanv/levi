@@ -1,14 +1,5 @@
 """
-LLMClient: Interface to language model APIs using LiteLLM.
-
-Supports:
-- Any LiteLLM-compatible provider (Anthropic, OpenAI, Azure, OpenRouter, Google, etc.)
-- Ensemble of models with weighted selection
-
-Model string formats:
-- OpenRouter: "openrouter/anthropic/claude-3-opus"
-- Google: "gemini/gemini-pro"
-- Together: "together_ai/meta-llama/Llama-3-70b"
+LLMClient: Interface to language model APIs using LiteLLM
 
 API keys via environment variables or passed directly.
 """
@@ -43,7 +34,7 @@ class LLMResponse:
 @dataclass
 class ModelWeight:
     model: str
-    weight: float  # e.g., 0.8 for 80% of calls
+    weight: float  
 
 
 class LLMClient:
@@ -51,16 +42,6 @@ class LLMClient:
     Interface to language model APIs using LiteLLM.
 
     Supports ensemble of models with weighted random selection.
-
-    Example:
-        # Single model
-        client = LLMClient(budget, model="gpt-4o")
-
-        # Ensemble: 80% fast model, 20% strong model
-        client = LLMClient(budget, models=[
-            ModelWeight("gpt-4o-mini", 0.8),
-            ModelWeight("gpt-4o", 0.2),
-        ])
     """
 
     def __init__(
@@ -93,8 +74,7 @@ class LLMClient:
             self._models = [ModelWeight(model, 1.0)]
             self._weights = [1.0]
         else:
-            self._models = [ModelWeight("gpt-4o-mini", 1.0)]
-            self._weights = [1.0]
+            raise ValueError("Must provide either 'model' or 'models' argument")
 
     def _select_model(self) -> str:
         """Select a model from ensemble based on weights."""
@@ -154,11 +134,3 @@ class LLMClient:
             model=actual_model,
             cost=cost,
         )
-
-    def generate_batch(
-        self,
-        prompts: list[str],
-        config: Optional[LLMConfig] = None
-    ) -> list[LLMResponse]:
-        """Generate completions for multiple prompts."""
-        return [self.generate(p, config) for p in prompts]

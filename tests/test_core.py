@@ -45,14 +45,6 @@ class TestProgram:
         with pytest.raises(AttributeError):
             prog.code = "new code"
 
-    def test_program_is_seed(self):
-        """is_seed property correctly identifies seed programs."""
-        seed = Program(code="def solve(x): return x")
-        child = Program(code="def solve(x): return x + 1", parents=("parent-id",))
-
-        assert seed.is_seed is True
-        assert child.is_seed is False
-
     def test_program_unique_ids(self):
         """Each program gets a unique ID."""
         prog1 = Program(code="def solve(x): return x")
@@ -83,40 +75,28 @@ class TestEvaluationResult:
     """Tests for EvaluationResult dataclass."""
 
     def test_evaluation_result_minimal(self):
-        """EvaluationResult can be created with just program_id."""
-        result = EvaluationResult(program_id="prog-123")
+        """EvaluationResult can be created with defaults."""
+        result = EvaluationResult()
 
-        assert result.program_id == "prog-123"
         assert result.scores == {}
-        assert result.outputs == {}
         assert result.is_valid is True
-        assert result.eval_time_seconds == 0.0
-        assert result.traces is None
         assert result.error is None
 
     def test_evaluation_result_full(self):
         """EvaluationResult can be created with all fields."""
         result = EvaluationResult(
-            program_id="prog-123",
             scores={"accuracy": 0.95, "speed": 0.8},
-            outputs={"0": [1, 2, 3], "1": [4, 5, 6]},
             is_valid=True,
-            eval_time_seconds=1.5,
-            traces="Input 0: [1,2] -> [1,2,3]",
             error=None,
         )
 
-        assert result.program_id == "prog-123"
         assert result.scores == {"accuracy": 0.95, "speed": 0.8}
-        assert result.outputs == {"0": [1, 2, 3], "1": [4, 5, 6]}
         assert result.is_valid is True
-        assert result.eval_time_seconds == 1.5
-        assert result.traces == "Input 0: [1,2] -> [1,2,3]"
+        assert result.error is None
 
     def test_evaluation_result_invalid(self):
         """EvaluationResult correctly represents invalid results."""
         result = EvaluationResult(
-            program_id="prog-123",
             is_valid=False,
             error="NameError: undefined variable 'x'",
         )
@@ -128,7 +108,6 @@ class TestEvaluationResult:
     def test_primary_score_with_score_key(self):
         """primary_score returns 'score' key when present."""
         result = EvaluationResult(
-            program_id="prog-123",
             scores={"score": 0.75, "accuracy": 0.8, "speed": 0.6}
         )
 
@@ -137,7 +116,6 @@ class TestEvaluationResult:
     def test_primary_score_without_score_key(self):
         """primary_score returns first value when no 'score' key."""
         result = EvaluationResult(
-            program_id="prog-123",
             scores={"accuracy": 0.8, "speed": 0.6}
         )
 
@@ -146,25 +124,23 @@ class TestEvaluationResult:
 
     def test_primary_score_empty(self):
         """primary_score returns 0.0 when no scores."""
-        result = EvaluationResult(program_id="prog-123")
+        result = EvaluationResult()
 
         assert result.primary_score == 0.0
 
     def test_invalid_factory_method(self):
         """invalid() factory creates invalid result correctly."""
         result = EvaluationResult.invalid(
-            program_id="prog-123",
             error="Timeout after 10s"
         )
 
-        assert result.program_id == "prog-123"
         assert result.is_valid is False
         assert result.error == "Timeout after 10s"
         assert result.scores == {}
 
     def test_evaluation_result_mutable(self):
         """EvaluationResult is mutable (not frozen)."""
-        result = EvaluationResult(program_id="prog-123")
+        result = EvaluationResult()
 
         # Should not raise
         result.scores = {"score": 0.5}
@@ -174,25 +150,13 @@ class TestEvaluationResult:
 class TestProgramEvaluationIntegration:
     """Integration tests for Program + EvaluationResult."""
 
-    def test_program_id_matches_result(self):
-        """EvaluationResult references correct program."""
-        prog = Program(code="def solve(x): return x")
-        result = EvaluationResult(
-            program_id=prog.id,
-            scores={"score": 0.9}
-        )
-
-        assert result.program_id == prog.id
-
     def test_multiple_programs_multiple_results(self):
         """Multiple programs can have separate results."""
         prog1 = Program(code="def solve(x): return x")
         prog2 = Program(code="def solve(x): return x * 2")
 
-        result1 = EvaluationResult(program_id=prog1.id, scores={"score": 0.5})
-        result2 = EvaluationResult(program_id=prog2.id, scores={"score": 0.8})
+        result1 = EvaluationResult(scores={"score": 0.5})
+        result2 = EvaluationResult(scores={"score": 0.8})
 
-        assert result1.program_id == prog1.id
-        assert result2.program_id == prog2.id
         assert result1.primary_score == 0.5
         assert result2.primary_score == 0.8

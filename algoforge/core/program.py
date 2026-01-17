@@ -10,7 +10,6 @@ from .types import MetadataDict
 
 
 def _generate_id() -> str:
-    """Generate a unique program ID."""
     return str(uuid.uuid4())
 
 
@@ -18,14 +17,6 @@ def _generate_id() -> str:
 class Program:
     """
     The fundamental unit of evolution.
-    Programs are immutable once created.
-
-    Attributes:
-        code: The actual code/string
-        id: Unique identifier
-        parents: Tuple of parent program IDs
-        metadata: Arbitrary key-value store for method-specific data
-        created_at: Timestamp of creation
     """
 
     code: str
@@ -33,8 +24,3 @@ class Program:
     parents: tuple[str, ...] = field(default_factory=tuple)
     metadata: MetadataDict = field(default_factory=dict)
     created_at: datetime = field(default_factory=datetime.now)
-
-    @property
-    def is_seed(self) -> bool:
-        """Returns True if this is a seed program (no parents)."""
-        return len(self.parents) == 0

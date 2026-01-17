@@ -26,7 +26,7 @@ class BudgetConfig(BaseModel):
 class CVTConfig(BaseModel):
     n_centroids: int = 50
     defer_centroids: bool = True
-    predefined_centroids_file: Optional[str] = None  # JSON file with predefined centroid vectors
+    predefined_centroids_file: Optional[str] = None  
 
 
 class InitConfig(BaseModel):
@@ -34,7 +34,7 @@ class InitConfig(BaseModel):
     n_diverse_seeds: int = 5
     n_variants_per_seed: int = 25
     diversity_model: Optional[str] = None
-    variant_models: Optional[list[str]] = None  # Models to cycle through for variant generation
+    variant_models: Optional[list[str]] = None  
     temperature: float = 0.8
 
 
@@ -74,25 +74,25 @@ class PunctuatedEquilibriumConfig(BaseModel):
     creating fundamentally new solutions to escape local optima.
     """
     enabled: bool = False
-    interval: int = 50  # Trigger every N evaluations
-    n_clusters: int = 3  # Number of behavioral clusters
-    n_variants: int = 5  # Variants per paradigm shift
-    heavy_model: Optional[str] = None  # Defaults to first sampler model
-    variant_models: Optional[list[str]] = None  # Defaults to lighter models
-    behavior_noise: float = 0.05  # Noise scale for behavior perturbation
+    interval: int = 50
+    n_clusters: int = 3  
+    n_variants: int = 5  
+    heavy_model: Optional[str] = None  
+    variant_models: Optional[list[str]] = None  
+    behavior_noise: float = 0.05  
     temperature: float = 1.0
-    reasoning_effort: Optional[str] = None  # "low", "medium", "high" for DeepSeek reasoning
+    reasoning_effort: Optional[str] = None  
 
 
 class PipelineConfig(BaseModel):
     n_llm_workers: int = 4
     n_eval_processes: int = 4
-    eval_timeout: float = 300.0
+    eval_timeout: float = 60.0
     temperature: float = 0.8
     max_tokens: int = 30000
     n_parents: int = 1
     n_inspirations: int = 2
-    output_mode: str = "full"  # "full" or "diff"
+    output_mode: str = "full"  
 
 
 class AlgoforgeConfig(BaseModel):
