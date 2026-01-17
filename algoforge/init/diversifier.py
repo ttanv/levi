@@ -258,7 +258,7 @@ class Diversifier:
                     "model": model,
                     "messages": [{"role": "user", "content": prompt}],
                     "temperature": self.config.init.temperature,
-                    "max_tokens": 8192,
+                    "max_tokens": 4096,
                     "timeout": 300,
                 }
                 if model in self.config.api_bases:
@@ -343,7 +343,7 @@ class Diversifier:
                     "model": model,
                     "messages": [{"role": "user", "content": prompt}],
                     "temperature": self.config.init.temperature,
-                    "max_tokens": 8192,
+                    "max_tokens": 4096,
                     "timeout": 300,
                 }
                 if model in self.config.api_bases:

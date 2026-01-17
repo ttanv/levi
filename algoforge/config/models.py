@@ -89,7 +89,7 @@ class PipelineConfig(BaseModel):
     n_eval_processes: int = 4
     eval_timeout: float = 60.0
     temperature: float = 0.8
-    max_tokens: int = 8192
+    max_tokens: int = 4096
     n_parents: int = 1
     n_inspirations: int = 2
     output_mode: str = "full"  
