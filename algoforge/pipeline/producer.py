@@ -81,13 +81,16 @@ async def llm_producer(
 
             state.llm_in_flight += 1
             try:
-                response = await litellm.acompletion(
-                    model=model,
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=config.pipeline.temperature,
-                    max_tokens=config.pipeline.max_tokens,
-                    timeout=300,
-                )
+                kwargs = {
+                    "model": model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": config.pipeline.temperature,
+                    "max_tokens": config.pipeline.max_tokens,
+                    "timeout": 300,
+                }
+                if model in config.api_bases:
+                    kwargs["api_base"] = config.api_bases[model]
+                response = await litellm.acompletion(**kwargs)
                 content = response.choices[0].message.content
                 cost = litellm.completion_cost(completion_response=response)
             except Exception as e:

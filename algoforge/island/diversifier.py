@@ -185,13 +185,16 @@ class IslandDiversifier:
             )
 
             try:
-                response = await litellm.acompletion(
-                    model=model,
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=self.config.init.temperature,
-                    max_tokens=30000,
-                    timeout=300,
-                )
+                kwargs = {
+                    "model": model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": self.config.init.temperature,
+                    "max_tokens": 30000,
+                    "timeout": 300,
+                }
+                if model in self.config.api_bases:
+                    kwargs["api_base"] = self.config.api_bases[model]
+                response = await litellm.acompletion(**kwargs)
                 content = response.choices[0].message.content
                 cost = litellm.completion_cost(completion_response=response)
                 self.total_cost += cost
@@ -275,13 +278,16 @@ class IslandDiversifier:
         # Parallel LLM calls
         async def generate_variant(idx: int, prompt: str) -> dict:
             try:
-                response = await litellm.acompletion(
-                    model=model,
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=self.config.init.temperature,
-                    max_tokens=30000,
-                    timeout=300,
-                )
+                kwargs = {
+                    "model": model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": self.config.init.temperature,
+                    "max_tokens": 30000,
+                    "timeout": 300,
+                }
+                if model in self.config.api_bases:
+                    kwargs["api_base"] = self.config.api_bases[model]
+                response = await litellm.acompletion(**kwargs)
                 content = response.choices[0].message.content
                 cost = litellm.completion_cost(completion_response=response)
                 return {"idx": idx, "content": content, "cost": cost}

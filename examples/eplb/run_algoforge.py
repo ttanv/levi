@@ -2,43 +2,6 @@
 """Run AlgoForge on EPLB (Expert Parallelism Load Balancer) Problem."""
 
 from datetime import datetime
-import os
-
-import litellm
-
-# Set dummy API key for local servers (required by LiteLLM's OpenAI client)
-os.environ["OPENAI_API_KEY"] = "not-needed"
-
-# Local TPU model endpoints (openai/ prefix = use OpenAI-compatible API protocol)
-litellm.register_model({
-    "openai/Qwen/Qwen3-30B-A3B-Instruct-2507": {
-        "max_tokens": 32768,
-        "max_input_tokens": 32768,
-        "max_output_tokens": 32768,
-        "input_cost_per_token": 0,
-        "output_cost_per_token": 0,
-        "litellm_provider": "openai",
-        "api_base": "http://10.142.0.3:8000/v1",
-    },
-    "openai/meta-llama/Llama-3.3-70B-Instruct": {
-        "max_tokens": 32768,
-        "max_input_tokens": 32768,
-        "max_output_tokens": 32768,
-        "input_cost_per_token": 0,
-        "output_cost_per_token": 0,
-        "litellm_provider": "openai",
-        "api_base": "http://10.130.0.4:8000/v1",
-    },
-    "openai/google/gemma-3-27b-it": {
-        "max_tokens": 32768,
-        "max_input_tokens": 32768,
-        "max_output_tokens": 32768,
-        "input_cost_per_token": 0,
-        "output_cost_per_token": 0,
-        "litellm_provider": "openai",
-        "api_base": "http://10.164.0.4:8000/v1",
-    },
-})
 
 from problem import PROBLEM_DESCRIPTION, FUNCTION_SIGNATURE, SEED_PROGRAM, get_lazy_inputs, score_fn
 from algoforge import (
@@ -52,11 +15,19 @@ EPLB_AST_FEATURES = ['loop_nesting_max', 'cyclomatic_complexity', 'math_operator
 EPLB_SCORE_KEYS = ['execution_time', 'workload_main', 'workload_8', 'workload_9']
 
 # --- Config ---
+# Local TPU models (hosted_vllm/ prefix for OpenAI-compatible vLLM endpoints)
 LIGHT_MODELS = [
-    "openai/Qwen/Qwen3-30B-A3B-Instruct-2507",
-    "openai/google/gemma-3-27b-it",
+    "hosted_vllm/Qwen/Qwen3-30B-A3B-Instruct-2507",
+    "hosted_vllm/google/gemma-3-27b-it",
 ]
-HEAVY_MODEL = "openai/meta-llama/Llama-3.3-70B-Instruct"
+HEAVY_MODEL = "hosted_vllm/meta-llama/Llama-3.3-70B-Instruct"
+
+# Model -> API base URL mapping for local TPU endpoints
+API_BASES = {
+    "hosted_vllm/Qwen/Qwen3-30B-A3B-Instruct-2507": "http://10.142.0.3:8000/v1",
+    "hosted_vllm/meta-llama/Llama-3.3-70B-Instruct": "http://10.130.0.4:8000/v1",
+    "hosted_vllm/google/gemma-3-27b-it": "http://10.164.0.4:8000/v1",
+}
 
 RUN_DIR = f"runs/{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
@@ -94,6 +65,7 @@ config = AlgoforgeConfig(
         temperature=1.0,
     ),
     output_dir=RUN_DIR,
+    api_bases=API_BASES,
 )
 
 # --- Run ---

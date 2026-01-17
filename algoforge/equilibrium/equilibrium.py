@@ -260,6 +260,9 @@ class PunctuatedEquilibrium:
                 call_kwargs["reasoning_effort"] = self.pe_config.reasoning_effort
                 logger.info(f"[PE] Using reasoning_effort={self.pe_config.reasoning_effort} for paradigm shift")
 
+            if heavy_model in self.config.api_bases:
+                call_kwargs["api_base"] = self.config.api_bases[heavy_model]
+
             response = await litellm.acompletion(**call_kwargs)
             content = response.choices[0].message.content
             cost = litellm.completion_cost(completion_response=response)
@@ -329,13 +332,16 @@ class PunctuatedEquilibrium:
 
             async def generate_variant(model: str, idx: int):
                 try:
-                    response = await litellm.acompletion(
-                        model=model,
-                        messages=[{"role": "user", "content": variant_prompt}],
-                        temperature=self.pe_config.temperature,
-                        max_tokens=30000,
-                        timeout=300,
-                    )
+                    kwargs = {
+                        "model": model,
+                        "messages": [{"role": "user", "content": variant_prompt}],
+                        "temperature": self.pe_config.temperature,
+                        "max_tokens": 30000,
+                        "timeout": 300,
+                    }
+                    if model in self.config.api_bases:
+                        kwargs["api_base"] = self.config.api_bases[model]
+                    response = await litellm.acompletion(**kwargs)
                     content = response.choices[0].message.content
                     cost = litellm.completion_cost(completion_response=response)
                     return {"idx": idx, "content": content, "cost": cost, "model": model}

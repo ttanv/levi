@@ -52,6 +52,7 @@ class LLMClient:
         default_config: Optional[LLMConfig] = None,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
+        api_bases: Optional[dict[str, str]] = None,
     ) -> None:
         """
         Args:
@@ -61,11 +62,13 @@ class LLMClient:
             default_config: Default generation configuration
             api_key: API key (or use environment variable)
             api_base: API base URL for Azure/custom endpoints
+            api_bases: Dict mapping model names to their api_base URLs (for multiple local endpoints)
         """
         self._budget_manager = budget_manager
         self.default_config = default_config or LLMConfig()
         self._api_key = api_key
         self._api_base = api_base
+        self._api_bases = api_bases or {}
 
         if models:
             self._models = models

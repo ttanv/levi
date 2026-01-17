@@ -180,13 +180,16 @@ class IslandPipelineRunner:
 
                 self.state.llm_in_flight += 1
                 try:
-                    response = await litellm.acompletion(
-                        model=model,
-                        messages=[{"role": "user", "content": prompt}],
-                        temperature=self.config.pipeline.temperature,
-                        max_tokens=self.config.pipeline.max_tokens,
-                        timeout=300,
-                    )
+                    kwargs = {
+                        "model": model,
+                        "messages": [{"role": "user", "content": prompt}],
+                        "temperature": self.config.pipeline.temperature,
+                        "max_tokens": self.config.pipeline.max_tokens,
+                        "timeout": 300,
+                    }
+                    if model in self.config.api_bases:
+                        kwargs["api_base"] = self.config.api_bases[model]
+                    response = await litellm.acompletion(**kwargs)
                     content = response.choices[0].message.content
                     cost = litellm.completion_cost(completion_response=response)
                 except Exception as e:

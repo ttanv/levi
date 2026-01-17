@@ -269,6 +269,9 @@ async def _generate_meta_advice(config: AlgoforgeConfig, state: PipelineState) -
             "timeout": 60,
         }
 
+        if config.meta_advice.model in config.api_bases:
+            call_kwargs["api_base"] = config.api_bases[config.meta_advice.model]
+
         if "deepseek" in config.meta_advice.model.lower():
             call_kwargs["reasoning"] = {"enabled": True}
 

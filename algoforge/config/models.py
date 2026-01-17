@@ -118,6 +118,7 @@ class AlgoforgeConfig(BaseModel):
     n_islands: int = 1
     migration_interval: Optional[int] = None
     output_dir: Optional[str] = None  # Directory for snapshots
+    api_bases: dict[str, str] = Field(default_factory=dict)  # Model -> api_base URL mapping
 
     model_config = {"arbitrary_types_allowed": True}
 
