@@ -18,16 +18,16 @@ EPLB_SCORE_KEYS = ['execution_time', 'workload_main', 'workload_8', 'workload_9'
 # Local TPU models (raw model names as vLLM expects them)
 LIGHT_MODELS = [
     "Qwen/Qwen3-30B-A3B-Instruct-2507",
-    "Qwen/Qwen3-30B-A3B-Thinking-2507",
-    "google/gemma-3-27b-it",
+    "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+    "Qwen/Qwen2.5-72B-Instruct",
 ]
-HEAVY_MODEL = "google/gemma-3-27b-it"
+HEAVY_MODEL = "Qwen/Qwen2.5-72B-Instruct"
 
 # Model -> API base URL mapping for local TPU endpoints
 LOCAL_ENDPOINTS = {
     "Qwen/Qwen3-30B-A3B-Instruct-2507": "http://10.142.0.3:8000/v1",
-    "Qwen/Qwen3-30B-A3B-Thinking-2507": "http://localhost:8000/v1",
-    "google/gemma-3-27b-it": "http://10.164.0.5:8000/v1",
+    "Qwen/Qwen3-Coder-30B-A3B-Instruct": "http://localhost:8000/v1",
+    "Qwen/Qwen2.5-72B-Instruct": "http://10.164.0.5:8000/v1",
 }
 
 # Model info for token cost tracking (same format as litellm.register_model)
@@ -54,7 +54,7 @@ config = AlgoforgeConfig(
     sampler_model_pairs=[
         SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[1], weight=1.0, temperature=0.3),
         SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[0], weight=1.0, temperature=0.7),
-        SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[2], weight=1.0, temperature=0.7),
+        SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[1], weight=1.0, temperature=0.7),
         SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[0], weight=1.0, temperature=1.2),
     ],
     cvt=CVTConfig(n_centroids=40, defer_centroids=True, predefined_centroids_file="examples/eplb/centroids.json"),
@@ -64,8 +64,8 @@ config = AlgoforgeConfig(
     behavior=BehaviorConfig(ast_features=EPLB_AST_FEATURES, score_keys=EPLB_SCORE_KEYS),
     punctuated_equilibrium=PunctuatedEquilibriumConfig(
         enabled=True,
-        interval=5,
-        n_clusters=3,
+        interval=4,
+        n_clusters=2,
         n_variants=1,
         heavy_model=HEAVY_MODEL,
         variant_models=LIGHT_MODELS,
