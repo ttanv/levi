@@ -6,7 +6,6 @@ Captures execution time per input for systems optimization scoring.
 """
 
 import time
-import resource
 import multiprocessing as mp
 from typing import Callable, Any, Optional
 
@@ -15,11 +14,8 @@ from ..budget import BudgetManager, ResourceType
 from .protocol import EvaluationStage
 
 
-def _run_in_process(code: str, inputs: list, queue: mp.Queue, memory_limit_mb: int) -> None:
+def _run_in_process(code: str, inputs: list, queue: mp.Queue) -> None:
     """Worker function that runs in isolated process."""
-    memory_bytes = memory_limit_mb * 1024 * 1024
-    resource.setrlimit(resource.RLIMIT_AS, (memory_bytes, memory_bytes))
-
     try:
         namespace = {}
         exec(code, namespace)
@@ -50,7 +46,7 @@ def _run_in_process(code: str, inputs: list, queue: mp.Queue, memory_limit_mb: i
         queue.put(('success', results))
 
     except MemoryError:
-        queue.put(('error', f'Memory limit exceeded ({memory_limit_mb}MB)'))
+        queue.put(('error', 'MemoryError during execution'))
     except Exception as e:
         queue.put(('error', str(e)))
 
@@ -69,19 +65,16 @@ class SandboxedEvaluator:
         budget_manager: BudgetManager,
         score_functions: dict[str, Callable[[Any, Any, float], float]],
         timeout: float = 10.0,
-        memory_limit_mb: int = 512,
     ) -> None:
         """
         Args:
             budget_manager: Budget manager for tracking evaluations
             score_functions: Dict of {metric_name: fn(output, input, exec_time) -> score}
             timeout: Maximum execution time per program (seconds)
-            memory_limit_mb: Maximum memory per program (megabytes)
         """
         self._budget_manager = budget_manager
         self._score_functions = score_functions
         self._timeout = timeout
-        self._memory_limit_mb = memory_limit_mb
 
     def evaluate(
         self,
@@ -94,7 +87,7 @@ class SandboxedEvaluator:
         queue = mp.Queue()
         process = mp.Process(
             target=_run_in_process,
-            args=(program.code, inputs, queue, self._memory_limit_mb)
+            args=(program.code, inputs, queue)
         )
         process.start()
         process.join(timeout=self._timeout)

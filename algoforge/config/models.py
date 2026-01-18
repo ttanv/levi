@@ -8,8 +8,10 @@ class LLMProviderConfig(BaseModel):
     # Model -> endpoint URL for local models (replaces api_bases)
     local_endpoints: dict[str, str] = Field(default_factory=dict)
 
-    # Registry for cloud model configs (passed to litellm.register_model)
-    cloud_registry: Optional[dict] = None
+    # Model info registry - same format as litellm.register_model()
+    # Used for cost calculation (local models) and passed to litellm (cloud models)
+    # Example: {"model_name": {"input_cost_per_token": 0.001, "output_cost_per_token": 0.002}}
+    model_info: dict[str, dict] = Field(default_factory=dict)
 
     # Retry configuration
     max_retries: int = 3

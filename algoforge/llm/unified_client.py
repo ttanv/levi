@@ -20,8 +20,9 @@ class UnifiedLLMClientConfig:
     # Model -> endpoint URL for local models
     local_endpoints: dict[str, str] = field(default_factory=dict)
 
-    # Registry for litellm.register_model() - for custom cloud models
-    cloud_registry: Optional[dict] = None
+    # Model info - same format as litellm.register_model()
+    # Used for cost calculation (local) and registration (cloud)
+    model_info: dict[str, dict] = field(default_factory=dict)
 
     # Retry configuration
     max_retries: int = 3
@@ -52,9 +53,13 @@ class UnifiedLLMClient:
         # Initialize providers
         self._local_provider: Optional[OpenAICompatibleProvider] = None
         if config.local_endpoints:
-            self._local_provider = OpenAICompatibleProvider(config.local_endpoints)
+            self._local_provider = OpenAICompatibleProvider(
+                config.local_endpoints,
+                model_info=config.model_info,
+            )
 
-        self._cloud_provider = LiteLLMProvider(config.cloud_registry)
+        # Pass model_info to LiteLLM for registration
+        self._cloud_provider = LiteLLMProvider(config.model_info if config.model_info else None)
 
     def _get_provider(self, model: str) -> LLMProvider:
         """Route to appropriate provider based on model."""

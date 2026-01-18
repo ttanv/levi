@@ -64,7 +64,7 @@ async def _run_async(config: AlgoforgeConfig) -> AlgoforgeResult:
     # Initialize unified LLM client
     llm_config = UnifiedLLMClientConfig(
         local_endpoints=config.llm.local_endpoints,
-        cloud_registry=config.llm.cloud_registry,
+        model_info=config.llm.model_info,
         max_retries=config.llm.max_retries,
         retry_delay=config.llm.retry_delay,
         retry_backoff=config.llm.retry_backoff,

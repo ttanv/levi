@@ -28,6 +28,18 @@ LOCAL_ENDPOINTS = {
     "google/gemma-3-27b-it": "http://10.130.0.2:8000/v1",
 }
 
+# Model info for token cost tracking (same format as litellm.register_model)
+MODEL_INFO = {
+    "Qwen/Qwen3-30B-A3B-Instruct-2507": {
+        "input_cost_per_token": 0.0000001,
+        "output_cost_per_token": 0.0000004,
+    },
+    "google/gemma-3-27b-it": {
+        "input_cost_per_token": 0.0000001,
+        "output_cost_per_token": 0.0000004,
+    },
+}
+
 RUN_DIR = f"runs/{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
 config = AlgoforgeConfig(
@@ -64,7 +76,10 @@ config = AlgoforgeConfig(
         temperature=1.0,
     ),
     output_dir=RUN_DIR,
-    llm=LLMProviderConfig(local_endpoints=LOCAL_ENDPOINTS),
+    llm=LLMProviderConfig(
+        local_endpoints=LOCAL_ENDPOINTS,
+        model_info=MODEL_INFO,
+    ),
 )
 
 # --- Run ---
