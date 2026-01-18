@@ -21,7 +21,7 @@ LIGHT_MODELS = [
     "Qwen/Qwen3-30B-A3B-Thinking-2507",
     "google/gemma-3-27b-it",
 ]
-HEAVY_MODEL = "google/gemma-3-27b-it",
+HEAVY_MODEL = "google/gemma-3-27b-it"
 
 # Model -> API base URL mapping for local TPU endpoints
 LOCAL_ENDPOINTS = {
@@ -52,10 +52,10 @@ config = AlgoforgeConfig(
     score_fn=score_fn,
     budget=BudgetConfig(dollars=3.0),
     sampler_model_pairs=[
+        SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[1], weight=1.0, temperature=0.3),
         SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[0], weight=1.0, temperature=0.7),
-        SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[1], weight=1.0, temperature=0.7),
+        SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[2], weight=1.0, temperature=0.7),
         SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[0], weight=1.0, temperature=1.2),
-        SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[1], weight=1.0, temperature=1.2),
     ],
     cvt=CVTConfig(n_centroids=40, defer_centroids=True, predefined_centroids_file="examples/eplb/centroids.json"),
     init=InitConfig(enabled=False),
@@ -70,7 +70,7 @@ config = AlgoforgeConfig(
         heavy_model=HEAVY_MODEL,
         variant_models=LIGHT_MODELS,
         behavior_noise=0.3,
-        temperature=1.0,
+        temperature=0.7,
     ),
     output_dir=RUN_DIR,
     llm=LLMProviderConfig(
