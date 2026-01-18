@@ -27,7 +27,7 @@ HEAVY_MODEL = "google/gemma-3-27b-it",
 LOCAL_ENDPOINTS = {
     "Qwen/Qwen3-30B-A3B-Instruct-2507": "http://10.142.0.3:8000/v1",
     "Qwen/Qwen3-30B-A3B-Thinking-2507": "http://localhost:8000/v1",
-    "google/gemma-3-27b-it": "http://10.130.0.2:8000/v1",
+    "google/gemma-3-27b-it": "http://10.164.0.5:8000/v1",
 }
 
 # Model info for token cost tracking (same format as litellm.register_model)
