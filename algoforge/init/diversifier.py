@@ -4,7 +4,6 @@ import asyncio
 import json
 import logging
 import random
-import resource
 import types
 from typing import Optional
 
@@ -57,20 +56,13 @@ Output ONLY the complete Python code in a ```python block.
 
 def _evaluate_code(code: str, score_fn, inputs: list, fn_name: str) -> dict:
     """Runs in subprocess: parse code, extract callable, call score_fn."""
-    # Limit process memory to 2GB to prevent VM crashes
-    try:
-        memory_bytes = 8 * 1024 * 1024 * 1024
-        resource.setrlimit(resource.RLIMIT_AS, (memory_bytes, memory_bytes))
-    except (ValueError, resource.error):
-        pass  # May fail on some platforms
-
     namespace = {}
     try:
         exec(code, namespace)
     except SyntaxError as e:
         return {"error": f"Syntax error: {e}"}
     except MemoryError:
-        return {"error": "MemoryError: code exceeded 8GB limit"}
+        return {"error": "MemoryError during code execution"}
 
     fn = namespace.get(fn_name)
     if not isinstance(fn, types.FunctionType):
@@ -79,7 +71,7 @@ def _evaluate_code(code: str, score_fn, inputs: list, fn_name: str) -> dict:
     try:
         return score_fn(fn, inputs)
     except MemoryError:
-        return {"error": "MemoryError: code exceeded 8GB limit"}
+        return {"error": "MemoryError during scoring"}
 
 
 def _load_predefined_centroids(json_path: str, feature_names: list[str]) -> tuple[np.ndarray, dict[str, list[float]]]:
