@@ -8,7 +8,6 @@ change separated by long periods of stasis. This module implements periodic
 
 import asyncio
 import logging
-import resource
 import types
 from typing import Optional
 
@@ -28,18 +27,13 @@ logger = logging.getLogger(__name__)
 
 def _evaluate_code(code: str, score_fn, inputs: list, fn_name: str) -> dict:
     """Runs in subprocess: parse code, extract callable, call score_fn."""
-    # Limit process memory to prevent VM crashes
-    try:
-        memory_bytes = 8 * 1024 * 1024 * 1024
-        resource.setrlimit(resource.RLIMIT_AS, (memory_bytes, memory_bytes))
-    except (ValueError, resource.error):
-        pass  # May fail on some platforms
-
     namespace = {}
     try:
         exec(code, namespace)
     except SyntaxError as e:
         return {"error": f"Syntax error: {e}"}
+    except MemoryError:
+        return {"error": "MemoryError during code execution"}
 
     fn = namespace.get(fn_name)
     if not isinstance(fn, types.FunctionType):
@@ -48,6 +42,8 @@ def _evaluate_code(code: str, score_fn, inputs: list, fn_name: str) -> dict:
     try:
         result = score_fn(fn, inputs)
         return result
+    except MemoryError:
+        return {"error": "MemoryError during scoring"}
     except Exception as e:
         return {"error": f"Scoring error: {e}"}
 
