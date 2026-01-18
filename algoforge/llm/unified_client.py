@@ -102,13 +102,13 @@ class UnifiedLLMClient:
                 last_error = e
                 if attempt < self._config.max_retries - 1:
                     logger.warning(
-                        f"LLM call failed (attempt {attempt + 1}/{self._config.max_retries}): {e}"
+                        f"[{model}] LLM call failed (attempt {attempt + 1}/{self._config.max_retries}): {e}"
                     )
                     await asyncio.sleep(delay)
                     delay *= self._config.retry_backoff
 
         raise LLMRetryExhaustedError(
-            f"Failed after {self._config.max_retries} retries",
+            f"[{model}] Failed after {self._config.max_retries} retries",
             last_error,  # type: ignore
         )
 

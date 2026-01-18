@@ -90,10 +90,10 @@ async def llm_producer(
                 content = response.content
                 cost = response.cost
             except LLMRetryExhaustedError as e:
-                logger.warning(f"[LLM-{worker_id}] Error after retries: {e.last_error}")
+                logger.warning(f"[LLM-{worker_id}] [{model}] Error after retries: {e.last_error}")
                 continue
             except Exception as e:
-                logger.warning(f"[LLM-{worker_id}] Error: {e}")
+                logger.warning(f"[LLM-{worker_id}] [{model}] Error: {e}")
                 await asyncio.sleep(1.0)
                 continue
             finally:

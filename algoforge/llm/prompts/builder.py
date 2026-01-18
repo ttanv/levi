@@ -97,17 +97,25 @@ class PromptBuilder:
         if self._output_mode == OutputMode.FULL:
             return '''Write an improved version of the function.
 
-IMPORTANT: Your response must contain ONLY a Python code block. No text before or after.
+CRITICAL REQUIREMENTS:
+1. Your code must be COMPLETE and RUNNABLE as a standalone file
+2. Include ALL necessary imports at the top of your code
+3. The function signature must match exactly what is specified
+4. Ensure there are no syntax errors (matching parentheses, quotes, indentation)
 
+Your response must follow this structure:
 ```python
-def your_function(...):
-    # your implementation
+# all necessary imports here
+
+def function_name(...):
+    # your complete implementation
+    return ...
 ```
 
-DO NOT include any explanation, commentary, or text outside the code block.'''
+DO NOT include any explanation or text outside the code block.
+DO NOT assume any imports are already available - include every import your code needs.'''
 
         elif self._output_mode == OutputMode.DIFF:
-            # Had to make more detailed; smaller models more likely to struggle here
             return '''Output your improved code using SEARCH/REPLACE blocks.
 
 FORMAT:
@@ -116,6 +124,12 @@ exact lines to find
 =======
 replacement lines
 >>>>>>> REPLACE
+
+CRITICAL REQUIREMENTS:
+1. The resulting code must be COMPLETE and RUNNABLE
+2. Do NOT remove import statements unless replacing with different imports
+3. Ensure your replacements maintain valid Python syntax
+4. If adding new functionality that needs imports, add them with a separate SEARCH/REPLACE block
 
 RULES:
 1. Make SURGICAL changes - small, focused edits (5-20 lines max per block)

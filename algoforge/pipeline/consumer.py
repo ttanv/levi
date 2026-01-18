@@ -15,6 +15,18 @@ SNAPSHOT_INTERVAL = 10  # Save snapshot every N evaluations
 
 logger = logging.getLogger(__name__)
 
+
+def _short_model(model: str) -> str:
+    return model.split("/")[-1]
+
+
+def _model_label(item: dict) -> str:
+    model = _short_model(item.get("model", "unknown"))
+    sampler = item.get("sampler", "")
+    if "_T" in sampler:
+        return f"{model}{sampler[sampler.index('_T'):]}"
+    return model
+
 META_ADVISOR_PROMPT = """You are a lessons-learned advisor for an evolutionary code optimization system.
 
 ## Your Role
@@ -141,8 +153,9 @@ async def eval_consumer(
             if "cascade_rejected" in result:
                 pool.update_sampler(item["sampler"], item["source_cell"], success=False)
                 state.record_reject()
+                label = _model_label(item)
                 logger.info(
-                    f"[Eval #{state.eval_count}] {item['sampler']:15s} "
+                    f"[Eval #{state.eval_count}] {label:30s} "
                     f"CASCADE SKIP  | quick: {result['quick_score']:.1f} < {result['threshold']:.1f}"
                 )
             elif "error" not in result:
@@ -178,16 +191,17 @@ async def eval_consumer(
                 else:
                     status = "rejected"
 
+                label = _model_label(item)
                 logger.info(
-                    f"[Eval #{state.eval_count}] {item['sampler']:15s} "
-                    f"{status:12s} | "
+                    f"[Eval #{state.eval_count}] {label:30s} {status:12s} | "
                     f"score: {score:.1f} | best: {state.best_score_so_far:.1f} | "
-                    f"cost: ${state.total_cost:.3f}"
+                    f"${state.total_cost:.3f}"
                 )
             else:
                 pool.update_sampler(item["sampler"], item["source_cell"], success=False)
                 state.record_error(result["error"])
-                logger.info(f"[Eval #{state.eval_count}] {item['sampler']:15s} ERROR: {result['error'][:50]}")
+                label = _model_label(item)
+                logger.info(f"[Eval #{state.eval_count}] {label:30s} ERROR: {result['error'][:50]}")
 
         if config.meta_advice.enabled and state.should_generate_meta_advice(config.meta_advice.interval):
             asyncio.create_task(_generate_meta_advice(config, state))
