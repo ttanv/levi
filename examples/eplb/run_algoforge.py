@@ -19,7 +19,7 @@ EPLB_SCORE_KEYS = ['execution_time', 'workload_main', 'workload_8', 'workload_9'
 LIGHT_MODELS = [
     "Qwen/Qwen3-30B-A3B-Instruct-2507",
 ]
-HEAVY_MODEL = "z-ai/glm-4.7"  # GLM 4.7 via litellm
+HEAVY_MODEL = "openrouter/z-ai/glm-4.7"
 
 # Model -> API base URL mapping for local TPU endpoints
 LOCAL_ENDPOINTS = {
