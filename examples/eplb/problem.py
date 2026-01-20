@@ -44,6 +44,14 @@ Optimize expert placement for MoE models. Map logical experts to physical GPU sl
 - 90% balancedness: avg_gpu_load / max_gpu_load (GPU load = sum of weights of experts on that GPU)
 - 10% speed: faster is better, penalty if >10ms
 
+## COMMON ERRORS TO AVOID
+1. **Index out of bounds**: num_logical_experts is 64, indices must be 0-63. num_replicas is 288, indices must be 0-287.
+2. **Tensor shape mismatch**: weight is [layers, 64], output physical_to_logical_map must be [layers, 288].
+3. **Unhandled experts**: EVERY logical expert (0-63) MUST have at least 1 replica. expert_count must have NO zeros.
+4. **Sum constraint**: expert_count.sum(dim=1) MUST equal 288 for every layer.
+5. **Wrong reshape**: Don't reshape weight [layers, 64] to [layers, 64, X] without proper expansion.
+6. **Dtype**: Use torch.int64 for all output tensors.
+
 Output ONLY Python code in a ```python block.
 """
 
