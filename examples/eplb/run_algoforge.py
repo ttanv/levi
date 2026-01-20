@@ -18,16 +18,12 @@ EPLB_SCORE_KEYS = ['execution_time', 'workload_main', 'workload_8', 'workload_9'
 # Local TPU models (raw model names as vLLM expects them)
 LIGHT_MODELS = [
     "Qwen/Qwen3-30B-A3B-Instruct-2507",
-    "Qwen/Qwen3-Coder-30B-A3B-Instruct",
-    "Qwen/Qwen2.5-72B-Instruct",
 ]
-HEAVY_MODEL = "Qwen/Qwen2.5-72B-Instruct"
+HEAVY_MODEL = "z-ai/glm-4.7"  # GLM 4.7 via litellm
 
 # Model -> API base URL mapping for local TPU endpoints
 LOCAL_ENDPOINTS = {
-    "Qwen/Qwen3-30B-A3B-Instruct-2507": "http://10.142.0.3:8000/v1",
-    "Qwen/Qwen3-Coder-30B-A3B-Instruct": "http://localhost:8000/v1",
-    "Qwen/Qwen2.5-72B-Instruct": "http://10.164.0.5:8000/v1",
+    "Qwen/Qwen3-30B-A3B-Instruct-2507": "http://localhost:8000/v1",
 }
 
 # Model info for token cost tracking (same format as litellm.register_model)
@@ -36,9 +32,12 @@ MODEL_INFO = {
         "input_cost_per_token": 0.0000001,
         "output_cost_per_token": 0.0000004,
     },
-    "google/gemma-3-27b-it": {
-        "input_cost_per_token": 0.0000001,
-        "output_cost_per_token": 0.0000004,
+    "z-ai/glm-4.7": {
+        "max_tokens": 32768,
+        "max_input_tokens": 202752,
+        "max_output_tokens": 32768,
+        "input_cost_per_token": 0.0000004,   # $0.40/M input
+        "output_cost_per_token": 0.0000015,  # $1.50/M output
     },
 }
 
@@ -52,9 +51,9 @@ config = AlgoforgeConfig(
     score_fn=score_fn,
     budget=BudgetConfig(dollars=3.0),
     sampler_model_pairs=[
-        SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[1], weight=1.0, temperature=0.3),
+        SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[0], weight=1.0, temperature=0.3),
         SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[0], weight=1.0, temperature=0.7),
-        SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[1], weight=1.0, temperature=0.7),
+        SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[0], weight=1.0, temperature=1.0),
         SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[0], weight=1.0, temperature=1.2),
     ],
     cvt=CVTConfig(n_centroids=40, defer_centroids=True, predefined_centroids_file="examples/eplb/centroids.json"),
@@ -71,6 +70,7 @@ config = AlgoforgeConfig(
         variant_models=LIGHT_MODELS,
         behavior_noise=0.3,
         temperature=0.7,
+        reasoning_effort="disabled",
     ),
     output_dir=RUN_DIR,
     llm=LLMProviderConfig(

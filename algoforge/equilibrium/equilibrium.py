@@ -248,8 +248,13 @@ class PunctuatedEquilibrium:
             extras = {}
             # Add reasoning_effort for DeepSeek models if configured
             if self.pe_config.reasoning_effort:
-                extras["reasoning_effort"] = self.pe_config.reasoning_effort
-                logger.info(f"[PE] Using reasoning_effort={self.pe_config.reasoning_effort} for paradigm shift")
+                if self.pe_config.reasoning_effort == "disabled":
+                    # Disable reasoning entirely (e.g., for GLM models)
+                    extras["extra_body"] = {"reasoning": {"enabled": False}}
+                    logger.info("[PE] Reasoning disabled for paradigm shift")
+                else:
+                    extras["reasoning_effort"] = self.pe_config.reasoning_effort
+                    logger.info(f"[PE] Using reasoning_effort={self.pe_config.reasoning_effort} for paradigm shift")
 
             response = await llm.acompletion(
                 model=heavy_model,

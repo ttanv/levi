@@ -1,0 +1,194 @@
+{
+  "metadata": {
+    "archive_size": 3,
+    "n_centroids": 5,
+    "best_score": 68.90849851049441,
+    "generation": 0,
+    "feature_names": [
+      "loop_count",
+      "branch_count",
+      "math_operators",
+      "loop_nesting_max"
+    ],
+    "learned_bounds": {
+      "loop_count": {
+        "min": 0.2056141535301939,
+        "max": 0.6299847824893177
+      },
+      "branch_count": {
+        "min": 0.2809153160412158,
+        "max": 0.6237538118445766
+      },
+      "math_operators": {
+        "min": 0.3179609393057032,
+        "max": 0.4567445973612754
+      },
+      "loop_nesting_max": {
+        "min": 0.17700958392648164,
+        "max": 0.7508415433065989
+      }
+    }
+  },
+  "elites": [
+    {
+      "cell_index": 3,
+      "program_id": "f548446e-80a4-41bb-9306-5798c9365480",
+      "code": "import pandas as pd\nimport numpy as np\n\ndef reorder(df: pd.DataFrame) -> pd.DataFrame:\n    \"\"\"\n    Reorder DataFrame columns to maximize prefix hit rate.\n    This algorithm greedily builds the column order by repeatedly\n    appending the column that yields the largest total length of\n    duplicate strings after sorting the partially built concatenated\n    row strings. After the column order is fixed, rows are sorted\n    lexicographically by the final concatenated strings.\n    \"\"\"\n    # Work on a copy and ensure everything is a string (no NaNs)\n    df = df.copy()\n    df = df.fillna('').astype(str)\n\n    n_rows = len(df)\n    if n_rows == 0:\n        return df\n\n    # List of columns still to place\n    remaining = list(df.columns)\n    final_col_order = []\n\n    # Current concatenated strings for each row (starts empty)\n    cur_strings = pd.Series([''] * n_rows, index=df.index, dtype=object)\n\n    # Greedy column selection\n    while remaining:\n        best_col = None\n        best_score = -1.0\n        best_cur = None   # concatenated strings after adding best column\n\n        # Evaluate each remaining column\n        for col in remaining:\n            # Build candidate concatenated strings\n            cand = cur_strings + df[col]\n\n            # Sort candidate strings to bring equal rows together\n            sorted_cand = cand.sort_values().reset_index(drop=True)\n\n            # Find duplicates (rows equal to the previous one)\n            dup_mask = sorted_cand.duplicated()\n            # Total duplicated character length \u2013 proxy for prefix gain\n            dup_len = sorted_cand[dup_mask].str.len().sum()\n\n            # Score is the total duplicated length; larger is better\n            if dup_len > best_score:\n                best_score = dup_len\n                best_col = col\n                best_cur = cand\n\n        # Commit the chosen column\n        final_col_order.append(best_col)\n        cur_strings = best_cur\n        remaining.remove(best_col)\n\n        # Early exit if no column can improve the score any further\n        if best_score == 0:\n            # Remaining columns would not add any duplicate prefix;\n            # append them in any order (original) to keep all columns\n            final_col_order.extend(remaining)\n            break\n\n    # Final row ordering based on the full concatenated strings\n    final_sorted_idx = cur_strings.argsort()\n    df = df.iloc[final_sorted_idx].reset_index(drop=True)\n\n    # Apply the derived column order\n    df = df[final_col_order]\n\n    return df",
+      "scores": {
+        "score": 68.90849851049441,
+        "hit_rate": 70.32028347713563,
+        "normalized_hit_score": 68.09745714201696,
+        "baseline_hit_rate": 6.96755222620898,
+        "runtime": 1.5681715488433838
+      },
+      "primary_score": 68.90849851049441,
+      "behavior": {
+        "loop_count": 0.7541767604820602,
+        "branch_count": 0.5615151812213505,
+        "math_operators": 0.45920942487963134,
+        "loop_nesting_max": 0.7776010802008559
+      },
+      "metadata": {
+        "primary_score": 68.839518031254
+      },
+      "parents": [],
+      "created_at": "2026-01-08T16:41:31.819526"
+    },
+    {
+      "cell_index": 2,
+      "program_id": "2eb7204b-ae5c-4e5a-bc36-4e601562d325",
+      "code": "import pandas as pd\nimport numpy as np\n\ndef reorder(df: pd.DataFrame) -> pd.DataFrame:\n    \"\"\"\n    Reorder DataFrame columns and rows to maximize prefix hit rate.\n\n    This algorithm uses a greedy approach to determine the column order.\n    It iteratively selects the column that, when appended to the current\n    concatenated string representation of rows, creates the longest common\n    prefix among the largest number of consecutive rows after sorting.\n    Once the column order is fixed, rows are sorted based on the final\n    concatenated string representation.\n\n    Args:\n        df: Input DataFrame (up to 30K rows, 60 columns). Columns are assumed\n            to be preprocessed (e.g., numerical values converted to strings).\n\n    Returns:\n        DataFrame with reordered columns and rows (same data, different order).\n    \"\"\"\n    # Work on a copy and ensure all data is string type and handle NaNs\n    df_copy = df.copy()\n    df_copy = df_copy.fillna('').astype(str)\n\n    n_rows = len(df_copy)\n    if n_rows == 0:\n        return df_copy\n\n    # List of columns still to be placed in the final order\n    remaining_cols = list(df_copy.columns)\n    final_col_order = []\n\n    # Initialize current concatenated strings for each row.\n    # Initially, this is an empty string for every row.\n    current_concatenated_strings = pd.Series([''] * n_rows, index=df_copy.index, dtype=object)\n\n    # Greedy selection of columns\n    while remaining_cols:\n        best_col_this_iteration = None\n        max_prefix_gain = -1.0\n        best_concatenated_strings_this_iteration = None\n\n        # Iterate through each column not yet placed\n        for col_to_evaluate in remaining_cols:\n            # Create candidate concatenated strings by appending the current column's values\n            # to the existing concatenated strings.\n            candidate_concatenated_strings = current_concatenated_strings + df_copy[col_to_evaluate]\n\n            # Sort these candidate strings. This groups identical or similar strings together,\n            # which is crucial for identifying common prefixes.\n            sorted_candidate_strings = candidate_concatenated_strings.sort_values().reset_index(drop=True)\n\n            # Identify duplicate strings. `duplicated()` marks all occurrences except the first.\n            # Consecutive identical strings will have a common prefix equal to their full length.\n            duplicate_mask = sorted_candidate_strings.duplicated()\n\n            # Calculate the total length of these duplicate strings. This sum represents\n            # the potential gain in prefix sharing for this column order.\n            # We sum the lengths of the strings that are duplicates.\n            prefix_gain = sorted_candidate_strings[duplicate_mask].str.len().sum()\n\n            # If this column yields a better prefix gain than previously found, update our best choice.\n            if prefix_gain > max_prefix_gain:\n                max_prefix_gain = prefix_gain\n                best_col_this_iteration = col_to_evaluate\n                best_concatenated_strings_this_iteration = candidate_concatenated_strings\n\n        # After checking all remaining columns, commit the best one found.\n        final_col_order.append(best_col_this_iteration)\n        current_concatenated_strings = best_concatenated_strings_this_iteration\n        remaining_cols.remove(best_col_this_iteration)\n\n        # Optimization: If no column provides any prefix gain, the remaining columns\n        # won't contribute to further prefix sharing improvements. Append them in their\n        # original relative order to ensure all columns are included.\n        if max_prefix_gain == 0:\n            final_col_order.extend(remaining_cols)\n            break\n\n    # Once all columns are ordered, sort the rows based on their final concatenated string representation.\n    # This ensures rows with longer common prefixes appear consecutively.\n    final_sorted_indices = current_concatenated_strings.argsort()\n    df_reordered_rows = df_copy.iloc[final_sorted_indices].reset_index(drop=True)\n\n    # Apply the determined column order to the reordered DataFrame.\n    df_final = df_reordered_rows[final_col_order]\n\n    return df_final",
+      "scores": {
+        "score": 68.7375629273798,
+        "hit_rate": 70.32028347713563,
+        "normalized_hit_score": 68.09745714201696,
+        "baseline_hit_rate": 6.96755222620898,
+        "runtime": 1.9100427150726318
+      },
+      "primary_score": 68.7375629273798,
+      "behavior": {
+        "loop_count": 0.2557542441776568,
+        "branch_count": 0.3589887853480388,
+        "math_operators": 0.3522316135753388,
+        "loop_nesting_max": 0.6505329537564685
+      },
+      "metadata": {
+        "primary_score": 68.7375629273798
+      },
+      "parents": [],
+      "created_at": "2026-01-08T16:41:31.820329"
+    },
+    {
+      "cell_index": 0,
+      "program_id": "7e693db8-7fe3-4aa7-b4dc-073625ed2efc",
+      "code": "import pandas as pd\nimport numpy as np\n\n\ndef reorder(df: pd.DataFrame) -> pd.DataFrame:\n    \"\"\"Reorder columns to maximize prefix sharing.\"\"\"\n    df = df.copy()\n    num_rows = len(df)\n\n    # Score each column: prioritize low cardinality and long strings\n    col_scores = {}\n    for col in df.columns:\n        cardinality = df[col].nunique()\n        if cardinality == 0 or cardinality == num_rows:\n            col_scores[col] = 0\n        else:\n            avg_len = df[col].astype(str).str.len().mean()\n            col_scores[col] = (avg_len ** 2) * (num_rows / cardinality - 1)\n\n    # Reorder columns by score (high to low)\n    sorted_cols = sorted(df.columns, key=lambda c: col_scores.get(c, 0), reverse=True)\n    df = df[sorted_cols]\n\n    # Sort rows lexicographically\n    df = df.sort_values(by=sorted_cols)\n\n    return df\n",
+      "scores": {
+        "score": 68.55626036111704,
+        "hit_rate": 69.23708818691951,
+        "normalized_hit_score": 66.93313725563719,
+        "baseline_hit_rate": 6.96755222620898,
+        "runtime": 0.0604400634765625
+      },
+      "primary_score": 68.55626036111704,
+      "behavior": {
+        "loop_count": 0.2701868878453548,
+        "branch_count": 0.13999800844599036,
+        "math_operators": 0.1495055238382571,
+        "loop_nesting_max": 0.32429267192211964
+      },
+      "metadata": {
+        "primary_score": 68.55635899488323
+      },
+      "parents": [],
+      "created_at": "2026-01-08T16:41:31.823549"
+    }
+  ],
+  "sampler_stats": {
+    "ucb": {
+      "n_cells": 0,
+      "cell_stats": {}
+    },
+    "softmax": {
+      "n_cells": 0,
+      "cell_stats": {}
+    },
+    "uniform": {
+      "n_cells": 0,
+      "cell_stats": {}
+    },
+    "cyclic_annealing": {
+      "n_cells": 0,
+      "last_temperature": 1.2,
+      "t_max": 1.2,
+      "t_min": 0.15,
+      "n_cycles": 4,
+      "cell_stats": {}
+    },
+    "softmax_T0.7": {
+      "n_cells": 3,
+      "total_samples": 18,
+      "mean_success_rate": 0.0,
+      "cell_stats": {
+        "3": {
+          "n_samples": 10,
+          "n_successes": 0,
+          "success_rate": 0.0
+        },
+        "0": {
+          "n_samples": 2,
+          "n_successes": 0,
+          "success_rate": 0.0
+        },
+        "2": {
+          "n_samples": 6,
+          "n_successes": 0,
+          "success_rate": 0.0
+        }
+      }
+    },
+    "softmax_T1.2": {
+      "n_cells": 2,
+      "total_samples": 4,
+      "mean_success_rate": 0.0,
+      "cell_stats": {
+        "2": {
+          "n_samples": 2,
+          "n_successes": 0,
+          "success_rate": 0.0
+        },
+        "3": {
+          "n_samples": 2,
+          "n_successes": 0,
+          "success_rate": 0.0
+        }
+      }
+    },
+    "softmax_T0.3": {
+      "n_cells": 2,
+      "total_samples": 8,
+      "mean_success_rate": 0.0,
+      "cell_stats": {
+        "3": {
+          "n_samples": 6,
+          "n_successes": 0,
+          "success_rate": 0.0
+        },
+        "2": {
+          "n_samples": 2,
+          "n_successes": 0,
+          "success_rate": 0.0
+        }
+      }
+    }
+  },
+  "run_state": {
+    "timestamp": "2026-01-08T16:44:11.050320",
+    "elapsed_seconds": 159.2251739501953,
+    "total_cost": 0.02482011000000001,
+    "eval_count": 30,
+    "accept_count": 0,
+    "error_count": 30,
+    "best_score": 68.90849851049441
+  },
+  "score_history": []
+}
