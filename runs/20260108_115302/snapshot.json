@@ -1,0 +1,199 @@
+{
+  "metadata": {
+    "archive_size": 3,
+    "n_centroids": 4,
+    "best_score": 66.01419856202544,
+    "generation": 0,
+    "feature_names": [
+      "loop_count",
+      "branch_count",
+      "math_operators",
+      "loop_nesting_max"
+    ],
+    "learned_bounds": {
+      "loop_count": {
+        "min": 0.09664354640690626,
+        "max": 0.5353773036286326
+      },
+      "branch_count": {
+        "min": 0.28642850560009325,
+        "max": 0.5384073195802499
+      },
+      "math_operators": {
+        "min": -0.023142991444687885,
+        "max": 0.8211160655949161
+      },
+      "loop_nesting_max": {
+        "min": 0.2517890870437084,
+        "max": 0.72179697542941
+      }
+    }
+  },
+  "elites": [
+    {
+      "cell_index": 0,
+      "program_id": "5eba4659-b434-43ae-b6d1-9c5259aa3305",
+      "code": "import pandas as pd\nfrom concurrent.futures import ThreadPoolExecutor, as_completed\nfrom functools import lru_cache\nfrom collections import Counter\n\n\ndef calculate_length(value):\n    if isinstance(value, bool):\n        return 4 ** 2\n    if isinstance(value, (int, float)):\n        return len(str(value)) ** 2\n    if isinstance(value, str):\n        return len(value) ** 2\n    return 0\n\n\ndef calculate_col_stats(df, enable_index=False):\n    num_rows = len(df)\n    column_stats = []\n    for col in df.columns:\n        if col == \"original_index\":\n            continue\n        num_groups = df[col].nunique()\n        if df[col].dtype == \"object\" or df[col].dtype == \"string\":\n            avg_length = df[col].astype(str).str.len().mean()\n        elif df[col].dtype == \"bool\":\n            avg_length = 4\n        elif df[col].dtype in [\"int64\", \"float64\"]:\n            avg_length = df[col].astype(str).str.len().mean()\n        else:\n            avg_length = 0\n        avg_length = avg_length ** 2\n        if num_groups == 0:\n            score = 0\n        else:\n            avg_size_per_group = num_rows / num_groups\n            score = avg_length * (avg_size_per_group - 1)\n            if num_rows == num_groups:\n                score = 0\n        column_stats.append((col, num_groups, avg_length, score))\n    if enable_index and \"original_index\" in df.columns:\n        column_stats.append((\"original_index\", len(df), 0, 0))\n    column_stats.sort(key=lambda x: x[3], reverse=True)\n    return num_rows, column_stats\n\n\ndef merging_columns(df, col_names):\n    if not all(col in df.columns for col in col_names):\n        return df\n    merged_names = \"_\".join(col_names)\n    df[merged_names] = df[col_names].apply(lambda x: \"\".join([f\"{val}\" for val in x]), axis=1)\n    df = df.drop(columns=col_names)\n    return df\n\n\nclass Reorderer:\n    def __init__(self):\n        self.num_rows = 0\n        self.num_cols = 0\n        self.column_stats = None\n        self.val_len = None\n        self.row_stop = None\n        self.col_stop = None\n        self.base = 2000\n\n    def find_max_group_value(self, df, value_counts, early_stop=0):\n        value_counts = Counter(df.stack())\n        weighted_counts = {val: self.val_len[val] * (count - 1) for val, count in value_counts.items()}\n        if not weighted_counts:\n            return None\n        max_group_val, max_weighted_count = max(weighted_counts.items(), key=lambda x: x[1])\n        if max_weighted_count < early_stop:\n            return None\n        return max_group_val\n\n    def reorder_columns_for_value(self, row, value, column_names, grouped_rows_len=1):\n        cols_with_value = []\n        for idx, col in enumerate(column_names):\n            if hasattr(row, col) and getattr(row, col) == value:\n                cols_with_value.append(col)\n            elif hasattr(row, col.replace(\" \", \"_\")) and getattr(row, col.replace(\" \", \"_\")) == value:\n                cols_with_value.append(col)\n            else:\n                attr_name = f\"_{idx}\"\n                if hasattr(row, attr_name) and getattr(row, attr_name) == value:\n                    cols_with_value.append(attr_name)\n        cols_without_value = []\n        for idx, col in enumerate(column_names):\n            if hasattr(row, col) and getattr(row, col) != value:\n                cols_without_value.append(col)\n            elif hasattr(row, col.replace(\" \", \"_\")) and getattr(row, col.replace(\" \", \"_\")) != value:\n                cols_without_value.append(col)\n            else:\n                attr_name = f\"_{idx}\"\n                if hasattr(row, attr_name) and getattr(row, attr_name) != value:\n                    cols_without_value.append(attr_name)\n        reordered_cols = cols_with_value + cols_without_value\n        return [getattr(row, col) for col in reordered_cols], cols_with_value\n\n    def fixed_reorder(self, df, row_sort=True):\n        num_rows, column_stats = calculate_col_stats(df, enable_index=True)\n        reordered_columns = [col for col, _, _, _ in column_stats]\n        reordered_df = df[reordered_columns]\n        if row_sort:\n            reordered_df = reordered_df.sort_values(by=reordered_columns, axis=0)\n        return reordered_df\n\n    def column_recursion(self, result_df, max_value, grouped_rows, row_stop, col_stop, early_stop):\n        cols_settled = []\n        with ThreadPoolExecutor() as executor:\n            futures = [\n                executor.submit(self.reorder_columns_for_value, row, max_value, grouped_rows.columns.tolist(), len(grouped_rows))\n                for row in grouped_rows.itertuples(index=False)\n            ]\n            for i, future in enumerate(as_completed(futures)):\n                reordered_row, cols_settled = future.result()\n                result_df.loc[i] = reordered_row\n        grouped_value_counts = Counter()\n        if not result_df.empty:\n            grouped_result_df = result_df.groupby(result_df.columns[0])\n            grouped_value_counts = Counter(grouped_rows.stack())\n            for _, group in grouped_result_df:\n                if group[group.columns[0]].iloc[0] != max_value:\n                    continue\n                group_remainder = group.iloc[:, 1:]\n                grouped_remainder_value_counts = Counter(group_remainder.stack())\n                reordered_group_remainder = self.recursive_reorder(\n                    group_remainder, grouped_remainder_value_counts, early_stop=early_stop, row_stop=row_stop, col_stop=col_stop + 1\n                )\n                group.iloc[:, 1:] = reordered_group_remainder.values\n                result_df.update(group)\n                break\n        return result_df, grouped_value_counts\n\n    def recursive_reorder(self, df, value_counts, early_stop=0, row_stop=0, col_stop=0):\n        if df.empty or len(df.columns) == 0 or len(df) == 0:\n            return df\n        if self.row_stop is not None and row_stop >= self.row_stop:\n            return self.fixed_reorder(df)\n        if self.col_stop is not None and col_stop >= self.col_stop:\n            return self.fixed_reorder(df)\n        max_value = self.find_max_group_value(df, value_counts, early_stop=early_stop)\n        if max_value is None:\n            return self.fixed_reorder(df)\n        mask = (df.values == max_value).any(axis=1)\n        if not mask.any():\n            return self.fixed_reorder(df)\n        grouped_rows = df[mask]\n        remaining_rows = df[~mask]\n        result_df = pd.DataFrame(columns=df.columns)\n        reordered_grouped, grouped_counts = self.column_recursion(result_df, max_value, grouped_rows, row_stop, col_stop, early_stop)\n        if not remaining_rows.empty:\n            remaining_counts = value_counts.copy()\n            remaining_counts[max_value] -= len(grouped_rows)\n            if remaining_counts[max_value] <= 0:\n                del remaining_counts[max_value]\n            for k, v in grouped_counts.items():\n                if k in remaining_counts:\n                    remaining_counts[k] -= v\n                    if remaining_counts[k] <= 0:\n                        del remaining_counts[k]\n            reordered_remaining = self.recursive_reorder(remaining_rows, remaining_counts, early_stop, row_stop + 1, col_stop)\n            return pd.concat([reordered_grouped, reordered_remaining], axis=0, ignore_index=True)\n        return reordered_grouped\n\n    def recursive_split_and_reorder(self, df, early_stop=0):\n        if len(df) <= self.base:\n            return self.recursive_reorder(df, Counter(df.values.ravel()), early_stop)\n        mid = len(df) // 2\n        with ThreadPoolExecutor(max_workers=2) as exc:\n            f1 = exc.submit(self.recursive_split_and_reorder, df.iloc[:mid], early_stop)\n            f2 = exc.submit(self.recursive_split_and_reorder, df.iloc[mid:], early_stop)\n            return pd.concat([f1.result(), f2.result()], axis=0, ignore_index=True)\n\n\ndef reorder(\n    df: pd.DataFrame,\n    early_stop: int = 0,\n    row_stop: int = None,\n    col_stop: int = None,\n    col_merge: list = None,\n    one_way_dep: list = None,\n    distinct_value_threshold: float = 0.7,\n    parallel: bool = True,\n) -> pd.DataFrame:\n    df = df.copy()\n    reorderer = Reorderer()\n\n    # Apply column merges (use col_stats order like ADRS)\n    if col_merge:\n        _, column_stats = calculate_col_stats(df, enable_index=True)\n        reordered_columns = [col for col, _, _, _ in column_stats]\n        for col_to_merge in col_merge:\n            final_col_order = [col for col in reordered_columns if col in col_to_merge]\n            if len(final_col_order) > 1:\n                df = merging_columns(df, final_col_order)\n    reorderer.row_stop = row_stop if row_stop else len(df)\n    reorderer.col_stop = col_stop if col_stop else len(df.columns)\n\n    # Calculate column stats\n    reorderer.num_rows, column_stats_list = calculate_col_stats(df, enable_index=True)\n    reorderer.column_stats = {col: (num_groups, avg_len, score) for col, num_groups, avg_len, score in column_stats_list}\n\n    # Add tracking index\n    df[\"original_index\"] = range(len(df))\n\n    # Filter high-cardinality columns\n    threshold = len(df) * distinct_value_threshold\n    cols_to_keep = [c for c in df.columns if c == \"original_index\" or df[c].nunique() <= threshold]\n    cols_to_discard = [c for c in df.columns if c != \"original_index\" and df[c].nunique() > threshold]\n    cols_to_discard = sorted(cols_to_discard, key=lambda x: reorderer.column_stats.get(x, (0, 0, 0))[2], reverse=True)\n\n    df_recurse = df[cols_to_keep]\n    df_discard = df[[\"original_index\"] + cols_to_discard] if cols_to_discard else None\n\n    # Update column_stats to exclude discarded columns\n    reorderer.column_stats = {col: stats for col, stats in reorderer.column_stats.items() if col not in cols_to_discard}\n\n    # Pre-compute value lengths\n    initial_value_counts = Counter(df_recurse.values.ravel())\n    reorderer.val_len = {val: calculate_length(val) for val in initial_value_counts.keys()}\n\n    # Initial fixed reorder (matches ADRS)\n    df_recurse = reorderer.fixed_reorder(df_recurse)\n\n    # Save column order before recursive processing (excluding original_index)\n    kept_col_names = [c for c in df_recurse.columns if c != \"original_index\"]\n\n    # Reorder\n    if parallel:\n        reordered = reorderer.recursive_split_and_reorder(df_recurse, early_stop)\n    else:\n        reordered = reorderer.recursive_reorder(df_recurse, initial_value_counts, early_stop)\n\n    # Restore original column names (algorithm uses integer indices internally)\n    reordered.columns = kept_col_names + [\"original_index\"]\n\n    # Merge back discarded columns\n    if df_discard is not None:\n        reordered = pd.merge(reordered, df_discard, on=\"original_index\", how=\"left\")\n\n    reordered = reordered.drop(columns=[\"original_index\"])\n    return reordered.sort_values(by=list(reordered.columns))\n",
+      "scores": {
+        "score": 66.01419856202544,
+        "hit_rate": 69.55940345385929,
+        "normalized_hit_score": 67.27959193317453,
+        "baseline_hit_rate": 6.96755222620898,
+        "runtime": 5.802827548980713
+      },
+      "primary_score": 66.01419856202544,
+      "behavior": {
+        "loop_count": 0.6967009624083105,
+        "branch_count": 0.7117546350169393,
+        "math_operators": 0.7890646137896421,
+        "loop_nesting_max": 0.13879957432482765
+      },
+      "metadata": {
+        "primary_score": 66.05668001863738
+      },
+      "parents": [],
+      "created_at": "2026-01-08T12:32:48.457927"
+    },
+    {
+      "cell_index": 2,
+      "program_id": "db095c37-6f50-4a4b-bf92-964b14e4d133",
+      "code": "import pandas as pd\nimport numpy as np\nfrom concurrent.futures import ThreadPoolExecutor\nfrom typing import List, Dict, Tuple\n\n\ndef reorder(\n    df: pd.DataFrame,\n    early_stop: int = 0,\n    row_stop: int = None,\n    col_stop: int = None,\n    col_merge: List[List[str]] = None,\n    one_way_dep: List = None,\n    distinct_value_threshold: float = 0.7,\n    parallel: bool = True,\n) -> pd.DataFrame:\n    \"\"\"\n    Reorder DataFrame columns to maximize prefix hit rate using a greedy\n    incremental run\u2011length scoring algorithm.\n\n    The algorithm builds the column order step\u2011by\u2011step:\n      1. Start with an empty order.\n      2. At each step, sort the rows by the current order.\n      3. For every remaining column, compute a score equal to the sum of\n         (length of the column value) for each adjacent pair where the\n         column values are equal.\n      4. Select the column with the highest score, append it to the order,\n         and re\u2011sort the rows.\n      5. Continue until no column yields a positive score or a column limit\n         (`col_stop`) is reached.\n\n    High\u2011cardinality columns (unique ratio > distinct_value_threshold) are\n    placed after the greedy ordering.\n\n    This approach is fundamentally different from the existing seeds:\n    it does not rely on recursion, suffix trees, entropy, or graph\n    dependencies, but instead uses a greedy run\u2011length scoring strategy.\n    \"\"\"\n    # Edge cases: empty or trivial DataFrame\n    if df.empty or len(df.columns) <= 1:\n        return df.copy()\n\n    # Work on a copy\n    df = df.copy()\n\n    # Apply column merges if specified\n    if col_merge:\n        for group in col_merge:\n            if not group:\n                continue\n            if all(col in df.columns for col in group):\n                merged_name = \"_\".join(group)\n                # Concatenate string representations of the merged columns\n                df[merged_name] = df[group].astype(str).apply(\n                    lambda x: \"\".join(x), axis=1\n                )\n                df.drop(columns=group, inplace=True)\n\n    n_rows = len(df)\n\n    # Separate low\u2011cardinality columns (to be ordered greedily)\n    low_card_cols: List[str] = []\n    high_card_cols: List[str] = []\n    for col in df.columns:\n        unique_ratio = df[col].nunique() / n_rows if n_rows else 0.0\n        if unique_ratio > distinct_value_threshold:\n            high_card_cols.append(col)\n        else:\n            low_card_cols.append(col)\n\n    # Pre\u2011compute string representations and their lengths for all columns\n    col_str: Dict[str, pd.Series] = {}\n    col_len: Dict[str, pd.Series] = {}\n    for col in df.columns:\n        s = df[col].astype(str)\n        col_str[col] = s\n        col_len[col] = s.str.len()\n\n    # Greedy construction of column order\n    order: List[str] = []\n    if col_stop is None:\n        col_stop = len(low_card_cols)\n\n    remaining = low_card_cols.copy()\n    # Start with the original (unsorted) DataFrame; sorting will be applied\n    # once the first column is chosen.\n    df_current = df\n\n    # Helper to compute the run\u2011length score for a single column\n    def _score_column(col: str) -> Tuple[str, int]:\n        # Align the pre\u2011computed series with the current row order\n        s_sorted = col_str[col].reindex(df_current.index)\n        len_sorted = col_len[col].reindex(df_current.index)\n        # Equality mask: True for rows equal to the previous row\n        eq_mask = s_sorted == s_sorted.shift()\n        score = (len_sorted * eq_mask).sum()\n        return col, score\n\n    while remaining and len(order) < col_stop:\n        # Sort rows by the current column order (if any)\n        if order:\n            df_current = df_current.sort_values(by=order, kind=\"mergesort\")\n        else:\n            # No ordering yet; keep original order\n            pass\n\n        # Compute scores for remaining columns\n        if parallel and len(remaining) > 1:\n            with ThreadPoolExecutor(max_workers=4) as executor:\n                futures = [executor.submit(_score_column, col) for col in remaining]\n                scores = {col: sc for col, sc in (f.result() for f in futures)}\n        else:\n            scores = {col: sc for col, sc in map(_score_column, remaining)}\n\n        # Choose the column with the highest score\n        best_col = max(scores, key=lambda c: scores[c])\n        best_score = scores[best_col]\n\n        # Early termination conditions\n        if best_score == 0 or (early_stop is not None and best_score < early_stop):\n            break\n\n        # Append the selected column and update the DataFrame order\n        order.append(best_col)\n        remaining.remove(best_col)\n\n    # Append any remaining low\u2011cardinality columns and all high\u2011cardinality columns\n    order.extend(remaining)\n    order.extend(high_card_cols)\n\n    # Produce the final DataFrame with the new column order and sorted rows\n    df_reordered = df[order]\n    df_final = df_reordered.sort_values(by=order, kind=\"mergesort\").reset_index(drop=True)\n\n    return df_final",
+      "scores": {
+        "score": 64.13395256629339,
+        "hit_rate": 64.93232156483812,
+        "normalized_hit_score": 62.30597036377119,
+        "baseline_hit_rate": 6.96755222620898,
+        "runtime": 0.11343855857849121
+      },
+      "primary_score": 64.13395256629339,
+      "behavior": {
+        "loop_count": 0.25826190522203346,
+        "branch_count": 0.4555083264351597,
+        "math_operators": 0.1424511065451234,
+        "loop_nesting_max": 0.5773805265250757
+      },
+      "metadata": {
+        "primary_score": 64.13781025042881
+      },
+      "parents": [],
+      "created_at": "2026-01-08T12:32:48.465209"
+    },
+    {
+      "cell_index": 1,
+      "program_id": "9e045158-77fb-43a9-a78b-c1dc78ed9458",
+      "code": "import pandas as pd\nimport numpy as np\nfrom collections import defaultdict\nfrom math import log2\nfrom concurrent.futures import ThreadPoolExecutor\nimport time\n\ndef reorder(\n    df: pd.DataFrame,\n    early_stop: int = 0,\n    row_stop: int = None,\n    col_stop: int = None,\n    col_merge: list = None,\n    one_way_dep: list = None,\n    distinct_value_threshold: float = 0.7,\n    parallel: bool = True,\n) -> pd.DataFrame:\n    \"\"\"\n    Reorder DataFrame columns to maximize prefix hit rate between consecutive rows.\n    \n    This algorithm uses entropy as the primary metric for column ordering.\n    Columns with lower entropy (i.e., more predictable) are placed at the front.\n    The entire DataFrame is then sorted by the ordered columns to maximize prefix overlap.\n    \"\"\"\n    # Handle edge cases\n    if df.empty or len(df.columns) <= 1:\n        return df.copy()\n    \n    df = df.copy()\n    start_time = time.time()\n    \n    # Apply column merges\n    if col_merge:\n        for merge_group in col_merge:\n            if all(col in df.columns for col in merge_group):\n                merged_name = \"_\".join(merge_group)\n                df[merged_name] = df[merge_group].astype(str).apply(lambda x: ''.join(x.values), axis=1)\n                df = df.drop(columns=merge_group)\n    \n    # Filter high-cardinality columns\n    n_rows = len(df)\n    high_card_cols = []\n    low_card_cols = []\n    for col in df.columns:\n        unique_ratio = df[col].nunique() / n_rows\n        if unique_ratio > distinct_value_threshold:\n            high_card_cols.append(col)\n        else:\n            low_card_cols.append(col)\n    \n    # Compute entropy for each column\n    def compute_entropy(series):\n        value_counts = series.value_counts()\n        entropy = 0.0\n        for count in value_counts:\n            p = count / n_rows\n            entropy -= p * log2(p)\n        return entropy\n    \n    # Compute entropy for low-cardinality columns\n    col_entropy = {}\n    for col in low_card_cols:\n        col_entropy[col] = compute_entropy(df[col])\n    \n    # Sort low-cardinality columns by entropy (ascending) and then by unique count (ascending)\n    low_card_cols_sorted = sorted(low_card_cols, key=lambda x: (col_entropy[x], df[x].nunique()))\n    \n    # Compute entropy for high-cardinality columns\n    for col in high_card_cols:\n        col_entropy[col] = compute_entropy(df[col])\n    \n    # Sort high-cardinality columns by entropy (ascending) and then by unique count (ascending)\n    high_card_cols_sorted = sorted(high_card_cols, key=lambda x: (col_entropy[x], df[x].nunique()))\n    \n    # Combine: low-cardinality first, then high-cardinality\n    final_col_order = low_card_cols_sorted + high_card_cols_sorted\n    \n    # Reorder columns\n    df_reordered = df[final_col_order]\n    \n    # Sort rows by the entire set of columns to maximize prefix overlap\n    # Use lexicographic sorting by all columns\n    # Convert each column to string for consistent sorting\n    df_sorted = df_reordered.sort_values(by=final_col_order, kind='mergesort')\n    \n    # Check runtime\n    elapsed = time.time() - start_time\n    if elapsed > 10:\n        # If taking too long, return early (though we aim to stay under 10s)\n        pass\n    \n    return df_sorted.reset_index(drop=True)",
+      "scores": {
+        "score": 63.2106046866623,
+        "hit_rate": 64.01556135582511,
+        "normalized_hit_score": 61.32055051193399,
+        "baseline_hit_rate": 6.96755222620898,
+        "runtime": 0.08783659934997559
+      },
+      "primary_score": 63.2106046866623,
+      "behavior": {
+        "loop_count": 0.3358416383189964,
+        "branch_count": 0.2380510554877965,
+        "math_operators": 0.1574818011420352,
+        "loop_nesting_max": 0.3328111482266636
+      },
+      "metadata": {
+        "primary_score": 63.21191901676331
+      },
+      "parents": [],
+      "created_at": "2026-01-08T12:32:48.468607"
+    }
+  ],
+  "sampler_stats": {
+    "ucb": {
+      "n_cells": 0,
+      "cell_stats": {}
+    },
+    "softmax": {
+      "n_cells": 0,
+      "cell_stats": {}
+    },
+    "uniform": {
+      "n_cells": 0,
+      "cell_stats": {}
+    },
+    "cyclic_annealing": {
+      "n_cells": 0,
+      "last_temperature": 1.2,
+      "t_max": 1.2,
+      "t_min": 0.15,
+      "n_cycles": 4,
+      "cell_stats": {}
+    },
+    "softmax_T0.7": {
+      "n_cells": 3,
+      "total_samples": 37,
+      "mean_success_rate": 0.0,
+      "cell_stats": {
+        "2": {
+          "n_samples": 5,
+          "n_successes": 0,
+          "success_rate": 0.0
+        },
+        "0": {
+          "n_samples": 24,
+          "n_successes": 0,
+          "success_rate": 0.0
+        },
+        "1": {
+          "n_samples": 8,
+          "n_successes": 0,
+          "success_rate": 0.0
+        }
+      }
+    },
+    "softmax_T1.2": {
+      "n_cells": 3,
+      "total_samples": 22,
+      "mean_success_rate": 0.0,
+      "cell_stats": {
+        "0": {
+          "n_samples": 8,
+          "n_successes": 0,
+          "success_rate": 0.0
+        },
+        "1": {
+          "n_samples": 5,
+          "n_successes": 0,
+          "success_rate": 0.0
+        },
+        "2": {
+          "n_samples": 9,
+          "n_successes": 0,
+          "success_rate": 0.0
+        }
+      }
+    },
+    "softmax_T0.3": {
+      "n_cells": 2,
+      "total_samples": 11,
+      "mean_success_rate": 0.0,
+      "cell_stats": {
+        "2": {
+          "n_samples": 1,
+          "n_successes": 0,
+          "success_rate": 0.0
+        },
+        "0": {
+          "n_samples": 10,
+          "n_successes": 0,
+          "success_rate": 0.0
+        }
+      }
+    }
+  },
+  "run_state": {
+    "timestamp": "2026-01-08T12:38:22.966965",
+    "elapsed_seconds": 334.49699902534485,
+    "total_cost": 0.07461873999999998,
+    "eval_count": 70,
+    "accept_count": 0,
+    "error_count": 70,
+    "best_score": 66.01419856202544
+  },
+  "score_history": []
+}

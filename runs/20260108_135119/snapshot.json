@@ -1,0 +1,59 @@
+{
+  "metadata": {
+    "archive_size": 0,
+    "n_centroids": 50,
+    "best_score": -Infinity,
+    "generation": 0,
+    "feature_names": [
+      "loop_count",
+      "branch_count",
+      "math_operators",
+      "loop_nesting_max"
+    ]
+  },
+  "elites": [],
+  "sampler_stats": {
+    "ucb": {
+      "n_cells": 0,
+      "cell_stats": {}
+    },
+    "softmax": {
+      "n_cells": 0,
+      "cell_stats": {}
+    },
+    "uniform": {
+      "n_cells": 0,
+      "cell_stats": {}
+    },
+    "cyclic_annealing": {
+      "n_cells": 0,
+      "last_temperature": 1.2,
+      "t_max": 1.2,
+      "t_min": 0.15,
+      "n_cycles": 4,
+      "cell_stats": {}
+    },
+    "softmax_T0.7": {
+      "n_cells": 0,
+      "cell_stats": {}
+    },
+    "softmax_T1.2": {
+      "n_cells": 0,
+      "cell_stats": {}
+    },
+    "softmax_T0.3": {
+      "n_cells": 0,
+      "cell_stats": {}
+    }
+  },
+  "run_state": {
+    "timestamp": "2026-01-08T14:03:12.625456",
+    "elapsed_seconds": 110.71021485328674,
+    "total_cost": 0.0,
+    "eval_count": 0,
+    "accept_count": 0,
+    "error_count": 0,
+    "best_score": -Infinity
+  },
+  "score_history": []
+}

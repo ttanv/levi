@@ -1,0 +1,223 @@
+{
+  "metadata": {
+    "archive_size": 3,
+    "n_centroids": 3,
+    "best_score": 69.6796962199322,
+    "generation": 0,
+    "feature_names": [
+      "loop_count",
+      "branch_count",
+      "math_operators",
+      "loop_nesting_max"
+    ],
+    "learned_bounds": {
+      "loop_count": {
+        "min": 0.2652497300587717,
+        "max": 0.8970472157396036
+      },
+      "branch_count": {
+        "min": 0.32298372512807155,
+        "max": 0.8343234452698457
+      },
+      "math_operators": {
+        "min": 0.036529248790062877,
+        "max": 0.7777388320559928
+      },
+      "loop_nesting_max": {
+        "min": 0.19163983151713246,
+        "max": 0.8329813617613023
+      }
+    }
+  },
+  "elites": [
+    {
+      "cell_index": 1,
+      "program_id": "95e92f59-99c2-44c2-a6d0-181ce44f889e",
+      "code": "import pandas as pd\nimport numpy as np\nfrom collections import Counter\nfrom concurrent.futures import ThreadPoolExecutor\n\n\ndef merge_columns(df, col_names):\n    \"\"\"Merge specified columns into a single column.\"\"\"\n    if not all(col in df.columns for col in col_names):\n        return df\n    merged_name = \"_\".join(col_names)\n    df[merged_name] = df[col_names].astype(str).sum(axis=1)\n    df = df.drop(columns=col_names)\n    return df\n\n\ndef calculate_column_importance(df):\n    \"\"\"\n    Calculate column importance based on how much each column contributes\n    to prefix overlap when placed first.\n    \"\"\"\n    if len(df) < 2:\n        return np.zeros(len(df.columns))\n    \n    # Convert to string matrix\n    str_matrix = df.astype(str).values\n    \n    # Calculate importance for each column\n    n_cols = len(df.columns)\n    importance = np.zeros(n_cols)\n    \n    # Sample consecutive pairs for efficiency\n    n_pairs = min(1000, len(df) - 1)\n    indices = np.random.choice(len(df) - 1, n_pairs, replace=False)\n    \n    for idx in indices:\n        row1 = str_matrix[idx]\n        row2 = str_matrix[idx + 1]\n        \n        for j in range(n_cols):\n            # Calculate prefix overlap if column j is first\n            prefix_len = 0\n            min_len = min(len(row1[j]), len(row2[j]))\n            while prefix_len < min_len and row1[j][prefix_len] == row2[j][prefix_len]:\n                prefix_len += 1\n            importance[j] += prefix_len\n    \n    # Normalize by number of pairs\n    importance /= n_pairs\n    \n    return importance\n\n\ndef greedy_column_ordering(df):\n    \"\"\"\n    Greedy column ordering based on local prefix optimization.\n    \"\"\"\n    if len(df.columns) <= 1:\n        return df.columns.tolist()\n    \n    # Calculate initial column importance\n    importance = calculate_column_importance(df)\n    \n    # Convert to string matrix for faster operations\n    str_matrix = df.astype(str).values\n    \n    # Start with the most important column\n    remaining_cols = list(range(len(df.columns)))\n    first_col_idx = np.argmax(importance)\n    order = [first_col_idx]\n    remaining_cols.remove(first_col_idx)\n    \n    # Greedily add columns\n    while remaining_cols:\n        best_score = -1\n        best_col = None\n        \n        # Try each remaining column in the next position\n        for col_idx in remaining_cols:\n            score = 0\n            \n            # Calculate score for placing this column next\n            for i in range(min(100, len(df) - 1)):\n                row1 = str_matrix[i]\n                row2 = str_matrix[i + 1]\n                \n                # Concatenate with current order\n                prefix1 = \"\".join(row1[order] + [row1[col_idx]])\n                prefix2 = \"\".join(row2[order] + [row2[col_idx]])\n                \n                # Calculate common prefix length\n                prefix_len = 0\n                min_len = min(len(prefix1), len(prefix2))\n                while prefix_len < min_len and prefix1[prefix_len] == prefix2[prefix_len]:\n                    prefix_len += 1\n                score += prefix_len\n            \n            # Average score\n            score /= min(100, len(df) - 1)\n            \n            if score > best_score:\n                best_score = score\n                best_col = col_idx\n        \n        if best_col is not None:\n            order.append(best_col)\n            remaining_cols.remove(best_col)\n    \n    # Convert indices back to column names\n    return [df.columns[i] for i in order]\n\n\ndef optimize_row_ordering(df):\n    \"\"\"\n    Optimize row ordering using a simple sorting approach\n    based on the concatenated string values.\n    \"\"\"\n    # Create a temporary column with concatenated values\n    df_copy = df.copy()\n    df_copy['_concat'] = df_copy.astype(str).sum(axis=1)\n    \n    # Sort by the concatenated values to group similar rows\n    df_copy = df_copy.sort_values('_concat')\n    df_copy = df_copy.drop('_concat', axis=1)\n    \n    return df_copy\n\n\ndef reorder(\n    df: pd.DataFrame,\n    early_stop: int = 0,\n    row_stop: int = None,\n    col_stop: int = None,\n    col_merge: list = None,\n    one_way_dep: list = None,\n    distinct_value_threshold: float = 0.7,\n    parallel: bool = True,\n) -> pd.DataFrame:\n    \"\"\"\n    Reorder DataFrame columns to maximize prefix hit rate using a greedy approach.\n    \n    This algorithm:\n    1. Merges specified column groups\n    2. Filters high-cardinality columns\n    3. Uses greedy column ordering based on local prefix optimization\n    4. Optimizes row ordering by sorting concatenated values\n    \"\"\"\n    df = df.copy()\n    \n    # Step 1: Apply column merges\n    if col_merge:\n        for group in col_merge:\n            valid = [c for c in group if c in df.columns]\n            if valid:\n                df = merge_columns(df, valid)\n    \n    # Step 2: Filter high-cardinality columns\n    threshold = len(df) * distinct_value_threshold\n    high_cardinality_cols = [\n        c for c in df.columns \n        if df[c].nunique() > threshold and c not in (col_merge or [])\n    ]\n    \n    # Separate high and low cardinality columns\n    low_cardinality_df = df.drop(columns=high_cardinality_cols)\n    high_cardinality_df = df[high_cardinality_cols]\n    \n    # Step 3: Greedy column ordering for low cardinality columns\n    if len(low_cardinality_df.columns) > 0:\n        optimal_order = greedy_column_ordering(low_cardinality_df)\n        low_cardinality_df = low_cardinality_df[optimal_order]\n    \n    # Step 4: Optimize row ordering\n    df_reordered = optimize_row_ordering(low_cardinality_df)\n    \n    # Step 5: Add back high cardinality columns at the end\n    if len(high_cardinality_cols) > 0:\n        df_reordered = pd.concat([df_reordered, high_cardinality_df], axis=1)\n    \n    return df_reordered",
+      "scores": {
+        "score": 69.6796962199322,
+        "hit_rate": 70.42377491524556,
+        "normalized_hit_score": 68.20869944573616,
+        "baseline_hit_rate": 6.96755222620898,
+        "runtime": 0.23713650703430175
+      },
+      "primary_score": 69.6796962199322,
+      "behavior": {
+        "loop_count": 0.6977363183711425,
+        "branch_count": 0.1786336672204248,
+        "math_operators": 0.24675632733243896,
+        "loop_nesting_max": 0.4220202963182664
+      },
+      "metadata": {
+        "primary_score": 69.68100864268457
+      },
+      "parents": [],
+      "created_at": "2026-01-08T14:27:20.025633"
+    },
+    {
+      "cell_index": 0,
+      "program_id": "0f2a2e6d-a67e-4ab0-bfdc-16c68493eacf",
+      "code": "import pandas as pd\nfrom concurrent.futures import ThreadPoolExecutor, as_completed\nfrom functools import lru_cache\nfrom collections import Counter\n\n\ndef calculate_length(value):\n    if isinstance(value, bool):\n        return 4 ** 2\n    if isinstance(value, (int, float)):\n        return len(str(value)) ** 2\n    if isinstance(value, str):\n        return len(value) ** 2\n    return 0\n\n\ndef calculate_col_stats(df, enable_index=False):\n    num_rows = len(df)\n    column_stats = []\n    for col in df.columns:\n        if col == \"original_index\":\n            continue\n        num_groups = df[col].nunique()\n        if df[col].dtype == \"object\" or df[col].dtype == \"string\":\n            avg_length = df[col].astype(str).str.len().mean()\n        elif df[col].dtype == \"bool\":\n            avg_length = 4\n        elif df[col].dtype in [\"int64\", \"float64\"]:\n            avg_length = df[col].astype(str).str.len().mean()\n        else:\n            avg_length = 0\n        avg_length = avg_length ** 2\n        if num_groups == 0:\n            score = 0\n        else:\n            avg_size_per_group = num_rows / num_groups\n            score = avg_length * (avg_size_per_group - 1)\n            if num_rows == num_groups:\n                score = 0\n        column_stats.append((col, num_groups, avg_length, score))\n    if enable_index and \"original_index\" in df.columns:\n        column_stats.append((\"original_index\", len(df), 0, 0))\n    column_stats.sort(key=lambda x: x[3], reverse=True)\n    return num_rows, column_stats\n\n\ndef merging_columns(df, col_names):\n    if not all(col in df.columns for col in col_names):\n        return df\n    merged_names = \"_\".join(col_names)\n    df[merged_names] = df[col_names].apply(lambda x: \"\".join([f\"{val}\" for val in x]), axis=1)\n    df = df.drop(columns=col_names)\n    return df\n\n\nclass Reorderer:\n    def __init__(self):\n        self.num_rows = 0\n        self.num_cols = 0\n        self.column_stats = None\n        self.val_len = None\n        self.row_stop = None\n        self.col_stop = None\n        self.base = 2000\n\n    def find_max_group_value(self, df, value_counts, early_stop=0):\n        value_counts = Counter(df.stack())\n        weighted_counts = {val: self.val_len[val] * (count - 1) for val, count in value_counts.items()}\n        if not weighted_counts:\n            return None\n        max_group_val, max_weighted_count = max(weighted_counts.items(), key=lambda x: x[1])\n        if max_weighted_count < early_stop:\n            return None\n        return max_group_val\n\n    def reorder_columns_for_value(self, row, value, column_names, grouped_rows_len=1):\n        cols_with_value = []\n        for idx, col in enumerate(column_names):\n            if hasattr(row, col) and getattr(row, col) == value:\n                cols_with_value.append(col)\n            elif hasattr(row, col.replace(\" \", \"_\")) and getattr(row, col.replace(\" \", \"_\")) == value:\n                cols_with_value.append(col)\n            else:\n                attr_name = f\"_{idx}\"\n                if hasattr(row, attr_name) and getattr(row, attr_name) == value:\n                    cols_with_value.append(attr_name)\n        cols_without_value = []\n        for idx, col in enumerate(column_names):\n            if hasattr(row, col) and getattr(row, col) != value:\n                cols_without_value.append(col)\n            elif hasattr(row, col.replace(\" \", \"_\")) and getattr(row, col.replace(\" \", \"_\")) != value:\n                cols_without_value.append(col)\n            else:\n                attr_name = f\"_{idx}\"\n                if hasattr(row, attr_name) and getattr(row, attr_name) != value:\n                    cols_without_value.append(attr_name)\n        reordered_cols = cols_with_value + cols_without_value\n        return [getattr(row, col) for col in reordered_cols], cols_with_value\n\n    def fixed_reorder(self, df, row_sort=True):\n        num_rows, column_stats = calculate_col_stats(df, enable_index=True)\n        reordered_columns = [col for col, _, _, _ in column_stats]\n        reordered_df = df[reordered_columns]\n        if row_sort:\n            reordered_df = reordered_df.sort_values(by=reordered_columns, axis=0)\n        return reordered_df\n\n    def column_recursion(self, result_df, max_value, grouped_rows, row_stop, col_stop, early_stop):\n        cols_settled = []\n        with ThreadPoolExecutor() as executor:\n            futures = [\n                executor.submit(self.reorder_columns_for_value, row, max_value, grouped_rows.columns.tolist(), len(grouped_rows))\n                for row in grouped_rows.itertuples(index=False)\n            ]\n            for i, future in enumerate(as_completed(futures)):\n                reordered_row, cols_settled = future.result()\n                result_df.loc[i] = reordered_row\n        grouped_value_counts = Counter()\n        if not result_df.empty:\n            grouped_result_df = result_df.groupby(result_df.columns[0])\n            grouped_value_counts = Counter(grouped_rows.stack())\n            for _, group in grouped_result_df:\n                if group[group.columns[0]].iloc[0] != max_value:\n                    continue\n                group_remainder = group.iloc[:, 1:]\n                grouped_remainder_value_counts = Counter(group_remainder.stack())\n                reordered_group_remainder = self.recursive_reorder(\n                    group_remainder, grouped_remainder_value_counts, early_stop=early_stop, row_stop=row_stop, col_stop=col_stop + 1\n                )\n                group.iloc[:, 1:] = reordered_group_remainder.values\n                result_df.update(group)\n                break\n        return result_df, grouped_value_counts\n\n    def recursive_reorder(self, df, value_counts, early_stop=0, row_stop=0, col_stop=0):\n        if df.empty or len(df.columns) == 0 or len(df) == 0:\n            return df\n        if self.row_stop is not None and row_stop >= self.row_stop:\n            return self.fixed_reorder(df)\n        if self.col_stop is not None and col_stop >= self.col_stop:\n            return self.fixed_reorder(df)\n        max_value = self.find_max_group_value(df, value_counts, early_stop=early_stop)\n        if max_value is None:\n            return self.fixed_reorder(df)\n        mask = (df.values == max_value).any(axis=1)\n        if not mask.any():\n            return self.fixed_reorder(df)\n        grouped_rows = df[mask]\n        remaining_rows = df[~mask]\n        result_df = pd.DataFrame(columns=df.columns)\n        reordered_grouped, grouped_counts = self.column_recursion(result_df, max_value, grouped_rows, row_stop, col_stop, early_stop)\n        if not remaining_rows.empty:\n            remaining_counts = value_counts.copy()\n            remaining_counts[max_value] -= len(grouped_rows)\n            if remaining_counts[max_value] <= 0:\n                del remaining_counts[max_value]\n            for k, v in grouped_counts.items():\n                if k in remaining_counts:\n                    remaining_counts[k] -= v\n                    if remaining_counts[k] <= 0:\n                        del remaining_counts[k]\n            reordered_remaining = self.recursive_reorder(remaining_rows, remaining_counts, early_stop, row_stop + 1, col_stop)\n            return pd.concat([reordered_grouped, reordered_remaining], axis=0, ignore_index=True)\n        return reordered_grouped\n\n    def recursive_split_and_reorder(self, df, early_stop=0):\n        if len(df) <= self.base:\n            return self.recursive_reorder(df, Counter(df.values.ravel()), early_stop)\n        mid = len(df) // 2\n        with ThreadPoolExecutor(max_workers=2) as exc:\n            f1 = exc.submit(self.recursive_split_and_reorder, df.iloc[:mid], early_stop)\n            f2 = exc.submit(self.recursive_split_and_reorder, df.iloc[mid:], early_stop)\n            return pd.concat([f1.result(), f2.result()], axis=0, ignore_index=True)\n\n\ndef reorder(\n    df: pd.DataFrame,\n    early_stop: int = 0,\n    row_stop: int = None,\n    col_stop: int = None,\n    col_merge: list = None,\n    one_way_dep: list = None,\n    distinct_value_threshold: float = 0.7,\n    parallel: bool = True,\n) -> pd.DataFrame:\n    df = df.copy()\n    reorderer = Reorderer()\n\n    # Apply column merges (use col_stats order like ADRS)\n    if col_merge:\n        _, column_stats = calculate_col_stats(df, enable_index=True)\n        reordered_columns = [col for col, _, _, _ in column_stats]\n        for col_to_merge in col_merge:\n            final_col_order = [col for col in reordered_columns if col in col_to_merge]\n            if len(final_col_order) > 1:\n                df = merging_columns(df, final_col_order)\n    reorderer.row_stop = row_stop if row_stop else len(df)\n    reorderer.col_stop = col_stop if col_stop else len(df.columns)\n\n    # Calculate column stats\n    reorderer.num_rows, column_stats_list = calculate_col_stats(df, enable_index=True)\n    reorderer.column_stats = {col: (num_groups, avg_len, score) for col, num_groups, avg_len, score in column_stats_list}\n\n    # Add tracking index\n    df[\"original_index\"] = range(len(df))\n\n    # Filter high-cardinality columns\n    threshold = len(df) * distinct_value_threshold\n    cols_to_keep = [c for c in df.columns if c == \"original_index\" or df[c].nunique() <= threshold]\n    cols_to_discard = [c for c in df.columns if c != \"original_index\" and df[c].nunique() > threshold]\n    cols_to_discard = sorted(cols_to_discard, key=lambda x: reorderer.column_stats.get(x, (0, 0, 0))[2], reverse=True)\n\n    df_recurse = df[cols_to_keep]\n    df_discard = df[[\"original_index\"] + cols_to_discard] if cols_to_discard else None\n\n    # Update column_stats to exclude discarded columns\n    reorderer.column_stats = {col: stats for col, stats in reorderer.column_stats.items() if col not in cols_to_discard}\n\n    # Pre-compute value lengths\n    initial_value_counts = Counter(df_recurse.values.ravel())\n    reorderer.val_len = {val: calculate_length(val) for val in initial_value_counts.keys()}\n\n    # Initial fixed reorder (matches ADRS)\n    df_recurse = reorderer.fixed_reorder(df_recurse)\n\n    # Save column order before recursive processing (excluding original_index)\n    kept_col_names = [c for c in df_recurse.columns if c != \"original_index\"]\n\n    # Reorder\n    if parallel:\n        reordered = reorderer.recursive_split_and_reorder(df_recurse, early_stop)\n    else:\n        reordered = reorderer.recursive_reorder(df_recurse, initial_value_counts, early_stop)\n\n    # Restore original column names (algorithm uses integer indices internally)\n    reordered.columns = kept_col_names + [\"original_index\"]\n\n    # Merge back discarded columns\n    if df_discard is not None:\n        reordered = pd.merge(reordered, df_discard, on=\"original_index\", how=\"left\")\n\n    reordered = reordered.drop(columns=[\"original_index\"])\n    return reordered.sort_values(by=list(reordered.columns))\n",
+      "scores": {
+        "score": 66.0251384286074,
+        "hit_rate": 69.56185717841304,
+        "normalized_hit_score": 67.28222942644967,
+        "baseline_hit_rate": 6.96755222620898,
+        "runtime": 5.785959053039551
+      },
+      "primary_score": 66.0251384286074,
+      "behavior": {
+        "loop_count": 0.32870532784777734,
+        "branch_count": 0.7404742025241038,
+        "math_operators": 0.6312644128722202,
+        "loop_nesting_max": 0.07754289227588054
+      },
+      "metadata": {
+        "primary_score": 66.18135834254659
+      },
+      "parents": [],
+      "created_at": "2026-01-08T14:27:20.027805"
+    },
+    {
+      "cell_index": 2,
+      "program_id": "1205fc83-c31e-4ece-b3ed-54974db5e793",
+      "code": "import pandas as pd\nimport numpy as np\nfrom collections import Counter\nfrom concurrent.futures import ThreadPoolExecutor\nimport warnings\n\ndef merge_columns(df, col_names):\n    \"\"\"Merge specified columns into a single column.\"\"\"\n    if not col_names or not all(col in df.columns for col in col_names):\n        return df\n    merged_name = \"_\".join(col_names)\n    # Ensure all columns are treated as strings before concatenation\n    df[merged_name] = df[col_names].astype(str).agg(\"\".join, axis=1)\n    df = df.drop(columns=col_names)\n    return df\n\ndef calculate_prefix_overlap_score(df, column_order, sample_size=1000):\n    \"\"\"\n    Calculates the average prefix overlap score for a given column order.\n    Uses sampling for efficiency.\n    \"\"\"\n    if len(df) < 2:\n        return 0.0\n\n    # Convert DataFrame to a NumPy array of strings for faster access\n    str_matrix = df[column_order].astype(str).values\n\n    # Sample consecutive row pairs\n    n_pairs = min(sample_size, len(df) - 1)\n    if n_pairs == 0:\n        return 0.0\n    \n    # Use np.random.choice for sampling indices\n    indices = np.random.choice(len(df) - 1, n_pairs, replace=False)\n    \n    total_overlap = 0\n    for i in indices:\n        row1_vals = str_matrix[i]\n        row2_vals = str_matrix[i+1]\n        \n        # Concatenate values based on the provided column order\n        concat1 = \"\".join(row1_vals)\n        concat2 = \"\".join(row2_vals)\n        \n        # Calculate common prefix length\n        min_len = min(len(concat1), len(concat2))\n        overlap = 0\n        while overlap < min_len and concat1[overlap] == concat2[overlap]:\n            overlap += 1\n        total_overlap += overlap\n    \n    return total_overlap / n_pairs\n\ndef greedy_column_ordering(df, sample_size=1000, max_iterations=None):\n    \"\"\"\n    Greedily finds a good column order to maximize prefix overlap.\n    Uses a limited number of iterations for performance.\n    \"\"\"\n    if df.empty or len(df.columns) < 2:\n        return df.columns.tolist()\n\n    initial_columns = df.columns.tolist()\n    \n    # Use a small sample for initial column importance estimation if DataFrame is large\n    if len(df) > 5000:\n        sampled_df = df.sample(n=min(len(df), 5000), random_state=42)\n    else:\n        sampled_df = df\n\n    # Calculate initial importance based on placing each column first\n    column_scores = {}\n    for col in initial_columns:\n        column_scores[col] = calculate_prefix_overlap_score(sampled_df[[col]], [col], sample_size=sample_size // len(initial_columns) if len(initial_columns) > 0 else 1)\n\n    # Sort columns by initial score\n    sorted_cols = sorted(initial_columns, key=lambda c: column_scores.get(c, 0), reverse=True)\n    \n    best_order = sorted_cols\n    best_score = calculate_prefix_overlap_score(sampled_df, best_order, sample_size=sample_size)\n\n    # Iteratively improve the order\n    if max_iterations is None:\n        max_iterations = min(len(initial_columns) * 2, 10) # Limit iterations\n\n    for iteration in range(max_iterations):\n        improvement = False\n        current_order = best_order[:]\n        \n        # Consider pairwise swaps\n        for i in range(len(current_order)):\n            for j in range(i + 1, len(current_order)):\n                temp_order = current_order[:]\n                temp_order[i], temp_order[j] = temp_order[j], temp_order[i]\n                \n                current_score = calculate_prefix_overlap_score(sampled_df, temp_order, sample_size=sample_size)\n                \n                if current_score > best_score:\n                    best_score = current_score\n                    best_order = temp_order[:]\n                    improvement = True\n        \n        # If no improvement from swaps, try moving the best column to the front\n        if not improvement and len(current_order) > 1:\n            best_initial_col = max(current_order, key=lambda c: column_scores.get(c, 0))\n            temp_order = [best_initial_col] + [c for c in current_order if c != best_initial_col]\n            current_score = calculate_prefix_overlap_score(sampled_df, temp_order, sample_size=sample_size)\n            if current_score > best_score:\n                best_score = current_score\n                best_order = temp_order[:]\n                improvement = True\n\n        if not improvement:\n            break\n            \n    return best_order\n\ndef optimize_row_ordering(df):\n    \"\"\"\n    Optimizes row ordering by sorting based on concatenated string values.\n    This is a heuristic to group similar rows together.\n    \"\"\"\n    if df.empty or len(df.columns) == 0:\n        return df\n    \n    # Create a temporary column with concatenated values\n    # Use .agg to ensure string conversion for all types\n    df_copy = df.copy()\n    df_copy['_concat'] = df_copy.astype(str).agg(\"\".join, axis=1)\n    \n    # Sort by the concatenated values\n    df_copy = df_copy.sort_values('_concat')\n    df_copy = df_copy.drop('_concat', axis=1)\n    \n    return df_copy\n\ndef reorder(\n    df: pd.DataFrame,\n    early_stop: int = 0,\n    row_stop: int = None,\n    col_stop: int = None,\n    col_merge: list = None,\n    one_way_dep: list = None,\n    distinct_value_threshold: float = 0.7,\n    parallel: bool = True,\n) -> pd.DataFrame:\n    \"\"\"\n    Reorder DataFrame columns to maximize prefix hit rate.\n\n    Args:\n        df: Input DataFrame\n        col_merge: Column groups to merge before reordering\n        row_stop, col_stop: Recursion depth limits (not directly used in this simplified greedy approach)\n        distinct_value_threshold: Filter columns with >threshold unique ratio\n        parallel: Whether to use parallel processing (not fully implemented in this greedy version)\n\n    Returns:\n        Reordered DataFrame with same rows, optimized column order\n    \"\"\"\n    if df.empty:\n        return df\n\n    df = df.copy()\n    \n    # 1. Apply column merges\n    if col_merge:\n        for group in col_merge:\n            # Ensure only existing columns are considered for merging\n            valid_group = [c for c in group if c in df.columns]\n            if valid_group:\n                df = merge_columns(df, valid_group)\n                \n    original_columns = df.columns.tolist()\n\n    # 2. Filter high-cardinality columns based on threshold\n    threshold_count = len(df) * distinct_value_threshold\n    \n    # Store columns and their unique counts\n    col_uniques = {col: df[col].nunique() for col in df.columns}\n    \n    high_cardinality_cols = [col for col, count in col_uniques.items() if count > threshold_count]\n    low_cardinality_cols = [col for col, count in col_uniques.items() if count <= threshold_count]\n\n    # Separate DataFrames\n    low_card_df = df[low_cardinality_cols]\n    high_card_df = df[high_cardinality_cols]\n\n    # 3. Optimize column order for low-cardinality columns using greedy approach\n    if not low_card_df.empty:\n        # Perform greedy ordering on a sample for speed\n        sample_size = min(len(low_card_df), 5000) if len(low_card_df) > 5000 else len(low_card_df)\n        if sample_size > 1:\n            # Use a fixed random state for reproducibility of sampling\n            sampled_low_card_df = low_card_df.sample(n=sample_size, random_state=42)\n            optimal_order = greedy_column_ordering(sampled_low_card_df, sample_size=min(1000, sample_size), max_iterations=5)\n            \n            # Apply the found order to the full low-cardinality DataFrame\n            low_card_df_reordered = low_card_df[optimal_order]\n        else:\n            low_card_df_reordered = low_card_df # Not enough rows to reorder meaningfully\n    else:\n        low_card_df_reordered = pd.DataFrame(columns=low_cardinality_cols)\n\n    # 4. Optimize row ordering for the reordered low-cardinality columns\n    if not low_card_df_reordered.empty:\n        df_reordered_rows = optimize_row_ordering(low_card_df_reordered)\n    else:\n        df_reordered_rows = pd.DataFrame(columns=low_cardinality_cols)\n\n    # 5. Combine reordered low-cardinality columns with high-cardinality columns\n    # High-cardinality columns are placed at the end, as their order is less critical\n    # for prefix hits and their values are less likely to create common prefixes.\n    \n    final_df_cols = []\n    if not df_reordered_rows.empty:\n        final_df_cols.append(df_reordered_rows)\n    \n    if not high_card_df.empty:\n        # For high cardinality columns, a simple order based on their original appearance or some heuristic might suffice.\n        # Here, we'll just append them in their original relative order.\n        final_df_cols.append(high_card_df[high_cardinality_cols]) # Ensure consistent order\n\n    if not final_df_cols:\n        return pd.DataFrame(columns=original_columns) # Return empty df with original columns if all are filtered/merged away\n\n    return pd.concat(final_df_cols, axis=1)",
+      "scores": {
+        "score": 63.15784249939497,
+        "hit_rate": 68.81732784547509,
+        "normalized_hit_score": 66.48193947304733,
+        "baseline_hit_rate": 6.96755222620898,
+        "runtime": 26.526976537704467
+      },
+      "primary_score": 63.15784249939497,
+      "behavior": {
+        "loop_count": 0.13715878845421933,
+        "branch_count": 0.4198074052824405,
+        "math_operators": 0.6613371859821586,
+        "loop_nesting_max": 0.6536535505708423
+      },
+      "metadata": {
+        "primary_score": 63.15784249939497
+      },
+      "parents": [],
+      "created_at": "2026-01-08T14:27:20.032139"
+    }
+  ],
+  "sampler_stats": {
+    "ucb": {
+      "n_cells": 0,
+      "cell_stats": {}
+    },
+    "softmax": {
+      "n_cells": 0,
+      "cell_stats": {}
+    },
+    "uniform": {
+      "n_cells": 0,
+      "cell_stats": {}
+    },
+    "cyclic_annealing": {
+      "n_cells": 0,
+      "last_temperature": 1.2,
+      "t_max": 1.2,
+      "t_min": 0.15,
+      "n_cycles": 4,
+      "cell_stats": {}
+    },
+    "softmax_T0.7": {
+      "n_cells": 3,
+      "total_samples": 1733,
+      "mean_success_rate": 0.0,
+      "cell_stats": {
+        "1": {
+          "n_samples": 1032,
+          "n_successes": 0,
+          "success_rate": 0.0
+        },
+        "2": {
+          "n_samples": 227,
+          "n_successes": 0,
+          "success_rate": 0.0
+        },
+        "0": {
+          "n_samples": 474,
+          "n_successes": 0,
+          "success_rate": 0.0
+        }
+      }
+    },
+    "softmax_T1.2": {
+      "n_cells": 3,
+      "total_samples": 545,
+      "mean_success_rate": 0.0,
+      "cell_stats": {
+        "0": {
+          "n_samples": 164,
+          "n_successes": 0,
+          "success_rate": 0.0
+        },
+        "1": {
+          "n_samples": 257,
+          "n_successes": 0,
+          "success_rate": 0.0
+        },
+        "2": {
+          "n_samples": 124,
+          "n_successes": 0,
+          "success_rate": 0.0
+        }
+      }
+    },
+    "softmax_T0.3": {
+      "n_cells": 3,
+      "total_samples": 535,
+      "mean_success_rate": 0.0,
+      "cell_stats": {
+        "1": {
+          "n_samples": 444,
+          "n_successes": 0,
+          "success_rate": 0.0
+        },
+        "0": {
+          "n_samples": 69,
+          "n_successes": 0,
+          "success_rate": 0.0
+        },
+        "2": {
+          "n_samples": 22,
+          "n_successes": 0,
+          "success_rate": 0.0
+        }
+      }
+    }
+  },
+  "run_state": {
+    "timestamp": "2026-01-08T17:36:19.759827",
+    "elapsed_seconds": 11339.72529578209,
+    "total_cost": 4.001204109999998,
+    "eval_count": 2813,
+    "accept_count": 0,
+    "error_count": 2811,
+    "best_score": 69.6796962199322
+  },
+  "score_history": [
+    {
+      "eval_number": 38,
+      "score": 61.61121120250352,
+      "best_score": 69.6796962199322,
+      "timestamp": 204.5758399963379,
+      "accepted": false,
+      "sampler": "softmax_T0.7",
+      "archive_size": 3
+    },
+    {
+      "eval_number": 42,
+      "score": 52.22400309948223,
+      "best_score": 69.6796962199322,
+      "timestamp": 218.70775389671326,
+      "accepted": false,
+      "sampler": "softmax_T0.7",
+      "archive_size": 3
+    }
+  ]
+}
