@@ -33,16 +33,14 @@ Generate a **fundamentally different algorithmic approach**.
 - Include ALL necessary imports at the top
 - Do NOT use placeholders or incomplete code
 
-### COMMON ERRORS TO AVOID:
-1. **Tensor dimension mismatch**: Always verify tensor shapes before operations. Use `.shape` to debug.
-2. **Index out of bounds**: When indexing tensors, ensure indices are within valid range (0 to size-1).
-3. **Unhandled experts**: EVERY logical expert MUST have at least 1 replica. expert_count must have NO zeros.
-4. **Wrong return count**: Return EXACTLY 3 tensors: (physical_to_logical_map, logical_to_physical_map, expert_count)
-5. **Sum constraint**: expert_count.sum(dim=1) MUST equal num_replicas (288) for every layer.
-6. **Dtype errors**: Use torch.int64 for all output tensors.
-
-### Why This Matters:
-The evolutionary process may be stuck in local optima. Your paradigm shift could open entirely new regions of the solution space that lead to breakthrough performance.
+### EPLB-Specific Constraints (MUST follow exactly):
+- **Input**: weight tensor is [num_layers, 64] where 64 is num_logical_experts
+- **Output 1**: physical_to_logical_map must be [num_layers, 288] with values in range [0, 63]
+- **Output 2**: logical_to_physical_map must be [num_layers, 64, X] with physical slot indices or -1 for padding
+- **Output 3**: expert_count must be [num_layers, 64] with expert_count.sum(dim=1) == 288 for ALL layers
+- **NO zeros in expert_count**: Every logical expert (0-63) MUST have at least 1 replica
+- **Index bounds**: logical expert indices are 0-63, physical slot indices are 0-287
+- **Dtype**: ALL output tensors must be torch.int64
 
 ## Output
 Output ONLY complete, runnable Python code in a ```python block. No explanations.
