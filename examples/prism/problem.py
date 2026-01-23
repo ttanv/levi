@@ -1,138 +1,138 @@
 """
-PRISM (ML Model Placement) Problem Definition.
+PRISM (GPU Model Placement) Problem Definition.
 
 Contains problem description, prompts, scoring function, and test inputs.
 """
 
-from dataclasses import dataclass
+import sys
 import time
+import concurrent.futures
+from dataclasses import dataclass
+
 import numpy as np
 
-# --- Problem Infrastructure ---
+# --- PRISM Constants ---
+GPU_MEM_SIZE = 80  # GB
+MIN_INT = float('-inf')
+
+
+@dataclass
+class Model:
+    model_name: str
+    model_size: int  # GB
+    req_rate: int    # requests per second
+    slo: int         # service level objective (latency target)
+    cur_gpu_id: int  # current GPU assignment (can be ignored)
+
+
+# --- Prompts ---
+PROBLEM_DESCRIPTION = """
+# PRISM Problem
+
+Optimize the placement of machine learning models across GPUs to minimize the maximum KV Cache Pressure (KVPR).
+
+## Critical Constraints (violations = 0 score)
+- Each model must be assigned to exactly one GPU
+- Total model_size on each GPU must NOT exceed GPU_MEM_SIZE (80GB)
+- All models in the input MUST appear in the output placement
+- GPU IDs must be valid: 0 to gpu_num-1
+
+## Input
+- `gpu_num`: Number of available GPUs (typically 5-10)
+- `models`: List of Model objects with attributes:
+  - model_name: str - unique identifier
+  - model_size: int - size in GB (10-30)
+  - req_rate: int - requests per second (1-10)
+  - slo: int - service level objective (5-10)
+  - cur_gpu_id: int - can be ignored
+
+## Output
+- `dict[int, list[Model]]`: mapping gpu_id to list of Models assigned to that GPU
+- Example: {0: [model_a, model_b], 1: [model_c], 2: [model_d, model_e]}
+
+## KVPR Formula
+KVPR(gpu) = sum(model.req_rate / model.slo for model in gpu_models) / (GPU_MEM_SIZE - sum(model.model_size for model in gpu_models))
+
+## Scoring
+- 90% based on KVPR minimization (lower is better)
+- Score = 100 * sqrt((baseline_kvpr - solution_kvpr) / (baseline_kvpr - optimal_kvpr))
+- Baseline: round-robin placement
+- Optimal: theoretical minimum with perfect load balance
+"""
+
+FUNCTION_SIGNATURE = """
+from dataclasses import dataclass
+
 GPU_MEM_SIZE = 80  # GB
 
 @dataclass
 class Model:
-    """Represents an ML model to be placed on GPUs."""
     model_name: str
     model_size: int   # GB
     req_rate: int     # requests per second
     slo: int          # service level objective (latency target)
     cur_gpu_id: int   # current GPU assignment (can be ignored)
 
-
-def generate_test_cases(num_tests=50, seed=42):
-    """Generate test cases matching the leaderboard evaluator."""
-    np.random.seed(seed)
-    test_cases = []
-
-    for i in range(num_tests):
-        gpu_num = np.random.randint(5, 10)
-        models = []
-        for j in range(gpu_num * 2):
-            model_size = np.random.randint(10, 30)
-            req_rate = np.random.randint(1, 10)
-            slo = np.random.randint(5, 10)
-            models.append(Model(
-                model_name=f"model_{j}",
-                model_size=model_size,
-                req_rate=req_rate,
-                slo=slo,
-                cur_gpu_id=j
-            ))
-        test_cases.append((gpu_num, models))
-
-    return test_cases
-
-
-def calculate_kvpr(placement):
-    """Calculate the maximum KVPR across all GPUs."""
-    max_kvpr = float('-inf')
-    for gpu_id, models in placement.items():
-        total_model_size = sum(m.model_size for m in models)
-        total_weighted_req = sum(m.req_rate / m.slo for m in models)
-        remaining_mem = GPU_MEM_SIZE - total_model_size
-        if remaining_mem > 0:
-            kvpr = total_weighted_req / remaining_mem
-        else:
-            kvpr = 1000000  # Penalty for exceeding memory
-        max_kvpr = max(max_kvpr, kvpr)
-    return max_kvpr
-
-
-def round_robin_placement(gpu_num, models):
-    """Baseline: simple round-robin assignment."""
-    placement = {i: [] for i in range(gpu_num)}
-    for i, model in enumerate(models):
-        placement[i % gpu_num].append(model)
-    return placement
-
-
-def compute_theoretical_optimal(gpu_num, models):
-    """Compute theoretical optimal (minimum possible) max KVPR."""
-    total_weighted_req = sum(m.req_rate / m.slo for m in models)
-    total_model_size = sum(m.model_size for m in models)
-    total_available_mem = gpu_num * GPU_MEM_SIZE - total_model_size
-    if total_available_mem > 0:
-        return total_weighted_req / total_available_mem
-    return 0.0
-
-
-# --- Prompts ---
-PROBLEM_DESCRIPTION = """
-# Model Placement Optimization
-
-## Problem
-Assign models to GPUs to minimize maximum KVPR (KV Cache Pressure).
-
-## Key Concepts
-- Each model has: model_size (10-30), req_rate (1-10), slo (5-10)
-- GPU memory limit: 80 GB
-- KVPR = sum(req_rate/slo) / (80 - sum(model_size)) for models on a GPU
-- Goal: Minimize the maximum KVPR across all GPUs
-
-## Input
-- `gpu_num`: Number of GPUs (5-10)
-- `models`: List of model objects. Each model has attributes:
-  - `m.model_size` (int)
-  - `m.req_rate` (int)
-  - `m.slo` (int)
-
-## Output
-Return a dict: `{gpu_id: [list of models], ...}`
-- Keys are integers 0 to gpu_num-1
-- Values are lists containing model objects from the input
-- Every model must be assigned to exactly one GPU
-- Total model_size per GPU must not exceed 80
-
-## You can import: random, heapq, collections, math, numpy, itertools
-"""
-
-FUNCTION_SIGNATURE = """
-def compute_model_placement(gpu_num, models):
+def compute_model_placement(gpu_num: int, models: list[Model]) -> dict[int, list[Model]]:
     '''
+    Compute optimal model placement across GPUs to minimize max KVPR.
+
     Args:
-        gpu_num: Number of GPUs (int)
-        models: List of models with .model_size, .req_rate, .slo
+        gpu_num: Number of available GPUs (typically 5-10)
+        models: List of Model objects to place
 
     Returns:
-        dict: {gpu_id: [models assigned to that GPU]}
+        dict mapping gpu_id (int) to list of Models assigned to that GPU
+        Example: {0: [model_a, model_b], 1: [model_c], 2: [model_d, model_e]}
+
+    Constraints:
+        - Each model must be assigned to exactly one GPU
+        - Total model_size on each GPU must not exceed GPU_MEM_SIZE (80GB)
+
+    Goal:
+        Minimize max(KVPR) across all GPUs where:
+        KVPR(gpu) = sum(req_rate/slo) / (GPU_MEM_SIZE - sum(model_size))
     '''
     pass
 """
 
-SEED_PROGRAM = '''def compute_model_placement(gpu_num, models):
-    """Greedy placement: assign each model to GPU with lowest current KVPR."""
-    GPU_MEM_SIZE = 80
+SEED_PROGRAM = '''"""PRISM: GPU Model Placement Optimizer."""
 
-    # Sort by req_rate/slo descending (high priority first)
-    sorted_models = sorted(models, key=lambda m: m.req_rate / m.slo, reverse=True)
+from dataclasses import dataclass
 
-    # Initialize placement and tracking
+GPU_MEM_SIZE = 80  # GB
+
+@dataclass
+class Model:
+    model_name: str
+    model_size: int
+    req_rate: int
+    slo: int
+    cur_gpu_id: int
+
+
+def compute_model_placement(gpu_num, models):
+    """
+    Compute a model placement that minimizes the maximum KVPR across all GPUs.
+
+    Args:
+        gpu_num: Number of GPUs
+        models: List of models to place
+
+    Returns:
+        A placement of models to GPUs
+    """
+
+    # Greedy KVPR-minimizing placement based on Algorithm 1 (without τ check)
+    # 1) Sort models by r_j / s_j in descending order
+    sorted_models = sorted(models, key=lambda m: (m.req_rate / m.slo), reverse=True)
+
+    # 2) Initialize per-GPU states
     placement = {gpu_id: [] for gpu_id in range(gpu_num)}
     shared_kv = [GPU_MEM_SIZE for _ in range(gpu_num)]  # remaining memory per GPU
-    weighted_req_rate = [0.0 for _ in range(gpu_num)]   # sum of req_rate/slo per GPU
+    weighted_req_rate = [0.0 for _ in range(gpu_num)]   # sum of r_j / s_j per GPU
 
+    # 3) Assign each model to the GPU that minimizes current KVPR while fitting in memory
     for model in sorted_models:
         best_idx = None
         best_ratio = float('inf')
@@ -144,6 +144,7 @@ SEED_PROGRAM = '''def compute_model_placement(gpu_num, models):
                     best_ratio = current_ratio
                     best_idx = gpu_id
 
+        # Failure: if no GPU can fit, raise an error instead of overcommitting
         if best_idx is None:
             raise ValueError(
                 f"Unable to place model of size {model.model_size} GB on any GPU. "
@@ -159,82 +160,146 @@ SEED_PROGRAM = '''def compute_model_placement(gpu_num, models):
 
 SEED_INSPIRATIONS = []
 
-DIVERSITY_SEED_PROMPT = """
-# Model Placement Optimization
 
-## Problem
-Assign models to GPUs to minimize maximum KVPR.
-- KVPR = sum(req_rate/slo) / (80 - sum(model_size)) per GPU
-- Memory limit: 80 GB per GPU
-
-## Input
-- `gpu_num`: Number of GPUs (5-10)
-- `models`: List with .model_size, .req_rate, .slo attributes
-
-## Output
-Return dict: `{gpu_id: [models]}`
-
-## Function
-```python
-def compute_model_placement(gpu_num, models):
-    # Returns {0: [...], 1: [...], ...}
-    pass
-```
-
-## Your Task: ALGORITHMIC DIVERSITY
-
-Design a **FUNDAMENTALLY DIFFERENT ALGORITHM** than existing seeds.
-
-## Existing Seeds:
-{existing_seeds}
-
-## Output
-Output ONLY complete Python code in a ```python block.
-"""
-
-META_ADVISOR_PROMPT = """You are a lessons-learned advisor for an evolutionary code optimization system.
-
-## Your Role
-Analyze FAILURES from recent evaluations. Your lessons get injected into LLM prompts to help future solutions avoid the same mistakes.
-
-## What You're Given
-- **Failure count**: How many candidates failed (crashes, invalid code, timeouts, etc.)
-- **Error patterns**: Specific error messages encountered (including timeouts)
-- **Previous lessons**: What you warned about last time
-
-## Your Task: Write Concise Lessons (150-200 words max)
-
-### Focus ONLY on Failure Prevention
-You do NOT see successful solutions. Your job is purely defensive:
-1. **Identify error patterns** - What mistakes are being made repeatedly?
-2. **Explain root causes** - Why are these errors happening?
-3. **Give specific fixes** - Exactly how to avoid each error type
-
-### For Each Error Pattern:
-- Quote the error briefly
-- Explain what causes it
-- Give a specific fix
-
-## Output Format
-Keep it SHORT and DIRECT:
-
-**Avoid These Errors:**
-- [Error pattern]: [How to fix]
-- [Error pattern]: [How to fix]
-
----
-
-{metrics_data}
-
-Provide your lessons (150-200 words max):"""
-
-# --- Test Inputs ---
-INPUTS = generate_test_cases(num_tests=50)
+# --- Test Case Generation ---
+_TEST_CASES = None
 
 
-# --- Score Function ---
+def _generate_test_cases(num_tests=50):
+    """Generate multiple test cases with different characteristics."""
+    global _TEST_CASES
+    if _TEST_CASES is not None:
+        return _TEST_CASES
+
+    test_cases = []
+    np.random.seed(42)
+
+    for i in range(num_tests):
+        gpu_num = np.random.randint(5, 10)
+        gpu_models = []
+        for j in range(gpu_num * 2):
+            model_size = np.random.randint(10, 30)
+            req_rate = np.random.randint(1, 10)
+            slo = np.random.randint(5, 10)
+            gpu_models.append(Model(
+                model_name=f"model_{j}",
+                model_size=model_size,
+                req_rate=req_rate,
+                slo=slo,
+                cur_gpu_id=j
+            ))
+        test_cases.append((gpu_num, gpu_models))
+
+    _TEST_CASES = test_cases
+    return test_cases
+
+
+def get_inputs():
+    """Return the test cases as inputs for the scoring function."""
+    return _generate_test_cases()
+
+
+# --- Helper Functions ---
+def run_with_timeout(func, args=(), kwargs=None, timeout_seconds=30):
+    """Run a function with a timeout using concurrent.futures."""
+    if kwargs is None:
+        kwargs = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(func, *args, **kwargs)
+        try:
+            result = future.result(timeout=timeout_seconds)
+            return result
+        except concurrent.futures.TimeoutError:
+            raise TimeoutError(f"Function timed out after {timeout_seconds} seconds")
+
+
+def safe_float(value):
+    """Convert a value to float safely."""
+    try:
+        if np.isnan(value) or np.isinf(value):
+            return 0.0
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def verify_gpu_mem_constraint(placement_data: dict) -> bool:
+    """Verify whether models can fit into GPU memory."""
+    if placement_data is None:
+        return False
+    for gpu_id, models in placement_data.items():
+        if sum(model.model_size for model in models) > GPU_MEM_SIZE:
+            return False
+    return True
+
+
+def calculate_kvcache_pressure(placement_data: dict) -> float:
+    """Calculate the maximum KVCache pressure across all GPUs."""
+    max_kvpr = MIN_INT
+    for gpu_id, models in placement_data.items():
+        total_model_size = sum(model.model_size for model in models)
+        total_weighted_req_rate = sum(model.req_rate / model.slo for model in models)
+        if GPU_MEM_SIZE - total_model_size > 0:
+            kvpr = total_weighted_req_rate / (GPU_MEM_SIZE - total_model_size)
+        else:
+            kvpr = 1000000
+        max_kvpr = max(max_kvpr, kvpr)
+    return max_kvpr
+
+
+def round_robin_placement(gpu_num: int, models: list) -> dict:
+    """
+    Baseline placement: simple round-robin assignment.
+    This is the 0-point reference (naive strategy).
+    """
+    placement = {i: [] for i in range(gpu_num)}
+    for i, model in enumerate(models):
+        placement[i % gpu_num].append(model)
+    return placement
+
+
+def compute_theoretical_optimal_kvpr(gpu_num: int, models: list) -> float:
+    """
+    Compute the theoretical optimal (minimum possible) max KVPR.
+    This assumes perfect load balancing where all GPUs have equal KVPR.
+    This is the 100-point reference (impossible to beat).
+    """
+    total_weighted_req = sum(m.req_rate / m.slo for m in models)
+    total_model_size = sum(m.model_size for m in models)
+
+    # Available memory across all GPUs
+    total_available_mem = gpu_num * GPU_MEM_SIZE - total_model_size
+
+    if total_available_mem > 0:
+        # Perfect balance: evenly distribute load across available memory
+        optimal_kvpr = total_weighted_req / total_available_mem
+    else:
+        optimal_kvpr = 0.0  # Edge case: no memory available
+
+    return optimal_kvpr
+
+
+# --- Helper aliases for score function ---
+def calculate_kvpr(placement):
+    """Alias for calculate_kvcache_pressure."""
+    return calculate_kvcache_pressure(placement)
+
+
+def compute_theoretical_optimal(gpu_num, models):
+    """Alias for compute_theoretical_optimal_kvpr."""
+    return compute_theoretical_optimal_kvpr(gpu_num, models)
+
+
+# --- Score Function (with strict validation to prevent reward hacking) ---
 def score_fn(compute_model_placement, inputs):
-    """Evaluate placement algorithm: returns 0-100 score with sqrt scaling."""
+    """Evaluate placement algorithm: returns 0-100 score with sqrt scaling.
+
+    Includes strict validation to prevent reward hacking:
+    - All models must be placed exactly once
+    - No duplicate models allowed
+    - Placed models must match input models exactly
+    - Memory constraints must be satisfied
+    """
     try:
         all_scores = []
         total_time = 0.0
@@ -292,3 +357,15 @@ def score_fn(compute_model_placement, inputs):
 
     except Exception as e:
         return {"error": str(e)}
+
+
+# --- Test Inputs (lazy loaded) ---
+INPUTS = None
+
+
+def get_lazy_inputs():
+    """Get inputs, loading them lazily on first access."""
+    global INPUTS
+    if INPUTS is None:
+        INPUTS = get_inputs()
+    return INPUTS

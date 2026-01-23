@@ -70,6 +70,8 @@ async def _run_async(config: AlgoforgeConfig) -> AlgoforgeResult:
         retry_backoff=config.llm.retry_backoff,
         default_temperature=config.pipeline.temperature,
         default_max_tokens=config.pipeline.max_tokens,
+        batch_size=config.llm.batch_size,
+        batch_max_wait_ms=config.llm.batch_max_wait_ms,
     )
     llm_client = UnifiedLLMClient(llm_config)
     set_llm_client(llm_client)

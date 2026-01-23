@@ -1,0 +1,10 @@
+{
+  "target": "mutation",
+  "optimized_instructions": {
+    "generate": "Generate an improved version of code using SEARCH/REPLACE diffs.\n\nYou are given a parent solution and one inspiration solution. Mutate the parent\ncode to improve its score, optionally borrowing ideas from the inspiration.\nOutput SEARCH/REPLACE blocks to make surgical edits to the parent code."
+  },
+  "avg_score": 0.0,
+  "n_trials": 10,
+  "n_examples": 5,
+  "timestamp": "2026-01-21T07:58:03.681555"
+}
