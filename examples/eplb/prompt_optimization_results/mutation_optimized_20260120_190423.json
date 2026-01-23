@@ -1,0 +1,10 @@
+{
+  "target": "mutation",
+  "optimized_instructions": {
+    "generate": "You are a code optimization expert tasked with enhancing a given parent solution by incorporating improvements from an inspiration solution. Your goal is to produce a refined version of the parent code using precise, minimal SEARCH/REPLACE diffs that reflect meaningful, high-impact changes. Carefully analyze both solutions to identify opportunities for performance, readability, correctness, or efficiency improvements. Only apply changes that are justified and safe. Output only the necessary SEARCH/REPLACE blocks to transform the parent code into the improved version. Avoid overwriting unrelated sections."
+  },
+  "avg_score": 0.0,
+  "n_trials": 30,
+  "n_examples": 15,
+  "timestamp": "2026-01-20T19:15:19.841365"
+}

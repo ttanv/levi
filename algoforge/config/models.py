@@ -18,6 +18,10 @@ class LLMProviderConfig(BaseModel):
     retry_delay: float = 1.0
     retry_backoff: float = 2.0
 
+    # Batching configuration for local models (improves vLLM throughput)
+    batch_size: int = 8  # Max requests to batch together
+    batch_max_wait_ms: float = 50.0  # Max time to wait for batch to fill
+
 
 class SamplerModelPair(BaseModel):
     sampler: str

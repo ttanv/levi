@@ -22,29 +22,28 @@ REBALANCE_INTERVAL = 100
 PROBLEM_DESCRIPTION = """
 # EPLB Problem
 
-Optimize expert placement for MoE models. Map logical experts to physical GPU slots for load balancing.
+Optimize expert placement for MoE models. Map 64 logical experts to 288 physical GPU slots.
+
+## Critical Constraints (violations = 0 score)
+- expert_count.sum(dim=1) == 288 for ALL layers
+- All experts need >= 1 replica (no zeros in expert_count)
+- Physical indices: 0-287 (NOT 288! Use range(288) not range(289))
+- Logical indices: 0-63
+- All outputs must be dtype=torch.int64
 
 ## Input
-- `weight`: [layers, num_logical_experts] - load per logical expert (typically 64 logical experts)
+- `weight`: [layers, 64] - load per logical expert
 - `num_replicas`: 288 total physical slots
-- `num_gpus`: 32 GPUs (each GPU has 288/32 = 9 slots)
-- `num_groups`: 8, `num_nodes`: 4
+- `num_gpus`: 32 GPUs (9 slots each)
 
-## Output (all torch.int64 tensors)
-- `physical_to_logical_map`: [layers, 288] - which logical expert in each physical slot (values 0 to num_logical_experts-1)
-- `logical_to_physical_map`: [layers, num_logical_experts, max_replicas] - physical slots for each logical expert, padded with -1
-- `expert_count`: [layers, num_logical_experts] - replication count per logical expert (sum must equal 288)
-
-## Constraints
-- Every physical slot must be assigned (no -1 in physical_to_logical_map)
-- expert_count[layer].sum() == 288 for all layers
-- Heavily-loaded experts should have more replicas
+## Output
+- `physical_to_logical_map`: [layers, 288] - values 0-63
+- `logical_to_physical_map`: [layers, 64, X] - physical slots or -1
+- `expert_count`: [layers, 64] - replicas per expert, sum=288
 
 ## Scoring
-- 90% balancedness: avg_gpu_load / max_gpu_load (GPU load = sum of weights of experts on that GPU)
-- 10% speed: faster is better, penalty if >10ms
-
-Output ONLY Python code in a ```python block.
+- 90% balancedness: avg_gpu_load / max_gpu_load
+- 10% speed: faster is better
 """
 
 FUNCTION_SIGNATURE = """

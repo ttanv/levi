@@ -34,6 +34,10 @@ class UnifiedLLMClientConfig:
     default_max_tokens: int = 4096
     default_timeout: float = 300.0
 
+    # Batching configuration for local models
+    batch_size: int = 8
+    batch_max_wait_ms: float = 50.0
+
 
 class UnifiedLLMClient:
     """

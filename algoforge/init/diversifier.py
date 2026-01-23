@@ -444,15 +444,20 @@ class Diversifier:
             pool._ranges = np.ones(len(extractor.features))
             logger.info(f"[Init Phase 3] Loaded {len(centroids)} predefined centroids")
 
-            # Add seed program to archive
-            if seed_program and seed_result and "error" not in seed_result:
-                program = Program(code=seed_program, metadata={"primary_score": seed_result.get('score', 0.0)})
+            # Add all valid programs from init phases to the archive
+            n_accepted = 0
+            for prog_data in valid_programs:
+                program = Program(code=prog_data["code"], metadata={"primary_score": prog_data["score"]})
                 eval_result = EvaluationResult(
-                    scores=seed_result,
+                    scores=prog_data["result"],
                     is_valid=True,
                 )
-                accepted, cell_idx = pool.add(program, eval_result)
-                logger.info(f"[Init Phase 3] Added seed to cell {cell_idx} (accepted={accepted})")
+                accepted, _ = pool.add(program, eval_result)
+                if accepted:
+                    n_accepted += 1
+
+            best_score = max(p["score"] for p in valid_programs) if valid_programs else 0.0
+            logger.info(f"[Init Phase 3] Done: {n_accepted} cells filled, archive size: {pool.size()}, best: {best_score:.1f}, cost: ${self.total_cost:.3f}")
 
             extractor.set_phase('evolution')
             return
