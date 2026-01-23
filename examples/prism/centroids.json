@@ -1,402 +1,410 @@
-[
-  {
-    "name": "simple_greedy",
-    "description": "Single-pass greedy: iterate models once, place in best GPU",
-    "vector": {
-      "loop_nesting_max": 1,
-      "branch_count": 3,
-      "comparison_count": 5,
-      "subscript_count": 6
-    }
+{
+  "bounds": {
+    "loop_nesting_max": [0, 6],
+    "branch_count": [0, 30],
+    "comparison_count": [0, 50],
+    "subscript_count": [0, 80]
   },
-  {
-    "name": "sorted_greedy_size",
-    "description": "Sort models by size descending, then greedy placement",
-    "vector": {
-      "loop_nesting_max": 1,
-      "branch_count": 4,
-      "comparison_count": 8,
-      "subscript_count": 8
+  "centroids": [
+    {
+      "name": "simple_greedy",
+      "description": "Single-pass greedy: iterate models once, place in best GPU",
+      "vector": {
+        "loop_nesting_max": 1,
+        "branch_count": 3,
+        "comparison_count": 5,
+        "subscript_count": 6
+      }
+    },
+    {
+      "name": "sorted_greedy_size",
+      "description": "Sort models by size descending, then greedy placement",
+      "vector": {
+        "loop_nesting_max": 1,
+        "branch_count": 4,
+        "comparison_count": 8,
+        "subscript_count": 8
+      }
+    },
+    {
+      "name": "sorted_greedy_kvpr",
+      "description": "Sort by req_rate/slo ratio, then greedy KVPR-minimizing placement",
+      "vector": {
+        "loop_nesting_max": 1,
+        "branch_count": 5,
+        "comparison_count": 10,
+        "subscript_count": 10
+      }
+    },
+    {
+      "name": "best_fit_decreasing",
+      "description": "Classic BFD: sort by size, place in GPU with least remaining space that fits",
+      "vector": {
+        "loop_nesting_max": 2,
+        "branch_count": 6,
+        "comparison_count": 12,
+        "subscript_count": 14
+      }
+    },
+    {
+      "name": "worst_fit_decreasing",
+      "description": "Sort by size, place in GPU with most remaining space",
+      "vector": {
+        "loop_nesting_max": 2,
+        "branch_count": 5,
+        "comparison_count": 10,
+        "subscript_count": 12
+      }
+    },
+    {
+      "name": "first_fit_decreasing",
+      "description": "Sort by size, place in first GPU that fits",
+      "vector": {
+        "loop_nesting_max": 2,
+        "branch_count": 4,
+        "comparison_count": 8,
+        "subscript_count": 10
+      }
+    },
+    {
+      "name": "min_kvpr_greedy",
+      "description": "Always place in GPU that minimizes current max KVPR",
+      "vector": {
+        "loop_nesting_max": 2,
+        "branch_count": 6,
+        "comparison_count": 14,
+        "subscript_count": 16
+      }
+    },
+    {
+      "name": "balanced_load",
+      "description": "Balance weighted request rate across GPUs equally",
+      "vector": {
+        "loop_nesting_max": 2,
+        "branch_count": 7,
+        "comparison_count": 12,
+        "subscript_count": 14
+      }
+    },
+    {
+      "name": "memory_balanced",
+      "description": "Balance memory usage across GPUs before considering KVPR",
+      "vector": {
+        "loop_nesting_max": 2,
+        "branch_count": 6,
+        "comparison_count": 10,
+        "subscript_count": 12
+      }
+    },
+    {
+      "name": "two_phase_size_kvpr",
+      "description": "Phase 1: bin-pack by size. Phase 2: optimize KVPR via swaps",
+      "vector": {
+        "loop_nesting_max": 2,
+        "branch_count": 10,
+        "comparison_count": 18,
+        "subscript_count": 22
+      }
+    },
+    {
+      "name": "pairwise_swap",
+      "description": "Start with greedy, then pairwise swap models to improve KVPR",
+      "vector": {
+        "loop_nesting_max": 3,
+        "branch_count": 8,
+        "comparison_count": 20,
+        "subscript_count": 28
+      }
+    },
+    {
+      "name": "local_search_hill_climb",
+      "description": "Hill climbing: repeatedly move models to better GPUs until no improvement",
+      "vector": {
+        "loop_nesting_max": 2,
+        "branch_count": 9,
+        "comparison_count": 16,
+        "subscript_count": 20
+      }
+    },
+    {
+      "name": "iterative_refinement",
+      "description": "Multiple passes: each pass tries to improve worst GPU's KVPR",
+      "vector": {
+        "loop_nesting_max": 2,
+        "branch_count": 11,
+        "comparison_count": 18,
+        "subscript_count": 24
+      }
+    },
+    {
+      "name": "binary_search_threshold",
+      "description": "Binary search for optimal KVPR threshold, check feasibility",
+      "vector": {
+        "loop_nesting_max": 2,
+        "branch_count": 8,
+        "comparison_count": 22,
+        "subscript_count": 18
+      }
+    },
+    {
+      "name": "binary_search_capacity",
+      "description": "Binary search on capacity allocation, then greedy fill",
+      "vector": {
+        "loop_nesting_max": 2,
+        "branch_count": 7,
+        "comparison_count": 20,
+        "subscript_count": 16
+      }
+    },
+    {
+      "name": "priority_queue_kvpr",
+      "description": "Use heap to always place in GPU with lowest current KVPR",
+      "vector": {
+        "loop_nesting_max": 1,
+        "branch_count": 5,
+        "comparison_count": 8,
+        "subscript_count": 12
+      }
+    },
+    {
+      "name": "round_robin_enhanced",
+      "description": "Round-robin base with memory constraint checking",
+      "vector": {
+        "loop_nesting_max": 1,
+        "branch_count": 4,
+        "comparison_count": 6,
+        "subscript_count": 8
+      }
+    },
+    {
+      "name": "ratio_binning",
+      "description": "Group models by req_rate/slo ratio into bins, distribute bins to GPUs",
+      "vector": {
+        "loop_nesting_max": 2,
+        "branch_count": 8,
+        "comparison_count": 14,
+        "subscript_count": 18
+      }
+    },
+    {
+      "name": "size_class_partition",
+      "description": "Partition models into size classes, balance classes across GPUs",
+      "vector": {
+        "loop_nesting_max": 2,
+        "branch_count": 9,
+        "comparison_count": 12,
+        "subscript_count": 16
+      }
+    },
+    {
+      "name": "greedy_lookahead_1",
+      "description": "Greedy with 1-step lookahead: consider next model when placing",
+      "vector": {
+        "loop_nesting_max": 2,
+        "branch_count": 7,
+        "comparison_count": 16,
+        "subscript_count": 18
+      }
+    },
+    {
+      "name": "greedy_lookahead_2",
+      "description": "Greedy with 2-step lookahead: consider next 2 models",
+      "vector": {
+        "loop_nesting_max": 3,
+        "branch_count": 9,
+        "comparison_count": 22,
+        "subscript_count": 24
+      }
+    },
+    {
+      "name": "exhaustive_small",
+      "description": "Try all permutations for small inputs, greedy fallback for large",
+      "vector": {
+        "loop_nesting_max": 4,
+        "branch_count": 12,
+        "comparison_count": 28,
+        "subscript_count": 32
+      }
+    },
+    {
+      "name": "branch_bound_lite",
+      "description": "Branch and bound with simple pruning on KVPR lower bound",
+      "vector": {
+        "loop_nesting_max": 3,
+        "branch_count": 14,
+        "comparison_count": 24,
+        "subscript_count": 26
+      }
+    },
+    {
+      "name": "backtrack_feasible",
+      "description": "Backtracking search for feasible placements, return first good one",
+      "vector": {
+        "loop_nesting_max": 3,
+        "branch_count": 10,
+        "comparison_count": 18,
+        "subscript_count": 22
+      }
+    },
+    {
+      "name": "dp_subset_gpu",
+      "description": "DP over model subsets per GPU, combine optimal sub-solutions",
+      "vector": {
+        "loop_nesting_max": 3,
+        "branch_count": 8,
+        "comparison_count": 16,
+        "subscript_count": 30
+      }
+    },
+    {
+      "name": "simulated_annealing_step",
+      "description": "SA-style: accept worse moves with decreasing probability",
+      "vector": {
+        "loop_nesting_max": 2,
+        "branch_count": 10,
+        "comparison_count": 14,
+        "subscript_count": 20
+      }
+    },
+    {
+      "name": "tabu_swap",
+      "description": "Tabu search: swap models but avoid recently swapped pairs",
+      "vector": {
+        "loop_nesting_max": 2,
+        "branch_count": 12,
+        "comparison_count": 18,
+        "subscript_count": 26
+      }
+    },
+    {
+      "name": "multi_start_greedy",
+      "description": "Run greedy from multiple random orderings, keep best",
+      "vector": {
+        "loop_nesting_max": 2,
+        "branch_count": 6,
+        "comparison_count": 12,
+        "subscript_count": 14
+      }
+    },
+    {
+      "name": "random_restart",
+      "description": "Random placements with restarts, keep best valid solution",
+      "vector": {
+        "loop_nesting_max": 2,
+        "branch_count": 5,
+        "comparison_count": 8,
+        "subscript_count": 12
+      }
+    },
+    {
+      "name": "genetic_crossover",
+      "description": "Evolutionary: crossover placements, mutate, select fittest",
+      "vector": {
+        "loop_nesting_max": 3,
+        "branch_count": 11,
+        "comparison_count": 20,
+        "subscript_count": 28
+      }
+    },
+    {
+      "name": "cluster_then_assign",
+      "description": "Cluster similar models together, assign clusters to GPUs",
+      "vector": {
+        "loop_nesting_max": 2,
+        "branch_count": 8,
+        "comparison_count": 16,
+        "subscript_count": 20
+      }
+    },
+    {
+      "name": "constraint_propagation",
+      "description": "Propagate memory constraints to prune invalid placements early",
+      "vector": {
+        "loop_nesting_max": 2,
+        "branch_count": 13,
+        "comparison_count": 20,
+        "subscript_count": 18
+      }
+    },
+    {
+      "name": "dual_sort_interleave",
+      "description": "Sort by size and by ratio, interleave from both orderings",
+      "vector": {
+        "loop_nesting_max": 2,
+        "branch_count": 7,
+        "comparison_count": 14,
+        "subscript_count": 16
+      }
+    },
+    {
+      "name": "variance_minimizer",
+      "description": "Minimize variance of KVPR across GPUs, not just max",
+      "vector": {
+        "loop_nesting_max": 2,
+        "branch_count": 8,
+        "comparison_count": 16,
+        "subscript_count": 18
+      }
+    },
+    {
+      "name": "threshold_filter_assign",
+      "description": "Filter models above KVPR threshold, assign filtered first",
+      "vector": {
+        "loop_nesting_max": 2,
+        "branch_count": 9,
+        "comparison_count": 14,
+        "subscript_count": 14
+      }
+    },
+    {
+      "name": "score_guided_search",
+      "description": "Use KVPR score difference to guide placement decisions",
+      "vector": {
+        "loop_nesting_max": 2,
+        "branch_count": 10,
+        "comparison_count": 18,
+        "subscript_count": 20
+      }
+    },
+    {
+      "name": "adaptive_strategy",
+      "description": "Choose strategy based on input characteristics (size, count)",
+      "vector": {
+        "loop_nesting_max": 2,
+        "branch_count": 15,
+        "comparison_count": 20,
+        "subscript_count": 16
+      }
+    },
+    {
+      "name": "rebalance_worst",
+      "description": "Greedy initial, then iteratively rebalance worst GPU",
+      "vector": {
+        "loop_nesting_max": 2,
+        "branch_count": 10,
+        "comparison_count": 16,
+        "subscript_count": 22
+      }
+    },
+    {
+      "name": "move_chain",
+      "description": "Find chains of moves that improve overall KVPR",
+      "vector": {
+        "loop_nesting_max": 3,
+        "branch_count": 12,
+        "comparison_count": 24,
+        "subscript_count": 30
+      }
+    },
+    {
+      "name": "milp_relaxation",
+      "description": "Solve relaxed LP, round to integer solution",
+      "vector": {
+        "loop_nesting_max": 1,
+        "branch_count": 6,
+        "comparison_count": 10,
+        "subscript_count": 14
+      }
     }
-  },
-  {
-    "name": "sorted_greedy_kvpr",
-    "description": "Sort by req_rate/slo ratio, then greedy KVPR-minimizing placement",
-    "vector": {
-      "loop_nesting_max": 1,
-      "branch_count": 5,
-      "comparison_count": 10,
-      "subscript_count": 10
-    }
-  },
-  {
-    "name": "best_fit_decreasing",
-    "description": "Classic BFD: sort by size, place in GPU with least remaining space that fits",
-    "vector": {
-      "loop_nesting_max": 2,
-      "branch_count": 6,
-      "comparison_count": 12,
-      "subscript_count": 14
-    }
-  },
-  {
-    "name": "worst_fit_decreasing",
-    "description": "Sort by size, place in GPU with most remaining space",
-    "vector": {
-      "loop_nesting_max": 2,
-      "branch_count": 5,
-      "comparison_count": 10,
-      "subscript_count": 12
-    }
-  },
-  {
-    "name": "first_fit_decreasing",
-    "description": "Sort by size, place in first GPU that fits",
-    "vector": {
-      "loop_nesting_max": 2,
-      "branch_count": 4,
-      "comparison_count": 8,
-      "subscript_count": 10
-    }
-  },
-  {
-    "name": "min_kvpr_greedy",
-    "description": "Always place in GPU that minimizes current max KVPR",
-    "vector": {
-      "loop_nesting_max": 2,
-      "branch_count": 6,
-      "comparison_count": 14,
-      "subscript_count": 16
-    }
-  },
-  {
-    "name": "balanced_load",
-    "description": "Balance weighted request rate across GPUs equally",
-    "vector": {
-      "loop_nesting_max": 2,
-      "branch_count": 7,
-      "comparison_count": 12,
-      "subscript_count": 14
-    }
-  },
-  {
-    "name": "memory_balanced",
-    "description": "Balance memory usage across GPUs before considering KVPR",
-    "vector": {
-      "loop_nesting_max": 2,
-      "branch_count": 6,
-      "comparison_count": 10,
-      "subscript_count": 12
-    }
-  },
-  {
-    "name": "two_phase_size_kvpr",
-    "description": "Phase 1: bin-pack by size. Phase 2: optimize KVPR via swaps",
-    "vector": {
-      "loop_nesting_max": 2,
-      "branch_count": 10,
-      "comparison_count": 18,
-      "subscript_count": 22
-    }
-  },
-  {
-    "name": "pairwise_swap",
-    "description": "Start with greedy, then pairwise swap models to improve KVPR",
-    "vector": {
-      "loop_nesting_max": 3,
-      "branch_count": 8,
-      "comparison_count": 20,
-      "subscript_count": 28
-    }
-  },
-  {
-    "name": "local_search_hill_climb",
-    "description": "Hill climbing: repeatedly move models to better GPUs until no improvement",
-    "vector": {
-      "loop_nesting_max": 2,
-      "branch_count": 9,
-      "comparison_count": 16,
-      "subscript_count": 20
-    }
-  },
-  {
-    "name": "iterative_refinement",
-    "description": "Multiple passes: each pass tries to improve worst GPU's KVPR",
-    "vector": {
-      "loop_nesting_max": 2,
-      "branch_count": 11,
-      "comparison_count": 18,
-      "subscript_count": 24
-    }
-  },
-  {
-    "name": "binary_search_threshold",
-    "description": "Binary search for optimal KVPR threshold, check feasibility",
-    "vector": {
-      "loop_nesting_max": 2,
-      "branch_count": 8,
-      "comparison_count": 22,
-      "subscript_count": 18
-    }
-  },
-  {
-    "name": "binary_search_capacity",
-    "description": "Binary search on capacity allocation, then greedy fill",
-    "vector": {
-      "loop_nesting_max": 2,
-      "branch_count": 7,
-      "comparison_count": 20,
-      "subscript_count": 16
-    }
-  },
-  {
-    "name": "priority_queue_kvpr",
-    "description": "Use heap to always place in GPU with lowest current KVPR",
-    "vector": {
-      "loop_nesting_max": 1,
-      "branch_count": 5,
-      "comparison_count": 8,
-      "subscript_count": 12
-    }
-  },
-  {
-    "name": "round_robin_enhanced",
-    "description": "Round-robin base with memory constraint checking",
-    "vector": {
-      "loop_nesting_max": 1,
-      "branch_count": 4,
-      "comparison_count": 6,
-      "subscript_count": 8
-    }
-  },
-  {
-    "name": "ratio_binning",
-    "description": "Group models by req_rate/slo ratio into bins, distribute bins to GPUs",
-    "vector": {
-      "loop_nesting_max": 2,
-      "branch_count": 8,
-      "comparison_count": 14,
-      "subscript_count": 18
-    }
-  },
-  {
-    "name": "size_class_partition",
-    "description": "Partition models into size classes, balance classes across GPUs",
-    "vector": {
-      "loop_nesting_max": 2,
-      "branch_count": 9,
-      "comparison_count": 12,
-      "subscript_count": 16
-    }
-  },
-  {
-    "name": "greedy_lookahead_1",
-    "description": "Greedy with 1-step lookahead: consider next model when placing",
-    "vector": {
-      "loop_nesting_max": 2,
-      "branch_count": 7,
-      "comparison_count": 16,
-      "subscript_count": 18
-    }
-  },
-  {
-    "name": "greedy_lookahead_2",
-    "description": "Greedy with 2-step lookahead: consider next 2 models",
-    "vector": {
-      "loop_nesting_max": 3,
-      "branch_count": 9,
-      "comparison_count": 22,
-      "subscript_count": 24
-    }
-  },
-  {
-    "name": "exhaustive_small",
-    "description": "Try all permutations for small inputs, greedy fallback for large",
-    "vector": {
-      "loop_nesting_max": 4,
-      "branch_count": 12,
-      "comparison_count": 28,
-      "subscript_count": 32
-    }
-  },
-  {
-    "name": "branch_bound_lite",
-    "description": "Branch and bound with simple pruning on KVPR lower bound",
-    "vector": {
-      "loop_nesting_max": 3,
-      "branch_count": 14,
-      "comparison_count": 24,
-      "subscript_count": 26
-    }
-  },
-  {
-    "name": "backtrack_feasible",
-    "description": "Backtracking search for feasible placements, return first good one",
-    "vector": {
-      "loop_nesting_max": 3,
-      "branch_count": 10,
-      "comparison_count": 18,
-      "subscript_count": 22
-    }
-  },
-  {
-    "name": "dp_subset_gpu",
-    "description": "DP over model subsets per GPU, combine optimal sub-solutions",
-    "vector": {
-      "loop_nesting_max": 3,
-      "branch_count": 8,
-      "comparison_count": 16,
-      "subscript_count": 30
-    }
-  },
-  {
-    "name": "simulated_annealing_step",
-    "description": "SA-style: accept worse moves with decreasing probability",
-    "vector": {
-      "loop_nesting_max": 2,
-      "branch_count": 10,
-      "comparison_count": 14,
-      "subscript_count": 20
-    }
-  },
-  {
-    "name": "tabu_swap",
-    "description": "Tabu search: swap models but avoid recently swapped pairs",
-    "vector": {
-      "loop_nesting_max": 2,
-      "branch_count": 12,
-      "comparison_count": 18,
-      "subscript_count": 26
-    }
-  },
-  {
-    "name": "multi_start_greedy",
-    "description": "Run greedy from multiple random orderings, keep best",
-    "vector": {
-      "loop_nesting_max": 2,
-      "branch_count": 6,
-      "comparison_count": 12,
-      "subscript_count": 14
-    }
-  },
-  {
-    "name": "random_restart",
-    "description": "Random placements with restarts, keep best valid solution",
-    "vector": {
-      "loop_nesting_max": 2,
-      "branch_count": 5,
-      "comparison_count": 8,
-      "subscript_count": 12
-    }
-  },
-  {
-    "name": "genetic_crossover",
-    "description": "Evolutionary: crossover placements, mutate, select fittest",
-    "vector": {
-      "loop_nesting_max": 3,
-      "branch_count": 11,
-      "comparison_count": 20,
-      "subscript_count": 28
-    }
-  },
-  {
-    "name": "cluster_then_assign",
-    "description": "Cluster similar models together, assign clusters to GPUs",
-    "vector": {
-      "loop_nesting_max": 2,
-      "branch_count": 8,
-      "comparison_count": 16,
-      "subscript_count": 20
-    }
-  },
-  {
-    "name": "constraint_propagation",
-    "description": "Propagate memory constraints to prune invalid placements early",
-    "vector": {
-      "loop_nesting_max": 2,
-      "branch_count": 13,
-      "comparison_count": 20,
-      "subscript_count": 18
-    }
-  },
-  {
-    "name": "dual_sort_interleave",
-    "description": "Sort by size and by ratio, interleave from both orderings",
-    "vector": {
-      "loop_nesting_max": 2,
-      "branch_count": 7,
-      "comparison_count": 14,
-      "subscript_count": 16
-    }
-  },
-  {
-    "name": "variance_minimizer",
-    "description": "Minimize variance of KVPR across GPUs, not just max",
-    "vector": {
-      "loop_nesting_max": 2,
-      "branch_count": 8,
-      "comparison_count": 16,
-      "subscript_count": 18
-    }
-  },
-  {
-    "name": "threshold_filter_assign",
-    "description": "Filter models above KVPR threshold, assign filtered first",
-    "vector": {
-      "loop_nesting_max": 2,
-      "branch_count": 9,
-      "comparison_count": 14,
-      "subscript_count": 14
-    }
-  },
-  {
-    "name": "score_guided_search",
-    "description": "Use KVPR score difference to guide placement decisions",
-    "vector": {
-      "loop_nesting_max": 2,
-      "branch_count": 10,
-      "comparison_count": 18,
-      "subscript_count": 20
-    }
-  },
-  {
-    "name": "adaptive_strategy",
-    "description": "Choose strategy based on input characteristics (size, count)",
-    "vector": {
-      "loop_nesting_max": 2,
-      "branch_count": 15,
-      "comparison_count": 20,
-      "subscript_count": 16
-    }
-  },
-  {
-    "name": "rebalance_worst",
-    "description": "Greedy initial, then iteratively rebalance worst GPU",
-    "vector": {
-      "loop_nesting_max": 2,
-      "branch_count": 10,
-      "comparison_count": 16,
-      "subscript_count": 22
-    }
-  },
-  {
-    "name": "move_chain",
-    "description": "Find chains of moves that improve overall KVPR",
-    "vector": {
-      "loop_nesting_max": 3,
-      "branch_count": 12,
-      "comparison_count": 24,
-      "subscript_count": 30
-    }
-  },
-  {
-    "name": "milp_relaxation",
-    "description": "Solve relaxed LP, round to integer solution",
-    "vector": {
-      "loop_nesting_max": 1,
-      "branch_count": 6,
-      "comparison_count": 10,
-      "subscript_count": 14
-    }
-  }
-]
+  ]
+}

@@ -133,18 +133,27 @@ async def _run_async(config: AlgoforgeConfig) -> AlgoforgeResult:
                 from ..init.diversifier import _load_predefined_centroids
                 import numpy as np
                 logger.info(f"[AlgoForge] Loading predefined centroids from {config.cvt.predefined_centroids_file}")
-                centroids, raw_feature_data = _load_predefined_centroids(
+                result = _load_predefined_centroids(
                     config.cvt.predefined_centroids_file,
                     extractor.features,
                 )
-                # Initialize extractor stats so z-score normalization aligns with centroids
-                extractor.init_stats_from_data(raw_feature_data)
-                pool._centroids = centroids
-                pool._n_centroids = len(centroids)
+
+                # Set up extractor normalization
+                if result.bounds is not None:
+                    # Deterministic mode: use fixed bounds from centroids file
+                    extractor.set_fixed_bounds(result.bounds)
+                    logger.info(f"[AlgoForge] Using deterministic normalization with fixed bounds")
+                else:
+                    # Legacy mode: use z-score stats from centroid data
+                    extractor.init_stats_from_data(result.raw_feature_data)
+                    logger.info(f"[AlgoForge] Using adaptive normalization (legacy mode)")
+
+                pool._centroids = result.centroids
+                pool._n_centroids = len(result.centroids)
                 pool._mins = np.zeros(len(extractor.features))
                 pool._maxs = np.ones(len(extractor.features))
                 pool._ranges = np.ones(len(extractor.features))
-                logger.info(f"[AlgoForge] Loaded {len(centroids)} predefined centroids")
+                logger.info(f"[AlgoForge] Loaded {len(result.centroids)} predefined centroids")
 
             # Just add seed to archive
             program = Program(code=config.seed_program)

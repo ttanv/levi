@@ -75,14 +75,45 @@ class BehaviorExtractor:
         # Phase control for noise
         self._phase = 'init'
 
-        # Welford's online algorithm for z-score normalization
+        # Welford's online algorithm for z-score normalization (adaptive mode)
         self._count: dict[str, int] = {f: 0 for f in self.features}
         self._mean: dict[str, float] = {f: 0.0 for f in self.features}
         self._M2: dict[str, float] = {f: 0.0 for f in self.features}
 
+        # Fixed bounds mode (deterministic normalization)
+        self._fixed_bounds: Optional[dict[str, tuple[float, float]]] = None
+
     def set_phase(self, phase: str) -> None:
         """Set extraction phase: 'init' adds noise, 'evolution' does not."""
         self._phase = phase
+
+    def set_fixed_bounds(self, bounds: dict[str, tuple[float, float]]) -> None:
+        """
+        Set fixed bounds for deterministic normalization.
+
+        When fixed bounds are set, normalization uses simple min-max scaling
+        instead of adaptive z-score normalization. This ensures the same code
+        always maps to the same behavior vector.
+
+        Args:
+            bounds: Dict mapping feature name to (min, max) tuple.
+                    Raw values are normalized as: (value - min) / (max - min)
+                    Values outside bounds are clipped to [0, 1].
+        """
+        self._fixed_bounds = {}
+        for feature in self.features:
+            if feature in bounds:
+                lo, hi = bounds[feature]
+                if hi <= lo:
+                    raise ValueError(f"Invalid bounds for {feature}: max ({hi}) must be > min ({lo})")
+                self._fixed_bounds[feature] = (float(lo), float(hi))
+            else:
+                # Default bounds for unknown features
+                self._fixed_bounds[feature] = (0.0, 100.0)
+
+    def has_fixed_bounds(self) -> bool:
+        """Check if fixed bounds mode is enabled."""
+        return self._fixed_bounds is not None
 
     def init_stats_from_data(self, feature_data: dict[str, list[float]]) -> None:
         """Initialize running stats from provided raw feature values."""
@@ -144,18 +175,28 @@ class BehaviorExtractor:
             for key in self.score_keys:
                 raw_values[key] = 0.0
 
-        # Apply z-score normalization with sigmoid
+        # Normalize features
         values: dict[str, float] = {}
-        for feature in self.features:
-            raw = raw_values.get(feature, 0.0)
-            self._update_stats(feature, raw)
-            z = (raw - self._mean[feature]) / self._get_std(feature)
-            values[feature] = self._zscore_to_01(z)
 
-        # Add noise during init phase
-        if self._phase == 'init' and self.init_noise > 0:
+        if self._fixed_bounds is not None:
+            # Deterministic mode: use fixed min-max bounds
             for feature in self.features:
-                noise = np.random.normal(0, self.init_noise)
-                values[feature] = float(np.clip(values[feature] + noise, 0.0, 1.0))
+                raw = raw_values.get(feature, 0.0)
+                lo, hi = self._fixed_bounds[feature]
+                normalized = (raw - lo) / (hi - lo)
+                values[feature] = float(np.clip(normalized, 0.0, 1.0))
+        else:
+            # Adaptive mode: z-score normalization with sigmoid
+            for feature in self.features:
+                raw = raw_values.get(feature, 0.0)
+                self._update_stats(feature, raw)
+                z = (raw - self._mean[feature]) / self._get_std(feature)
+                values[feature] = self._zscore_to_01(z)
+
+            # Add noise during init phase (only in adaptive mode)
+            if self._phase == 'init' and self.init_noise > 0:
+                for feature in self.features:
+                    noise = np.random.normal(0, self.init_noise)
+                    values[feature] = float(np.clip(values[feature] + noise, 0.0, 1.0))
 
         return FeatureVector(values)
