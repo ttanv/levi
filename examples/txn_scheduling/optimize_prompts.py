@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """
-DSPy prompt optimization for AlgoForge - EPLB Problem.
+DSPy prompt optimization for AlgoForge - Transaction Scheduling.
 
 Optimizes prompts using MIPROv2:
-1. Mutation prompts (per model)
+1. Mutation prompts (one per model: MiMo, DeepSeek, Qwen)
 2. Paradigm shift prompt (Gemini)
 
-Budget: ~$0.60 for optimization, rest for main run
+Budget: ~$0.60 for optimization, $4.40 for main run
 """
 
+import asyncio
 import json
 import os
 import re
@@ -27,7 +28,7 @@ from problem import (
     PROBLEM_DESCRIPTION,
     FUNCTION_SIGNATURE,
     SEED_PROGRAM,
-    get_lazy_inputs,
+    INPUTS,
     score_fn,
 )
 
@@ -46,8 +47,8 @@ PARADIGM_SHIFT_MODEL = "openrouter/google/gemini-3-flash-preview"
 
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
 
-# Behavioral features for EPLB
-EPLB_AST_FEATURES = ['loop_nesting_max', 'cyclomatic_complexity', 'math_operators']
+# Behavioral features for TXN scheduling (matching TXN_AST_FEATURES)
+TXN_AST_FEATURES = ['loop_nesting_max', 'comparison_count', 'call_count', 'branch_count']
 
 
 # --- Code Utilities ---
@@ -69,6 +70,30 @@ def extract_code(response: str) -> Optional[str]:
     return None
 
 
+def apply_diff(original: str, diff_response: str) -> Optional[str]:
+    """Apply SEARCH/REPLACE diff blocks to original code."""
+    result = original
+
+    pattern = r'<<<<<<< SEARCH\s*(.*?)\s*=======\s*(.*?)\s*>>>>>>> REPLACE'
+    matches = re.findall(pattern, diff_response, re.DOTALL)
+
+    if not matches:
+        return extract_code(diff_response)
+
+    applied_any = False
+    for search, replace in matches:
+        search = search.strip()
+        replace = replace.strip()
+        if search in result:
+            result = result.replace(search, replace, 1)
+            applied_any = True
+
+    if not applied_any:
+        return extract_code(diff_response)
+
+    return result
+
+
 def validate_code(code: str) -> tuple[bool, Optional[str]]:
     """Check if code compiles without errors."""
     try:
@@ -81,45 +106,44 @@ def validate_code(code: str) -> tuple[bool, Optional[str]]:
 
 
 def execute_code(code: str, inputs: list, timeout: int = 60) -> dict:
-    """Execute code and return score_fn results.
+    """Execute code and return score_fn results with timeout."""
+    import multiprocessing
 
-    Note: For EPLB, inputs contain torch tensors which can't be pickled
-    across process boundaries, so we run directly without multiprocessing.
-    The timeout is enforced via signal for safety.
-    """
-    import signal
-
-    def timeout_handler(signum, frame):
-        raise TimeoutError("Execution timeout")
-
-    namespace = {}
-    try:
-        # Set timeout using signal (Unix only)
-        old_handler = signal.signal(signal.SIGALRM, timeout_handler)
-        signal.alarm(timeout)
-
+    def _run(queue, code, inputs):
+        namespace = {}
         try:
             exec(code, namespace)
-            if "rebalance_experts" not in namespace:
-                return {"error": "Function 'rebalance_experts' not found"}
-            result = score_fn(namespace["rebalance_experts"], inputs)
-            return result
-        finally:
-            signal.alarm(0)
-            signal.signal(signal.SIGALRM, old_handler)
+            if "get_best_schedule" not in namespace:
+                queue.put({"error": "Function 'get_best_schedule' not found"})
+                return
+            result = score_fn(namespace["get_best_schedule"], inputs)
+            queue.put(result)
+        except Exception as e:
+            queue.put({"error": str(e)})
 
-    except TimeoutError:
+    queue = multiprocessing.Queue()
+    proc = multiprocessing.Process(target=_run, args=(queue, code, inputs))
+    proc.start()
+    proc.join(timeout=timeout)
+
+    if proc.is_alive():
+        proc.terminate()
+        proc.join()
         return {"error": "Execution timeout"}
-    except Exception as e:
-        return {"error": str(e)}
+
+    if queue.empty():
+        return {"error": "No result returned"}
+
+    return queue.get()
 
 
 def compute_behavior_features(code: str) -> dict[str, float]:
-    """Extract behavioral features matching EPLB_AST_FEATURES."""
+    """Extract behavioral features matching TXN_AST_FEATURES."""
     features = {
         "loop_nesting_max": 0.0,
-        "cyclomatic_complexity": 0.0,
-        "math_operators": 0.0,
+        "comparison_count": 0.0,
+        "call_count": 0.0,
+        "branch_count": 0.0,
     }
 
     try:
@@ -141,10 +165,12 @@ def compute_behavior_features(code: str) -> dict[str, float]:
         if isinstance(node, (ast.For, ast.While)):
             depth = count_nesting(node)
             features["loop_nesting_max"] = max(features["loop_nesting_max"], depth)
+        elif isinstance(node, ast.Compare):
+            features["comparison_count"] += 1
+        elif isinstance(node, ast.Call):
+            features["call_count"] += 1
         elif isinstance(node, ast.If):
-            features["cyclomatic_complexity"] += 1
-        elif isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Mod)):
-            features["math_operators"] += 1
+            features["branch_count"] += 1
 
     return features
 
@@ -268,6 +294,7 @@ def mutation_metric(
     # Extract code
     mutated_code = extract_code(output)
     if mutated_code is None:
+        # Try using raw output if it looks like code
         if "def " in output:
             mutated_code = output
         else:
@@ -350,8 +377,8 @@ def paradigm_shift_metric(
 
     exec_score = result.get("score", 0.0)
 
-    # Score component (80%) - EPLB scores around 70-90
-    normalized_score = min(exec_score / 90.0, 1.0)
+    # Score component (80%) - normalize to 0-100 range
+    normalized_score = min(exec_score / 100.0, 1.0)
     score = normalized_score * 0.80
 
     # Diversity component (20%)
@@ -363,6 +390,7 @@ def paradigm_shift_metric(
             div = compute_diversity(new_features, ref_features)
             diversities.append(div)
 
+        # Min distance to existing solutions
         min_diversity = min(diversities) if diversities else 0.0
         diversity_score = min(min_diversity * 2, 1.0) * 0.20
         score += diversity_score
@@ -371,109 +399,69 @@ def paradigm_shift_metric(
 
 
 # --- Training Data Generation ---
-INSPIRATION_PROGRAM_1 = '''"""Simple greedy expert replication."""
-import torch
+INSPIRATION_PROGRAM_1 = '''import random
 
-def rebalance_experts(
-    weight: torch.Tensor,
-    num_replicas: int,
-    num_groups: int,
-    num_nodes: int,
-    num_gpus: int,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Greedy load-proportional replication."""
-    num_layers, num_logical = weight.shape
-    device = weight.device
+def get_best_schedule(workload, num_seqs):
+    """Conflict-aware greedy scheduling."""
+    random.seed(42)
+    n = workload.num_txns
 
-    weight_sum = weight.sum(dim=1, keepdim=True).clamp(min=1e-6)
-    normalized = weight / weight_sum
+    # Build conflict graph
+    conflicts = [[0] * n for _ in range(n)]
+    for i in range(n):
+        keys_i = set(op[1] for op in workload.txns[i])
+        writes_i = set(op[1] for op in workload.txns[i] if op[0] == 'w')
+        for j in range(i + 1, n):
+            keys_j = set(op[1] for op in workload.txns[j])
+            writes_j = set(op[1] for op in workload.txns[j] if op[0] == 'w')
+            # Conflict if both write same key or one writes what other reads
+            if writes_i & keys_j or writes_j & keys_i:
+                conflicts[i][j] = conflicts[j][i] = 1
 
-    expert_count = torch.ones(num_layers, num_logical, dtype=torch.int64, device=device)
-    remaining = num_replicas - num_logical
+    # Sort by total conflicts (ascending)
+    conflict_counts = [sum(row) for row in conflicts]
+    schedule = sorted(range(n), key=lambda x: conflict_counts[x])
 
-    for _ in range(remaining):
-        load_per_replica = weight / expert_count.float().clamp(min=1)
-        max_idx = load_per_replica.argmax(dim=1)
-        for layer in range(num_layers):
-            expert_count[layer, max_idx[layer]] += 1
-
-    phy2log = torch.zeros(num_layers, num_replicas, dtype=torch.int64, device=device)
-    max_count = expert_count.max().item()
-    log2phy = torch.full((num_layers, num_logical, max_count), -1, dtype=torch.int64, device=device)
-
-    for layer in range(num_layers):
-        idx = 0
-        for expert in range(num_logical):
-            count = expert_count[layer, expert].item()
-            for r in range(count):
-                phy2log[layer, idx] = expert
-                log2phy[layer, expert, r] = idx
-                idx += 1
-
-    return phy2log, log2phy, expert_count
+    return workload.get_opt_seq_cost(schedule), schedule
 '''
 
-INSPIRATION_PROGRAM_2 = '''"""Round-robin with load-aware adjustment."""
-import torch
+INSPIRATION_PROGRAM_2 = '''import random
+import heapq
 
-def rebalance_experts(
-    weight: torch.Tensor,
-    num_replicas: int,
-    num_groups: int,
-    num_nodes: int,
-    num_gpus: int,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Round-robin assignment with load balancing."""
-    num_layers, num_logical = weight.shape
-    device = weight.device
+def get_best_schedule(workload, num_seqs):
+    """Priority queue scheduling by transaction length."""
+    random.seed(42)
+    n = workload.num_txns
 
-    expert_count = torch.ones(num_layers, num_logical, dtype=torch.int64, device=device)
-    extra = num_replicas - num_logical
+    # Priority by transaction length (shorter first)
+    txn_lens = [(len(workload.txns[i]), i) for i in range(n)]
+    heapq.heapify(txn_lens)
 
-    sorted_idx = weight.argsort(dim=1, descending=True)
-    for layer in range(num_layers):
-        for i in range(extra):
-            expert_count[layer, sorted_idx[layer, i % num_logical]] += 1
+    schedule = []
+    while txn_lens:
+        _, txn = heapq.heappop(txn_lens)
+        schedule.append(txn)
 
-    phy2log = torch.zeros(num_layers, num_replicas, dtype=torch.int64, device=device)
-
-    for layer in range(num_layers):
-        slot = 0
-        for expert in range(num_logical):
-            for _ in range(expert_count[layer, expert].item()):
-                phy2log[layer, slot] = expert
-                slot += 1
-
-    max_count = expert_count.max().item()
-    log2phy = torch.full((num_layers, num_logical, max_count), -1, dtype=torch.int64, device=device)
-
-    for layer in range(num_layers):
-        counts = torch.zeros(num_logical, dtype=torch.int64)
-        for slot in range(num_replicas):
-            expert = phy2log[layer, slot].item()
-            log2phy[layer, expert, counts[expert]] = slot
-            counts[expert] += 1
-
-    return phy2log, log2phy, expert_count
+    return workload.get_opt_seq_cost(schedule), schedule
 '''
 
 
 def generate_mutation_examples(n_examples: int = 5) -> list[dspy.Example]:
     """Generate training examples for mutation optimization."""
     examples = []
-    inputs = get_lazy_inputs()
 
+    # Get scores for seed and inspirations
     parent_code = SEED_PROGRAM
-    result = execute_code(parent_code, inputs)
-    parent_score = result.get("score", 0.0) if "error" not in result else 50.0
+    result = execute_code(parent_code, INPUTS)
+    parent_score = result.get("score", 0.0) if "error" not in result else 20.0
 
     inspirations = [
         (INSPIRATION_PROGRAM_1, None),
         (INSPIRATION_PROGRAM_2, None),
     ]
     for i, (code, _) in enumerate(inspirations):
-        result = execute_code(code, inputs)
-        score = result.get("score", 0.0) if "error" not in result else 40.0
+        result = execute_code(code, INPUTS)
+        score = result.get("score", 0.0) if "error" not in result else 15.0
         inspirations[i] = (code, score)
 
     for i in range(n_examples):
@@ -498,18 +486,17 @@ def generate_mutation_examples(n_examples: int = 5) -> list[dspy.Example]:
 def generate_paradigm_shift_examples(n_examples: int = 4) -> list[dspy.Example]:
     """Generate training examples for paradigm shift optimization."""
     examples = []
-    inputs = get_lazy_inputs()
 
     solutions = [
-        ("Region 1 - Hierarchical Packing", SEED_PROGRAM),
-        ("Region 2 - Greedy Load-Proportional", INSPIRATION_PROGRAM_1),
-        ("Region 3 - Round-Robin Weighted", INSPIRATION_PROGRAM_2),
+        ("Region 1 - Greedy Cost Sampling", SEED_PROGRAM),
+        ("Region 2 - Conflict-Aware Greedy", INSPIRATION_PROGRAM_1),
+        ("Region 3 - Length-Priority Queue", INSPIRATION_PROGRAM_2),
     ]
 
     scored_solutions = []
     for name, code in solutions:
-        result = execute_code(code, inputs)
-        score = result.get("score", 0.0) if "error" not in result else 40.0
+        result = execute_code(code, INPUTS)
+        score = result.get("score", 0.0) if "error" not in result else 15.0
         scored_solutions.append((name, code, score))
 
     representative_solutions = ""
@@ -572,10 +559,8 @@ def optimize_mutation_for_model(
     lm = setup_model_lm(model)
     dspy.configure(lm=lm)
 
-    inputs = get_lazy_inputs()
-
     def metric(example, prediction, trace=None):
-        return mutation_metric(example, prediction, inputs, trace, debug=False)
+        return mutation_metric(example, prediction, INPUTS, trace, debug=False)
 
     trainset = generate_mutation_examples(n_examples)
     module = MutationModule()
@@ -644,11 +629,10 @@ def optimize_paradigm_shift(
     lm = setup_model_lm(PARADIGM_SHIFT_MODEL)
     dspy.configure(lm=lm)
 
-    inputs = get_lazy_inputs()
     reference_solutions = [SEED_PROGRAM, INSPIRATION_PROGRAM_1, INSPIRATION_PROGRAM_2]
 
     def metric(example, prediction, trace=None):
-        return paradigm_shift_metric(example, prediction, inputs, reference_solutions, trace)
+        return paradigm_shift_metric(example, prediction, INPUTS, reference_solutions, trace)
 
     trainset = generate_paradigm_shift_examples(n_examples)
     module = ParadigmShiftModule()
@@ -704,9 +688,13 @@ def optimize_paradigm_shift(
 
 
 def run_optimization(budget: float = 0.60) -> dict:
-    """Run full optimization within budget."""
+    """
+    Run full optimization within budget.
+
+    Returns dict with optimized prompts per model.
+    """
     print(f"\n{'#'*60}")
-    print(f"# DSPy Prompt Optimization - EPLB")
+    print(f"# DSPy Prompt Optimization - TXN Scheduling")
     print(f"# Budget: ${budget:.2f}")
     print(f"{'#'*60}")
 
@@ -748,6 +736,7 @@ def save_optimized_prompts(results: dict, output_file: str = "optimized_prompts.
     """Save optimized prompts to JSON file."""
     output_path = Path(__file__).parent / output_file
 
+    # Extract just the instructions for use in AlgoForge
     prompts = {
         "mutation": {},
         "paradigm_shift": None,
@@ -760,6 +749,7 @@ def save_optimized_prompts(results: dict, output_file: str = "optimized_prompts.
     for model_key, result in results.get("mutation", {}).items():
         if "optimized_instructions" in result:
             instructions = result["optimized_instructions"]
+            # Get the first (and usually only) instruction
             if instructions:
                 prompts["mutation"][model_key] = list(instructions.values())[0]
 
@@ -778,7 +768,7 @@ def save_optimized_prompts(results: dict, output_file: str = "optimized_prompts.
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="Optimize prompts for EPLB")
+    parser = argparse.ArgumentParser(description="Optimize prompts for TXN scheduling")
     parser.add_argument("--budget", type=float, default=0.60, help="Budget for optimization")
     parser.add_argument("--output", type=str, default="optimized_prompts.json", help="Output file")
     parser.add_argument("--paradigm-only", action="store_true", help="Only optimize paradigm shift prompt")
@@ -797,6 +787,7 @@ if __name__ == "__main__":
 
         result = optimize_paradigm_shift(n_trials=n_trials, n_examples=n_examples)
 
+        # Save just paradigm shift
         prompts = {
             "mutation": {},
             "paradigm_shift": None,

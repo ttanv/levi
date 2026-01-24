@@ -70,7 +70,13 @@ async def llm_producer(
             builder.add_section("Problem", config.problem_description, priority=10)
             builder.add_section("Signature", f"```python\n{config.function_signature}\n```", priority=20)
             builder.add_parents([ProgramWithScore(p, None) for p in parents], priority=30)
-            builder.set_output_mode(output_mode)
+
+            # Check for optimized mutation instructions for this model
+            mutation_overrides = config.prompt_overrides.get("mutation", {})
+            if model in mutation_overrides:
+                builder.set_custom_output(mutation_overrides[model])
+            else:
+                builder.set_output_mode(output_mode)
 
             if state.current_meta_advice and random.random() < 0.8:
                 builder.add_section("Meta-Advice", state.current_meta_advice, priority=100)

@@ -19,10 +19,11 @@ PRISM_AST_FEATURES = ['loop_nesting_max', 'branch_count', 'comparison_count', 's
 PRISM_SCORE_KEYS = []  # Use only AST features for behavioral diversity
 
 # --- Config ---
-# Light models: local Qwen 30B + OpenRouter DeepSeek
+# Light models: OpenRouter MiMo-V2-Flash + DeepSeek + Local Qwen 30B
 LIGHT_MODELS = [
-    "Qwen/Qwen3-30B-A3B-Instruct-2507",  # Local TPU (use load balancer on port 8001)
+    "openrouter/xiaomi/mimo-v2-flash",
     "openrouter/deepseek/deepseek-v3.2",
+    "Qwen/Qwen3-30B-A3B-Instruct-2507",
 ]
 PARADIGM_SHIFT_MODEL = "openrouter/google/gemini-3-flash-preview"
 
@@ -33,9 +34,12 @@ LOCAL_ENDPOINTS = {
 
 # Model info for token cost tracking (same format as litellm.register_model)
 MODEL_INFO = {
-    "Qwen/Qwen3-30B-A3B-Instruct-2507": {
-        "input_cost_per_token": 0.0000001,
-        "output_cost_per_token": 0.0000004,
+    "xiaomi/mimo-v2-flash": {
+        "max_tokens": 16384,
+        "max_input_tokens": 262144,
+        "max_output_tokens": 16384,
+        "input_cost_per_token": 0.00000009,   # $0.09/M input
+        "output_cost_per_token": 0.00000029,  # $0.29/M output
     },
     "deepseek/deepseek-v3.2": {
         "max_tokens": 16384,
@@ -43,6 +47,10 @@ MODEL_INFO = {
         "max_output_tokens": 16384,
         "input_cost_per_token": 0.00000025,   # $0.25/M input
         "output_cost_per_token": 0.00000038,  # $0.38/M output
+    },
+    "Qwen/Qwen3-30B-A3B-Instruct-2507": {
+        "input_cost_per_token": 0.0000001,
+        "output_cost_per_token": 0.0000004,
     },
     "google/gemini-3-flash-preview": {
         "max_tokens": 65536,
@@ -63,7 +71,7 @@ config = AlgoforgeConfig(
     score_fn=score_fn,
     budget=BudgetConfig(dollars=5),
     sampler_model_pairs=[
-        # Qwen 30B (local)
+        # MiMo-V2-Flash (OpenRouter)
         SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[0], weight=1.0, temperature=0.3),
         SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[0], weight=1.0, temperature=0.7),
         SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[0], weight=1.0, temperature=1.0),
@@ -73,6 +81,11 @@ config = AlgoforgeConfig(
         SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[1], weight=1.0, temperature=0.7),
         SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[1], weight=1.0, temperature=1.0),
         SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[1], weight=1.0, temperature=1.2),
+        # Qwen 30B (Local TPU)
+        SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[2], weight=1.0, temperature=0.3),
+        SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[2], weight=1.0, temperature=0.7),
+        SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[2], weight=1.0, temperature=1.0),
+        SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[2], weight=1.0, temperature=1.2),
     ],
     cvt=CVTConfig(n_centroids=40, defer_centroids=True, predefined_centroids_file="/home/ttanveer/algoforge/examples/prism/centroids.json"),
     init=InitConfig(

@@ -1,0 +1,7 @@
+{
+  "mutation": {},
+  "paradigm_shift": "You are an expert Principal Software Engineer and Algorithmic Strategist specializing in discrete optimization and high-concurrency systems. Your goal is to break through performance plateaus by engineering a novel Python solution that outperforms all existing methods.\n\nReview the `problem_description` and `function_signature` carefully. Then, analyze the `representative_solutions`, which demonstrate the algorithmic paradigms (such as Greedy, Dynamic Programming, or Graph-based approaches) explored thus far. \n\nYour task is to:\n1. Identify the architectural or algorithmic patterns used in the existing solutions.\n2. Deliberately pivot to a different, high-performance computational paradigm (e.g., if existing solutions use global locking, attempt fine-grained lock contention management or conflict graph coloring).\n3. Implement a complete, syntactically correct Python solution that optimizes for execution speed and transaction makespan reduction.\n4. Ensure the solution adheres strictly to the `function_signature` and surpasses the `best_score` by exploiting unexplored optimization regions.\n\nFocus on sophisticated data structures and efficient resource scheduling to ensure both correctness and maximum concurrency.",
+  "metadata": {
+    "timestamp": "2026-01-24T11:12:41.630204"
+  }
+}

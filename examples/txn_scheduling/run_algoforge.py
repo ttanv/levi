@@ -3,60 +3,63 @@
 
 from datetime import datetime
 
-import litellm
-litellm.register_model({
-    "openrouter/google/gemini-2.5-flash-lite": {
-        "max_tokens": 32768,
-        "max_input_tokens": 1048576,
-        "max_output_tokens": 32768,
-        "input_cost_per_token": 0.0000001,
-        "output_cost_per_token": 0.0000004,
-        "litellm_provider": "openrouter",
-    },
-    "openrouter/google/gemini-2.5-flash": {
-        "max_tokens": 65536,
-        "max_input_tokens": 1048576,
-        "max_output_tokens": 65536,
-        "input_cost_per_token": 0.0000003,
-        "output_cost_per_token": 0.0000025,
-        "litellm_provider": "openrouter",
-    },
-    "openrouter/deepseek/deepseek-v3.2": {
-        "max_tokens": 163840,
-        "max_input_tokens": 163840,
-        "max_output_tokens": 163840,
-        "input_cost_per_token": 0.00000026,
-        "output_cost_per_token": 0.00000038,
-        "litellm_provider": "openrouter",
-    },
-    "openrouter/qwen/qwen3-coder-30b-a3b-instruct": {
-        "max_tokens": 32768,
-        "max_input_tokens": 160000,
-        "max_output_tokens": 32768,
-        "input_cost_per_token": 0.00000007,
-        "output_cost_per_token": 0.00000027,
-        "litellm_provider": "openrouter",
-    },
-})
-
 from problem import PROBLEM_DESCRIPTION, FUNCTION_SIGNATURE, SEED_PROGRAM, INPUTS, score_fn
 from algoforge import (
     run, AlgoforgeConfig, BudgetConfig, SamplerModelPair,
     InitConfig, MetaAdviceConfig, PipelineConfig, CVTConfig, BehaviorConfig
 )
-from algoforge.config.models import PunctuatedEquilibriumConfig
+from algoforge.config.models import PunctuatedEquilibriumConfig, LLMProviderConfig
 
-# Behavioral dimensions: 3 code structure + 1 performance profile = 4 total
-TXN_AST_FEATURES = ['loop_nesting_max', 'cyclomatic_complexity', 'math_operators']
-TXN_SCORE_KEYS = ['makespan']
+# Behavioral dimensions: AST features that distinguish algorithmic approaches
+# - loop_nesting_max: O(n) greedy vs O(n²) pairwise vs O(n³) exhaustive search
+# - comparison_count: Conflict checking intensity, cost comparisons
+# - call_count: How often get_opt_seq_cost is called (expensive evaluation)
+# - branch_count: Conditional/heuristic complexity, pruning logic
+TXN_AST_FEATURES = ['loop_nesting_max', 'comparison_count', 'call_count', 'branch_count']
+TXN_SCORE_KEYS = []  # Use only AST features for behavioral diversity
 
 # --- Config ---
+# Light models: OpenRouter MiMo-V2-Flash + DeepSeek + Local Qwen 30B
 LIGHT_MODELS = [
-    "openrouter/qwen/qwen3-coder-30b-a3b-instruct",
-    "openrouter/google/gemini-2.5-flash-lite",
+    "openrouter/xiaomi/mimo-v2-flash",
     "openrouter/deepseek/deepseek-v3.2",
+    "Qwen/Qwen3-30B-A3B-Instruct-2507",
 ]
-HEAVY_MODEL = "openrouter/google/gemini-2.5-flash"
+PARADIGM_SHIFT_MODEL = "openrouter/google/gemini-3-flash-preview"
+
+# Model -> API base URL mapping for local TPU endpoints
+LOCAL_ENDPOINTS = {
+    "Qwen/Qwen3-30B-A3B-Instruct-2507": "http://localhost:8001/v1",
+}
+
+# Model info for token cost tracking (same format as litellm.register_model)
+MODEL_INFO = {
+    "xiaomi/mimo-v2-flash": {
+        "max_tokens": 16384,
+        "max_input_tokens": 262144,
+        "max_output_tokens": 16384,
+        "input_cost_per_token": 0.00000009,   # $0.09/M input
+        "output_cost_per_token": 0.00000029,  # $0.29/M output
+    },
+    "deepseek/deepseek-v3.2": {
+        "max_tokens": 16384,
+        "max_input_tokens": 163840,
+        "max_output_tokens": 16384,
+        "input_cost_per_token": 0.00000025,   # $0.25/M input
+        "output_cost_per_token": 0.00000038,  # $0.38/M output
+    },
+    "Qwen/Qwen3-30B-A3B-Instruct-2507": {
+        "input_cost_per_token": 0.0000001,
+        "output_cost_per_token": 0.0000004,
+    },
+    "google/gemini-3-flash-preview": {
+        "max_tokens": 65536,
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 65536,
+        "input_cost_per_token": 0.0000005,    # $0.50/M input
+        "output_cost_per_token": 0.000003,    # $3/M output
+    },
+}
 
 RUN_DIR = f"runs/{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
@@ -66,34 +69,52 @@ config = AlgoforgeConfig(
     seed_program=SEED_PROGRAM,
     inputs=INPUTS,
     score_fn=score_fn,
-    budget=BudgetConfig(dollars=3.0),
+    budget=BudgetConfig(dollars=5),
     sampler_model_pairs=[
+        # MiMo-V2-Flash (OpenRouter)
+        SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[0], weight=1.0, temperature=0.3),
         SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[0], weight=1.0, temperature=0.7),
-        SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[1], weight=1.0, temperature=0.7),
-        SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[2], weight=1.0, temperature=0.3),
+        SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[0], weight=1.0, temperature=1.0),
         SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[0], weight=1.0, temperature=1.2),
+        # DeepSeek (OpenRouter)
+        SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[1], weight=1.0, temperature=0.3),
+        SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[1], weight=1.0, temperature=0.7),
+        SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[1], weight=1.0, temperature=1.0),
+        SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[1], weight=1.0, temperature=1.2),
+        # Qwen 30B (Local TPU)
+        SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[2], weight=1.0, temperature=0.3),
+        SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[2], weight=1.0, temperature=0.7),
+        SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[2], weight=1.0, temperature=1.0),
+        SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[2], weight=1.0, temperature=1.2),
     ],
-    cvt=CVTConfig(n_centroids=40, defer_centroids=True),
+    cvt=CVTConfig(n_centroids=40, defer_centroids=True, predefined_centroids_file="/home/ttanveer/algoforge/examples/txn_scheduling/centroids.json"),
     init=InitConfig(
-        n_diverse_seeds=5,
-        n_variants_per_seed=40,
-        diversity_model=HEAVY_MODEL,
+        enabled=True,
+        n_diverse_seeds=3,
+        n_variants_per_seed=5,
+        diversity_model=PARADIGM_SHIFT_MODEL,
         variant_models=LIGHT_MODELS,
+        temperature=0.8,
     ),
-    meta_advice=MetaAdviceConfig(interval=50, model=HEAVY_MODEL),
-    pipeline=PipelineConfig(n_llm_workers=8, n_eval_processes=8, n_inspirations=1),
-    behavior=BehaviorConfig(ast_features=TXN_AST_FEATURES, score_keys=TXN_SCORE_KEYS),
+    meta_advice=MetaAdviceConfig(enabled=False, interval=50, model=PARADIGM_SHIFT_MODEL),
+    pipeline=PipelineConfig(n_llm_workers=8, n_eval_processes=8, n_inspirations=1, output_mode="full"),
+    behavior=BehaviorConfig(ast_features=TXN_AST_FEATURES, score_keys=TXN_SCORE_KEYS, init_noise=0.0),
     punctuated_equilibrium=PunctuatedEquilibriumConfig(
         enabled=True,
-        interval=5,
+        interval=10,
         n_clusters=3,
-        n_variants=0,
-        heavy_model="openrouter/google/gemini-3-flash-preview",
+        n_variants=3,
+        heavy_model=PARADIGM_SHIFT_MODEL,
         variant_models=LIGHT_MODELS,
-        behavior_noise=0.3,
-        temperature=1.0,
+        behavior_noise=0.0,
+        temperature=0.7,
+        reasoning_effort="disabled",
     ),
     output_dir=RUN_DIR,
+    llm=LLMProviderConfig(
+        local_endpoints=LOCAL_ENDPOINTS,
+        model_info=MODEL_INFO,
+    ),
 )
 
 # --- Run ---

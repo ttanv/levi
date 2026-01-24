@@ -53,6 +53,7 @@ class PromptBuilder:
     def __init__(self) -> None:
         self._sections: list[PromptSection] = []
         self._output_mode: OutputMode = OutputMode.FULL
+        self._custom_output: Optional[str] = None
 
     def add_section(self, name: str, content: str, priority: int = 50) -> 'PromptBuilder':
         """Add a custom section to the prompt."""
@@ -81,6 +82,11 @@ class PromptBuilder:
         self._output_mode = mode
         return self
 
+    def set_custom_output(self, instructions: str) -> 'PromptBuilder':
+        """Set custom output instructions (replaces default output mode)."""
+        self._custom_output = instructions
+        return self
+
     def build(self) -> str:
         """Build the final prompt string."""
         sorted_sections = sorted(self._sections, key=lambda s: s.priority)
@@ -89,7 +95,11 @@ class PromptBuilder:
         for section in sorted_sections:
             parts.append(f"## {section.name}\n{section.content}")
 
-        parts.append(f"## Output\n{self._output_instructions()}")
+        # Use custom output if set, otherwise use output mode instructions
+        if self._custom_output:
+            parts.append(f"## Output\n{self._custom_output}")
+        else:
+            parts.append(f"## Output\n{self._output_instructions()}")
 
         return "\n\n".join(parts)
 

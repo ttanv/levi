@@ -19,31 +19,30 @@ Below are the best-performing solutions from each region:
 
 ## Your Challenge: PARADIGM SHIFT
 
-Generate a **fundamentally different algorithmic approach**.
+Analyze the representative solutions above and identify their core algorithmic paradigms.
+
+Your goal is to engineer a **fundamentally different algorithmic approach** that explores untapped regions of the solution space.
+
+### Analysis Steps:
+1. **Identify current paradigms**: What algorithmic strategies do the existing solutions use? (e.g., greedy, graph-based, dynamic programming, heuristic search, brute-force with pruning, etc.)
+2. **Find the gap**: What paradigms are NOT represented in the current solutions?
+3. **Design a novel approach**: Synthesize a solution using a completely different conceptual framework and data structure strategy than those found in the examples
 
 ### Instructions:
 1. Study the function signature carefully - match it EXACTLY
-2. Identify what approaches the existing solutions use
+2. Actively avoid the core logic, heuristics, and search patterns used in the existing solutions
 3. Design a solution using a COMPLETELY DIFFERENT strategy
 
 ### Critical Requirements:
 - Your function signature MUST match exactly: `{function_signature}`
-- Use only standard Python libraries (numpy, collections, itertools, math, etc.) and torch
+- Use only standard Python libraries (numpy, collections, itertools, math, heapq, functools, etc.) and torch if needed
 - The code must be syntactically valid and complete
 - Include ALL necessary imports at the top
-- Do NOT use placeholders or incomplete code
-
-### EPLB-Specific Constraints (MUST follow exactly):
-- **Input**: weight tensor is [num_layers, 64] where 64 is num_logical_experts
-- **Output 1**: physical_to_logical_map must be [num_layers, 288] with values in range [0, 63]
-- **Output 2**: logical_to_physical_map must be [num_layers, 64, X] with physical slot indices or -1 for padding
-- **Output 3**: expert_count must be [num_layers, 64] with expert_count.sum(dim=1) == 288 for ALL layers
-- **NO zeros in expert_count**: Every logical expert (0-63) MUST have at least 1 replica
-- **Index bounds**: logical expert indices are 0-63, physical slot indices are 0-287
-- **Dtype**: ALL output tensors must be torch.int64
+- Do NOT use placeholders, ellipses (...), or incomplete code
+- Ensure the solution handles all edge cases
 
 ## Output
-Output ONLY complete, runnable Python code in a ```python block. No explanations.
+Output ONLY complete, runnable Python code in a ```python block. No explanations before or after.
 """
 
 

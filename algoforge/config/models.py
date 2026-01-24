@@ -143,6 +143,10 @@ class AlgoforgeConfig(BaseModel):
     # LLM provider configuration (new way)
     llm: LLMProviderConfig = Field(default_factory=LLMProviderConfig)
 
+    # Prompt overrides from DSPy optimization
+    # Structure: {"mutation": {model: instructions}, "paradigm_shift": instructions}
+    prompt_overrides: dict[str, Any] = Field(default_factory=dict)
+
     # Deprecated: kept for backward compatibility, migrated to llm.local_endpoints
     api_bases: dict[str, str] = Field(default_factory=dict)
 
