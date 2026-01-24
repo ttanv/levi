@@ -156,6 +156,30 @@ class PunctuatedEquilibrium:
 
         representative_solutions = "\n\n".join(rep_text_parts)
 
+        # Check for optimized paradigm shift instructions
+        override = self.config.prompt_overrides.get("paradigm_shift")
+        if override:
+            # Use optimized prompt instead of default template
+            return f"""# Algorithmic Paradigm Shift Challenge
+
+## Problem
+{self.config.problem_description}
+
+## Function Signature
+```python
+{self.config.function_signature}
+```
+
+## Current Best Solutions ({len(representatives)} regions, {n_evaluations} evaluations)
+
+{representative_solutions}
+
+## Your Task
+{override}
+
+Output ONLY complete, runnable Python code in a ```python block.
+"""
+
         return PARADIGM_SHIFT_PROMPT.format(
             problem_description=self.config.problem_description,
             function_signature=self.config.function_signature,
