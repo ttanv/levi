@@ -396,7 +396,7 @@ class MultiIslandPERunner:
         for i, score, code in island_bests:
             if code:
                 island_solutions.append(
-                    f"### Island {i} (Score: {score:.1f})\n```python\n{code}\n```"
+                    f"### Region {i+1} (Island {i}, Score: {score:.1f})\n```python\n{code}\n```"
                 )
 
         if len(island_solutions) < 2:
@@ -410,8 +410,8 @@ class MultiIslandPERunner:
             optimized_instruction = self.config.prompt_overrides.get("paradigm_shift")
 
         if optimized_instruction:
-            # Use optimized prompt structure
-            prompt = f"""# Cross-Island Paradigm Shift
+            # Use optimized prompt structure (matching equilibrium.py format)
+            prompt = f"""# Algorithmic Paradigm Shift Challenge
 
 ## Problem
 {self.config.problem_description}
@@ -421,16 +421,13 @@ class MultiIslandPERunner:
 {self.config.function_signature}
 ```
 
-## Instructions
-{optimized_instruction}
-
-## Current Best Solutions from Each Island
-
-{self.n_islands} islands have been evolving independently. Below are the best solutions from each:
+## Current Best Solutions ({self.n_islands} regions, {self.state.eval_count} evaluations)
 
 {chr(10).join(island_solutions)}
 
-## Output
+## Your Task
+{optimized_instruction}
+
 Output ONLY complete, runnable Python code in a ```python block.
 """
         else:
