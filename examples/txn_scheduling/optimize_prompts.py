@@ -211,11 +211,23 @@ class MutationSignature(dspy.Signature):
 
 
 class ParadigmShiftSignature(dspy.Signature):
-    """Generate a high-scoring algorithmic solution using a different approach.
+    """Generate a high-scoring algorithmic solution using a fundamentally new approach.
 
     You are given representative solutions from different behavioral regions.
-    Create a solution that achieves a high execution score while using a
-    different algorithmic strategy. Focus on correctness and performance.
+    First, carefully analyze each existing solution to understand:
+    1. What algorithmic strategy it uses
+    2. Why it achieves its current score
+    3. Where it falls short or what limitations it has
+
+    Then, synthesize these insights to propose a NEW solution that:
+    - Learns from the strengths of existing approaches
+    - Addresses the weaknesses and limitations you identified
+    - Uses a fundamentally different algorithmic paradigm
+    - Achieves a higher score by combining insights in a novel way
+
+    Do not simply tweak or combine existing solutions. Propose a genuinely new
+    approach that transcends the limitations of current solutions while
+    incorporating the lessons learned from analyzing them.
     """
 
     problem_description: str = dspy.InputField(desc="The optimization problem description")
@@ -401,7 +413,7 @@ def paradigm_shift_metric(
 # --- Training Data Generation ---
 INSPIRATION_PROGRAM_1 = '''import random
 
-def get_best_schedule(workload, num_seqs):
+def get_best_schedule(workload):
     """Conflict-aware greedy scheduling."""
     random.seed(42)
     n = workload.num_txns
@@ -428,7 +440,7 @@ def get_best_schedule(workload, num_seqs):
 INSPIRATION_PROGRAM_2 = '''import random
 import heapq
 
-def get_best_schedule(workload, num_seqs):
+def get_best_schedule(workload):
     """Priority queue scheduling by transaction length."""
     random.seed(42)
     n = workload.num_txns

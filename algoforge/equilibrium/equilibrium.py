@@ -303,6 +303,13 @@ Output ONLY complete, runnable Python code in a ```python block.
 
         stats["paradigm_generated"] = True
 
+        # Print paradigm shift code
+        print("\n" + "="*60)
+        print("[PE] PARADIGM SHIFT CODE:")
+        print("="*60)
+        print(paradigm_code)
+        print("="*60 + "\n")
+
         # Step 4: Evaluate paradigm shift solution
         try:
             result = await self._evaluate(paradigm_code)
