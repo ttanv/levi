@@ -1,0 +1,2128 @@
+{
+  "metadata": {
+    "archive_size": 22,
+    "n_centroids": 50,
+    "best_score": 55.75075738858339,
+    "generation": 0,
+    "feature_names": [
+      "loop_nesting_max",
+      "cyclomatic_complexity",
+      "math_operators",
+      "execution_time",
+      "workload_main",
+      "workload_8",
+      "workload_9"
+    ],
+    "learned_bounds": {
+      "loop_nesting_max": {
+        "min": 0.0,
+        "max": 1.0
+      },
+      "cyclomatic_complexity": {
+        "min": 0.0,
+        "max": 1.0
+      },
+      "math_operators": {
+        "min": 0.0,
+        "max": 1.0
+      },
+      "execution_time": {
+        "min": 0.0,
+        "max": 1.0
+      },
+      "workload_main": {
+        "min": 0.0,
+        "max": 1.0
+      },
+      "workload_8": {
+        "min": 0.0,
+        "max": 1.0
+      },
+      "workload_9": {
+        "min": 0.0,
+        "max": 1.0
+      }
+    }
+  },
+  "elites": [
+    {
+      "cell_index": 13,
+      "program_id": "2dfc089e-a03d-4393-88bf-9d3c41393bdf",
+      "code": "import torch\n\ndef rebalance_experts(\n    weight: torch.Tensor,\n    num_replicas: int,\n    num_groups: int,\n    num_nodes: int,\n    num_gpus: int,\n) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:\n    '''\n    Rearrange and replicate logical experts across physical GPU slots.\n\n    Parameters:\n        weight: [layers, num_logical_experts], load statistics\n        num_replicas: 288 (physical experts)\n        num_groups: 8\n        num_nodes: 4\n        num_gpus: 32\n\n    Returns:\n        physical_to_logical_map: [layers, num_replicas]\n        logical_to_physical_map: [layers, num_logical_experts, X]\n        expert_count: [layers, num_logical_experts]\n    '''\n    num_layers, num_logical_experts = weight.shape\n    device = weight.device\n    num_slots_per_gpu = num_replicas // num_gpus\n\n    # Ensure every logical expert has at least one replica initially\n    initial_expert_count = torch.ones(num_layers, num_logical_experts, dtype=torch.int64, device=device)\n    remaining_replicas = num_replicas - num_logical_experts\n\n    # Normalize weights for proportional allocation of remaining replicas\n    total_weight = weight.float().sum(dim=-1, keepdim=True)\n    normalized_weight = weight.float() / (total_weight + 1e-8)\n\n    # Distribute remaining replicas using largest remainder method\n    expected_replicas = normalized_weight * remaining_replicas\n    floor_replicas = torch.floor(expected_replicas).to(torch.int64)\n    remainder = remaining_replicas - floor_replicas.sum(dim=-1)\n\n    # Add one extra replica to experts with largest fractional parts\n    fractional_parts = expected_replicas - floor_replicas.float()\n    for layer in range(num_layers):\n        if remainder[layer] > 0:\n            _, top_indices = torch.topk(fractional_parts[layer], remainder[layer].item(), largest=True)\n            floor_replicas[layer, top_indices] += 1\n\n    expert_count = initial_expert_count + floor_replicas\n    \n    # Enforce load balancing across GPUs by ensuring replicas are spread\n    # across different GPUs to avoid hotspotting\n    # We'll reassign replicas to balance GPU loads after initial count assignment\n    # This is done by reordering the physical_to_logical_map with GPU-aware shuffling\n    \n    # Ensure no expert has zero count (already handled by initial_expert_count)\n    # Ensure total sum is num_replicas\n    assert (expert_count.sum(dim=-1) == num_replicas).all(), f\"Expert count sum mismatch: {expert_count.sum(dim=-1)} vs {num_replicas}\"\n    assert (expert_count > 0).all(), \"Some experts have zero replicas\"\n\n\n    # Create physical_to_logical_map with structured placement\n    physical_to_logical_map = torch.empty(num_layers, num_replicas, dtype=torch.int64, device=device)\n    \n    for layer in range(num_layers):\n        # Build list of logical expert IDs with repetition\n        expert_indices = []\n        for logical_expert_idx in range(num_logical_experts):\n            count = expert_count[layer, logical_expert_idx].item()\n            expert_indices.extend([logical_expert_idx] * count)\n        \n        # Shuffle using deterministic seed per layer to ensure reproducibility\n        # But now, we will ensure replicas are spread across GPUs\n        # We'll assign replicas in a round-robin fashion across GPUs to balance load\n        # First, create a list of physical slots per GPU\n        slots_per_gpu = num_replicas // num_gpus\n        gpu_slots = [list(range(i * slots_per_gpu, (i + 1) * slots_per_gpu)) for i in range(num_gpus)]\n        \n        # Now, assign logical experts in round-robin order across GPUs\n        # to avoid clustering on a few GPUs\n        assigned = [0] * num_gpus  # count of assignments per GPU\n        physical_assignment = [-1] * num_replicas  # final mapping\n        \n        # Sort expert indices by weight descending to place heavy experts first\n        expert_weights = weight[layer].cpu().numpy()\n        sorted_indices = sorted(range(len(expert_indices)), key=lambda i: expert_weights[expert_indices[i]], reverse=True)\n        \n        for idx in sorted_indices:\n            expert_id = expert_indices[idx]\n            # Find the GPU with fewest current assignments\n            gpu_id = assigned.index(min(assigned))\n            # Assign to next available slot in that GPU\n            slot = gpu_slots[gpu_id].pop(0)\n            physical_assignment[slot] = expert_id\n            assigned[gpu_id] += 1\n        \n        physical_to_logical_map[layer] = torch.tensor(physical_assignment, dtype=torch.int64, device=device)\n\n    # Create logical_to_physical_map\n    max_replicas = expert_count.max().item()\n    logical_to_physical_map = torch.full(\n        (num_layers, num_logical_experts, max_replicas),\n        -1,\n        dtype=torch.int64,\n        device=device,\n    )\n\n    for layer in range(num_layers):\n        # Group physical slots by the logical expert they map to\n        assignments = [[] for _ in range(num_logical_experts)]\n        for physical_idx in range(num_replicas):\n            logical_expert_id = physical_to_logical_map[layer, physical_idx].item()\n            assignments[logical_expert_id].append(physical_idx)\n        \n        for logical_expert_id in range(num_logical_experts):\n            for i, physical_idx in enumerate(assignments[logical_expert_id]):\n                logical_to_physical_map[layer, logical_expert_id, i] = physical_idx\n\n    return physical_to_logical_map, logical_to_physical_map, expert_count",
+      "scores": {
+        "score": 55.75075738858339,
+        "balancedness_gpu": 0.6882787552456638,
+        "balancedness_expert": 0.24153574948504952,
+        "avg_time": 0.31132258036417293,
+        "execution_time": 0.31132258036417293,
+        "balancedness_score": 61.94508797210975,
+        "speed_score": 0.03212102375710234,
+        "slow_penalty": 6.226451607283458,
+        "workload_0": 0.6488803674402157,
+        "workload_8": 0.4594697658069299,
+        "workload_9": 0.6353777281541125,
+        "workload_main": 0.7399987127783201
+      },
+      "primary_score": 55.75075738858339,
+      "behavior": {
+        "loop_nesting_max": 0.7183282531065391,
+        "cyclomatic_complexity": 0.5099468339279994,
+        "math_operators": 0.5179603171515063,
+        "execution_time": 0.5,
+        "workload_main": 0.5,
+        "workload_8": 0.5,
+        "workload_9": 0.5
+      },
+      "metadata": {},
+      "parents": [],
+      "created_at": "2026-01-22T07:17:27.739844"
+    },
+    {
+      "cell_index": 33,
+      "program_id": "0e1b743b-b445-493a-bbbb-fc60331f1830",
+      "code": "import torch\n\ndef rebalance_experts(\n    weight: torch.Tensor,\n    num_replicas: int,\n    num_groups: int,\n    num_nodes: int,\n    num_gpus: int,\n) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:\n    '''\n    Rearrange and replicate logical experts across physical GPU slots.\n\n    Parameters:\n        weight: [layers, num_logical_experts], load statistics\n        num_replicas: 288 (physical experts)\n        num_groups: 8\n        num_nodes: 4\n        num_gpus: 32\n\n    Returns:\n        physical_to_logical_map: [layers, num_replicas]\n        logical_to_physical_map: [layers, num_logical_experts, X]\n        expert_count: [layers, num_logical_experts]\n    '''\n    num_layers, num_logical_experts = weight.shape\n    device = weight.device\n    num_slots_per_gpu = num_replicas // num_gpus\n\n    # Initialize expert_count with at least one replica for each expert\n    expert_count = torch.ones(num_layers, num_logical_experts, dtype=torch.int64, device=device)\n    \n    # Calculate remaining replicas to distribute\n    remaining_replicas_to_distribute = num_replicas - num_logical_experts\n\n    # Normalize weights for proportional distribution\n    # Add a small epsilon to avoid division by zero if all weights are zero for a layer\n    # Cast to float for calculations to maintain precision\n    normalized_weight = weight.float() / (weight.float().sum(dim=-1, keepdim=True) + 1e-9)\n\n    # Distribute remaining replicas using an iterative greedy approach\n    # This approach aims to add replicas one by one to the experts\n    # that currently have the highest \"need\" based on their weight and current replica count.\n    # The \"need\" can be modeled as weight / current_replica_count, similar to how\n    # proportional allocation works but iteratively.\n\n    for _ in range(remaining_replicas_to_distribute):\n        # Calculate the \"cost\" or \"load\" per replica for each expert\n        # An expert with higher weight but fewer replicas will have a higher effective load\n        # This makes it a candidate for an additional replica\n        effective_load_per_replica = normalized_weight / expert_count.float()\n        \n        # Find the expert that needs a replica the most (highest effective load)\n        # Using max(dim=-1) to get the expert index for each layer\n        _, expert_to_add_replica_to = torch.max(effective_load_per_replica, dim=-1)\n        \n        # Add a replica to the chosen expert for each layer\n        expert_count[torch.arange(num_layers, device=device), expert_to_add_replica_to] += 1\n\n    # Ensure expert_count sums to num_replicas for all layers\n    assert (expert_count.sum(dim=-1) == num_replicas).all(), \"Expert count sum mismatch\"\n    assert (expert_count >= 1).all(), \"Some experts have less than one replica\"\n\n    # Create physical_to_logical_map\n    physical_to_logical_map = torch.empty(num_layers, num_replicas, dtype=torch.int64, device=device)\n    \n    for layer in range(num_layers):\n        current_physical_idx = 0\n        expert_indices_for_layer = []\n        for logical_expert_idx in range(num_logical_experts):\n            count = expert_count[layer, logical_expert_idx].item()\n            expert_indices_for_layer.extend([logical_expert_idx] * count)\n        \n        # Shuffle the assignments to distribute experts across physical slots\n        # This helps in balancing load across GPUs\n        perm = torch.randperm(num_replicas, device=device)\n        physical_to_logical_map[layer] = torch.tensor(expert_indices_for_layer, dtype=torch.int64, device=device)[perm]\n\n    # Create logical_to_physical_map\n    max_replicas = expert_count.max().item()\n    logical_to_physical_map = torch.full(\n        (num_layers, num_logical_experts, max_replicas),\n        -1,\n        dtype=torch.int64,\n        device=device,\n    )\n\n    for layer in range(num_layers):\n        # Group physical slots by the logical expert they map to\n        expert_physical_slots = [[] for _ in range(num_logical_experts)]\n        for physical_idx in range(num_replicas):\n            logical_expert_id = physical_to_logical_map[layer, physical_idx].item()\n            expert_physical_slots[logical_expert_id].append(physical_idx)\n        \n        for logical_expert_idx in range(num_logical_experts):\n            for i, physical_idx in enumerate(expert_physical_slots[logical_expert_idx]):\n                if i < max_replicas:\n                    logical_to_physical_map[layer, logical_expert_idx, i] = physical_idx\n\n    return physical_to_logical_map, logical_to_physical_map, expert_count",
+      "scores": {
+        "score": 53.30080744872672,
+        "balancedness_gpu": 0.6559485829932604,
+        "balancedness_expert": 0.2854524728173885,
+        "avg_time": 0.2884615840924777,
+        "execution_time": 0.2884615840924777,
+        "balancedness_score": 59.03537246939344,
+        "speed_score": 0.03466666118284266,
+        "slow_penalty": 5.769231681849554,
+        "workload_0": 0.6444184859110846,
+        "workload_8": 0.45506129290204694,
+        "workload_9": 0.6183340572315543,
+        "workload_main": 0.6978742911536099
+      },
+      "primary_score": 53.30080744872672,
+      "behavior": {
+        "loop_nesting_max": 0.714574069050512,
+        "cyclomatic_complexity": 0.4338746728023148,
+        "math_operators": 0.30908187273574533,
+        "execution_time": 0.5,
+        "workload_main": 0.5,
+        "workload_8": 0.5,
+        "workload_9": 0.5
+      },
+      "metadata": {
+        "source": "punctuated_equilibrium",
+        "pe_type": "paradigm_shift"
+      },
+      "parents": [],
+      "created_at": "2026-01-22T07:03:20.684894"
+    },
+    {
+      "cell_index": 38,
+      "program_id": "31f020e6-94e6-4ffc-9450-20b20a0b343f",
+      "code": "import torch\n\ndef rebalance_experts(\n    weight: torch.Tensor,\n    num_replicas: int,\n    num_groups: int,\n    num_nodes: int,\n    num_gpus: int,\n) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:\n    '''\n    Rearrange and replicate logical experts across physical GPU slots.\n\n    Parameters:\n        weight: [layers, num_logical_experts], load statistics\n        num_replicas: 288 (physical experts)\n        num_groups: 8\n        num_nodes: 4\n        num_gpus: 32\n\n    Returns:\n        physical_to_logical_map: [layers, num_replicas]\n        logical_to_physical_map: [layers, num_logical_experts, X]\n        expert_count: [layers, num_logical_experts]\n    '''\n    num_layers, num_logical_experts = weight.shape\n    device = weight.device\n    num_slots_per_gpu = num_replicas // num_gpus\n\n    # Initialize expert_count with at least one replica for each expert\n    expert_count = torch.ones(num_layers, num_logical_experts, dtype=torch.int64, device=device)\n    \n    # Calculate remaining replicas to distribute\n    remaining_replicas_to_distribute = num_replicas - num_logical_experts\n\n    # Normalize weights for proportional distribution\n    # Add a small epsilon to avoid division by zero if all weights are zero for a layer\n    # Cast to float for calculations to maintain precision\n    weight_float = weight.float()\n    weight_sum = weight_float.sum(dim=-1, keepdim=True) + 1e-9\n    normalized_weight = weight_float / weight_sum\n\n    # Distribute remaining replicas using an iterative greedy approach\n    # This approach aims to add replicas one by one to the experts\n    # that currently have the highest \"need\" based on their weight and current replica count.\n    # The \"need\" can be modeled as weight / current_replica_count, similar to how\n    # proportional allocation works but iteratively.\n\n    for _ in range(remaining_replicas_to_distribute):\n        # Calculate the \"cost\" or \"load\" per replica for each expert\n        # An expert with higher weight but fewer replicas will have a higher effective load\n        # This makes it a candidate for an additional replica\n        effective_load_per_replica = normalized_weight / expert_count.float()\n        \n        # Find the expert that needs a replica the most (highest effective load)\n        # Using max(dim=-1) to get the expert index for each layer\n        _, expert_to_add_replica_to = torch.max(effective_load_per_replica, dim=-1)\n        \n        # Add a replica to the chosen expert for each layer\n        expert_count[torch.arange(num_layers, device=device), expert_to_add_replica_to] += 1\n\n    # Ensure expert_count sums to num_replicas for all layers\n    assert (expert_count.sum(dim=-1) == num_replicas).all(), \"Expert count sum mismatch\"\n    assert (expert_count >= 1).all(), \"Some experts have less than one replica\"\n\n    # Create physical_to_logical_map\n    physical_to_logical_map = torch.empty(num_layers, num_replicas, dtype=torch.int64, device=device)\n    \n    for layer in range(num_layers):\n        current_physical_idx = 0\n        expert_indices_for_layer = []\n        for logical_expert_idx in range(num_logical_experts):\n            count = expert_count[layer, logical_expert_idx].item()\n            expert_indices_for_layer.extend([logical_expert_idx] * count)\n        \n        # Shuffle the assignments to distribute experts across physical slots\n        # This helps in balancing load across GPUs\n        perm = torch.randperm(num_replicas, device=device)\n        physical_to_logical_map[layer] = torch.tensor(expert_indices_for_layer, dtype=torch.int64, device=device)[perm]\n\n    # Create logical_to_physical_map\n    max_replicas = expert_count.max().item()\n    logical_to_physical_map = torch.full(\n        (num_layers, num_logical_experts, max_replicas),\n        -1,\n        dtype=torch.int64,\n        device=device,\n    )\n\n    for layer in range(num_layers):\n        # Group physical slots by the logical expert they map to\n        expert_physical_slots = [[] for _ in range(num_logical_experts)]\n        for physical_idx in range(num_replicas):\n            logical_expert_id = physical_to_logical_map[layer, physical_idx].item()\n            expert_physical_slots[logical_expert_id].append(physical_idx)\n        \n        for logical_expert_idx in range(num_logical_experts):\n            for i, physical_idx in enumerate(expert_physical_slots[logical_expert_idx]):\n                if i < max_replicas:\n                    logical_to_physical_map[layer, logical_expert_idx, i] = physical_idx\n\n    return physical_to_logical_map, logical_to_physical_map, expert_count",
+      "scores": {
+        "score": 53.098180260931194,
+        "balancedness_gpu": 0.6553671913250175,
+        "balancedness_expert": 0.2854524807737364,
+        "avg_time": 0.29593291999878024,
+        "execution_time": 0.29593291999878024,
+        "balancedness_score": 58.983047219251574,
+        "speed_score": 0.03379144165522788,
+        "slow_penalty": 5.918658399975605,
+        "workload_0": 0.6565357540613096,
+        "workload_8": 0.44219237388871435,
+        "workload_9": 0.6083085557021183,
+        "workload_main": 0.6989458481179599
+      },
+      "primary_score": 53.098180260931194,
+      "behavior": {
+        "loop_nesting_max": 0.7187793769001147,
+        "cyclomatic_complexity": 0.45051867344509133,
+        "math_operators": 0.31139831837122833,
+        "execution_time": 0.5,
+        "workload_main": 0.5,
+        "workload_8": 0.5,
+        "workload_9": 0.5
+      },
+      "metadata": {},
+      "parents": [],
+      "created_at": "2026-01-22T07:07:13.319524"
+    },
+    {
+      "cell_index": 30,
+      "program_id": "ea502c89-911d-4f29-b42c-3afe4633859c",
+      "code": "\"\"\"Expert parallelism load balancer for MoE models in distributed inference.\"\"\"\n\nimport torch\n\n\ndef balanced_packing(weight: torch.Tensor,\n                     num_packs: int) -> tuple[torch.Tensor, torch.Tensor]:\n    \"\"\"\n    Pack n weighted objects to m packs, such that each bin contains exactly\n    n/m objects and the weights of all packs are as balanced as possible.\n    \"\"\"\n    num_layers, num_groups = weight.shape\n    assert num_groups % num_packs == 0\n    groups_per_pack = num_groups // num_packs\n\n    if groups_per_pack == 1:\n        pack_index = torch.arange(weight.size(-1),\n                                  dtype=torch.int64,\n                                  device=weight.device).expand(weight.shape)\n        rank_in_pack = torch.zeros_like(weight, dtype=torch.int64)\n        return pack_index, rank_in_pack\n\n    # Use a heap-based approach for better performance\n    indices = weight.float().sort(-1, descending=True).indices\n    pack_index = torch.full_like(weight,\n                                 fill_value=-1,\n                                 dtype=torch.int64,\n                                 device=weight.device)\n    rank_in_pack = torch.full_like(pack_index, fill_value=-1)\n\n    for i in range(num_layers):\n        # Use a min-heap to track the current load of each pack\n        heap = [(0.0, p) for p in range(num_packs)]\n        import heapq\n        heapq.heapify(heap)\n        pack_items = [0] * num_packs\n\n        for group in indices[i]:\n            # Get the pack with minimum current weight\n            current_weight, pack = heapq.heappop(heap)\n            pack_index[i, group] = pack\n            rank_in_pack[i, group] = pack_items[pack]\n            new_weight = current_weight + weight[i, group].item()\n            pack_items[pack] += 1\n            if pack_items[pack] < groups_per_pack:\n                heapq.heappush(heap, (new_weight, pack))\n\n    return pack_index, rank_in_pack\n\n\ndef replicate_experts(\n        weight: torch.Tensor,\n        num_phy: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:\n    \"\"\"\n    Replicate `num_log` experts to `num_phy` replicas, such that the maximum\n    load of all replicas is minimized.\n    \"\"\"\n    n, num_log = weight.shape\n    num_redundant = num_phy - num_log\n    assert num_redundant >= 0\n    device = weight.device\n    phy2log = torch.arange(num_phy, dtype=torch.int64,\n                           device=device).repeat(n, 1)\n    rank = torch.zeros(n, num_phy, dtype=torch.int64, device=device)\n    logcnt = torch.ones(n, num_log, dtype=torch.int64, device=device)\n    arangen = torch.arange(n, dtype=torch.int64, device=device)\n\n    # Use a heap-based approach for better performance\n    for i in range(num_log, num_phy):\n        # Compute effective load (weight / current count) to prioritize overused experts\n        effective_load = weight / logcnt.clamp(min=1)\n        # Use argmax for efficiency\n        redundant_indices = effective_load.max(dim=-1).indices\n        phy2log[:, i] = redundant_indices\n        rank[:, i] = logcnt[arangen, redundant_indices]\n        logcnt[arangen, redundant_indices] += 1\n\n    return phy2log, rank, logcnt\n\n\ndef rebalance_experts_hierarchical(\n    weight: torch.Tensor,\n    num_physical_experts: int,\n    num_groups: int,\n    num_nodes: int,\n    num_gpus: int,\n):\n    \"\"\"Hierarchical load balancing: nodes -> GPUs -> experts.\"\"\"\n    num_layers, num_logical_experts = weight.shape\n    assert num_logical_experts % num_groups == 0\n    group_size = num_logical_experts // num_groups\n    assert num_groups % num_nodes == 0\n    groups_per_node = num_groups // num_nodes\n    assert num_gpus % num_nodes == 0\n    assert num_physical_experts % num_gpus == 0\n    phy_experts_per_gpu = num_physical_experts // num_gpus\n\n    def inverse(perm: torch.Tensor) -> torch.Tensor:\n        inv = torch.empty_like(perm)\n        inv.scatter_(\n            1,\n            perm,\n            torch.arange(perm.size(1), dtype=torch.int64,\n                         device=perm.device).expand(perm.shape),\n        )\n        return inv\n\n    # Step 1: pack groups to nodes\n    tokens_per_group = weight.unflatten(-1, (num_groups, group_size)).sum(-1)\n    group_pack_index, group_rank_in_pack = balanced_packing(\n        tokens_per_group, num_nodes)\n    log2mlog = (((group_pack_index * groups_per_node + group_rank_in_pack) *\n                 group_size).unsqueeze(-1) +\n                torch.arange(group_size,\n                             dtype=torch.int64,\n                             device=group_pack_index.device)).flatten(-2)\n    mlog2log = inverse(log2mlog)\n\n    # Step 2: construct redundant experts within nodes\n    tokens_per_mlog = weight.gather(-1, mlog2log).view(\n        -1, num_logical_experts // num_nodes)\n    phy2mlog, phyrank, mlogcnt = replicate_experts(\n        tokens_per_mlog, num_physical_experts // num_nodes)\n\n    # Step 3: pack physical_experts to GPUs\n    # Compute effective load per physical expert (weight / count)\n    effective_load = (tokens_per_mlog / mlogcnt.clamp(min=1)).gather(-1, phy2mlog)\n    pack_index, rank_in_pack = balanced_packing(effective_load,\n                                                num_gpus // num_nodes)\n    phy2pphy = pack_index * phy_experts_per_gpu + rank_in_pack\n    pphy2phy = inverse(phy2pphy)\n\n    # Map back to original logical experts\n    pphy2mlog = phy2mlog.gather(-1, pphy2phy)\n    base_offset = torch.arange(0,\n                               num_logical_experts,\n                               num_logical_experts // num_nodes,\n                               dtype=torch.int64,\n                               device=group_pack_index.device).view(1, -1, 1)\n    pphy2mlog = (pphy2mlog.view(num_layers, num_nodes, -1) + base_offset).flatten(-2)\n    pphy2log = mlog2log.gather(-1, pphy2mlog)\n    pphyrank = phyrank.gather(-1, pphy2phy).view(num_layers, -1)\n    logcnt = mlogcnt.view(num_layers, -1).gather(-1, log2mlog)\n    return pphy2log, pphyrank, logcnt\n\n\ndef rebalance_experts(\n    weight: torch.Tensor,\n    num_replicas: int,\n    num_groups: int,\n    num_nodes: int,\n    num_gpus: int,\n) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:\n    \"\"\"\n    Entry point for expert-parallelism load balancer.\n    \"\"\"\n    num_layers, num_logical_experts = weight.shape\n    # Ensure device consistency\n    device = weight.device\n    weight = weight.float().to(device)\n    if num_groups % num_nodes == 0:\n        phy2log, phyrank, logcnt = rebalance_experts_hierarchical(\n            weight, num_replicas, num_groups, num_nodes, num_gpus)\n    else:\n        # Fallback: treat all groups as one\n        phy2log, phyrank, logcnt = rebalance_experts_hierarchical(\n            weight, num_replicas, 1, 1, num_gpus)\n\n    # Build logical_to_physical_map\n    num_redundant_experts = num_replicas - num_logical_experts\n    maxlogcnt = num_redundant_experts + 1\n    log2phy = torch.full(\n        (num_layers, num_logical_experts, maxlogcnt),\n        -1,\n        dtype=torch.int64,\n        device=device,\n    )\n    # Scatter physical slot indices into logical expert slots\n    indices = phy2log * maxlogcnt + phyrank\n    log2phy.view(num_layers, -1).scatter_(\n        -1,\n        indices,\n        torch.arange(num_replicas, dtype=torch.int64, device=device).expand(num_layers, -1),\n    )\n\n    # Ensure expert_count is correct\n    expert_count = logcnt\n    assert (expert_count.sum(dim=-1) == num_replicas).all()\n\n    return phy2log, log2phy, expert_count\n",
+      "scores": {
+        "score": 52.906480976386206,
+        "balancedness_gpu": 0.6633429393192228,
+        "balancedness_expert": 0.2505991103047041,
+        "avg_time": 0.34118466018117033,
+        "execution_time": 0.34118466018117033,
+        "balancedness_score": 59.70086453873005,
+        "speed_score": 0.029309641279563866,
+        "slow_penalty": 6.823693203623407,
+        "workload_0": 0.6003613508851514,
+        "workload_8": 0.39648114027593734,
+        "workload_9": 0.6296299106870406,
+        "workload_main": 0.7221105869614692
+      },
+      "primary_score": 52.906480976386206,
+      "behavior": {
+        "loop_nesting_max": 0.38017007192695484,
+        "cyclomatic_complexity": 0.38794459029892986,
+        "math_operators": 0.9033604402874504,
+        "execution_time": 0.5,
+        "workload_main": 0.5,
+        "workload_8": 0.5,
+        "workload_9": 0.5
+      },
+      "metadata": {},
+      "parents": [],
+      "created_at": "2026-01-22T07:11:04.176763"
+    },
+    {
+      "cell_index": 26,
+      "program_id": "e37112a0-4b90-4725-8b6f-666b32578af3",
+      "code": "\"\"\"Expert parallelism load balancer for MoE models in distributed inference.\"\"\"\n\nimport torch\n\n\ndef balanced_packing(weight: torch.Tensor,\n                     num_packs: int) -> tuple[torch.Tensor, torch.Tensor]:\n    \"\"\"\n    Pack n weighted objects to m packs, such that each bin contains exactly\n    n/m objects and the weights of all packs are as balanced as possible.\n    \"\"\"\n    num_layers, num_groups = weight.shape\n    assert num_groups % num_packs == 0\n    groups_per_pack = num_groups // num_packs\n\n    if groups_per_pack == 1:\n        pack_index = torch.arange(weight.size(-1),\n                                  dtype=torch.int64,\n                                  device=weight.device).expand(weight.shape)\n        rank_in_pack = torch.zeros_like(weight, dtype=torch.int64)\n        return pack_index, rank_in_pack\n\n    # Use a heap-based approach for better performance\n    indices = weight.float().sort(-1, descending=True).indices\n    pack_index = torch.full_like(weight,\n                                 fill_value=-1,\n                                 dtype=torch.int64,\n                                 device=weight.device)\n    rank_in_pack = torch.full_like(pack_index, fill_value=-1)\n\n    for i in range(num_layers):\n        # Use a min-heap to track the current load of each pack\n        import heapq\n        heap = [(0.0, p) for p in range(num_packs)]\n        heapq.heapify(heap)\n        pack_items = [0] * num_packs\n\n        for group in indices[i]:\n            # Get the pack with minimum current weight\n            current_weight, pack = heapq.heappop(heap)\n            pack_index[i, group] = pack\n            rank_in_pack[i, group] = pack_items[pack]\n            new_weight = current_weight + weight[i, group].item()\n            pack_items[pack] += 1\n            if pack_items[pack] < groups_per_pack:\n                heapq.heappush(heap, (new_weight, pack))\n\n    return pack_index, rank_in_pack\n\n\ndef replicate_experts(\n        weight: torch.Tensor,\n        num_phy: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:\n    \"\"\"\n    Replicate `num_log` experts to `num_phy` replicas, such that the maximum\n    load of all replicas is minimized.\n    \"\"\"\n    n, num_log = weight.shape\n    num_redundant = num_phy - num_log\n    assert num_redundant >= 0\n    device = weight.device\n    phy2log = torch.arange(num_phy, dtype=torch.int64,\n                           device=device).repeat(n, 1)\n    rank = torch.zeros(n, num_phy, dtype=torch.int64, device=device)\n    logcnt = torch.ones(n, num_log, dtype=torch.int64, device=device)\n    arangen = torch.arange(n, dtype=torch.int64, device=device)\n\n    # Use a heap-based approach for better performance\n    for i in range(num_log, num_phy):\n        # Compute effective load (weight / current count) to prioritize overused experts\n        effective_load = weight / logcnt.clamp(min=1)\n        # Use argmax for efficiency\n        redundant_indices = effective_load.max(dim=-1).indices\n        phy2log[:, i] = redundant_indices\n        rank[:, i] = logcnt[arangen, redundant_indices]\n        logcnt[arangen, redundant_indices] += 1\n\n    return phy2log, rank, logcnt\n\n\ndef rebalance_experts_hierarchical(\n    weight: torch.Tensor,\n    num_physical_experts: int,\n    num_groups: int,\n    num_nodes: int,\n    num_gpus: int,\n):\n    \"\"\"Hierarchical load balancing: nodes -> GPUs -> experts.\"\"\"\n    num_layers, num_logical_experts = weight.shape\n    assert num_logical_experts % num_groups == 0\n    group_size = num_logical_experts // num_groups\n    assert num_groups % num_nodes == 0\n    groups_per_node = num_groups // num_nodes\n    assert num_gpus % num_nodes == 0\n    assert num_physical_experts % num_gpus == 0\n    phy_experts_per_gpu = num_physical_experts // num_gpus\n\n    def inverse(perm: torch.Tensor) -> torch.Tensor:\n        inv = torch.empty_like(perm)\n        inv.scatter_(\n            1,\n            perm,\n            torch.arange(perm.size(1), dtype=torch.int64,\n                         device=perm.device).expand(perm.shape),\n        )\n        return inv\n\n    # Step 1: pack groups to nodes\n    tokens_per_group = weight.unflatten(-1, (num_groups, group_size)).sum(-1)\n    group_pack_index, group_rank_in_pack = balanced_packing(\n        tokens_per_group, num_nodes)\n    log2mlog = (((group_pack_index * groups_per_node + group_rank_in_pack) *\n                 group_size).unsqueeze(-1) +\n                torch.arange(group_size,\n                             dtype=torch.int64,\n                             device=group_pack_index.device)).flatten(-2)\n    mlog2log = inverse(log2mlog)\n\n    # Step 2: construct redundant experts within nodes\n    tokens_per_mlog = weight.gather(-1, mlog2log).view(\n        -1, num_logical_experts // num_nodes)\n    phy2mlog, phyrank, mlogcnt = replicate_experts(\n        tokens_per_mlog, num_physical_experts // num_nodes)\n\n    # Step 3: pack physical_experts to GPUs\n    # Compute effective load per physical expert (weight / count)\n    effective_load = (tokens_per_mlog / mlogcnt.clamp(min=1)).gather(-1, phy2mlog)\n    pack_index, rank_in_pack = balanced_packing(effective_load,\n                                                num_gpus // num_nodes)\n    phy2pphy = pack_index * phy_experts_per_gpu + rank_in_pack\n    pphy2phy = inverse(phy2pphy)\n\n    # Map back to original logical experts\n    pphy2mlog = phy2mlog.gather(-1, pphy2phy)\n    base_offset = torch.arange(0,\n                               num_logical_experts,\n                               num_logical_experts // num_nodes,\n                               dtype=torch.int64,\n                               device=group_pack_index.device).view(1, -1, 1)\n    pphy2mlog = (pphy2mlog.view(num_layers, num_nodes, -1) + base_offset).flatten(-2)\n    pphy2log = mlog2log.gather(-1, pphy2mlog)\n    pphyrank = phyrank.gather(-1, pphy2phy).view(num_layers, -1)\n    logcnt = mlogcnt.view(num_layers, -1).gather(-1, log2mlog)\n    return pphy2log, pphyrank, logcnt\n\n\ndef rebalance_experts(\n    weight: torch.Tensor,\n    num_replicas: int,\n    num_groups: int,\n    num_nodes: int,\n    num_gpus: int,\n) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:\n    \"\"\"\n    Entry point for expert-parallelism load balancer.\n    \"\"\"\n    num_layers, num_logical_experts = weight.shape\n    # Ensure device consistency\n    device = weight.device\n    weight = weight.float().to(device)\n    if num_groups % num_nodes == 0:\n        phy2log, phyrank, logcnt = rebalance_experts_hierarchical(\n            weight, num_replicas, num_groups, num_nodes, num_gpus)\n    else:\n        # Fallback: treat all groups as one\n        phy2log, phyrank, logcnt = rebalance_experts_hierarchical(\n            weight, num_replicas, 1, 1, num_gpus)\n\n    # Build logical_to_physical_map\n    num_redundant_experts = num_replicas - num_logical_experts\n    maxlogcnt = num_redundant_experts + 1\n    log2phy = torch.full(\n        (num_layers, num_logical_experts, maxlogcnt),\n        -1,\n        dtype=torch.int64,\n        device=device,\n    )\n    # Scatter physical slot indices into logical expert slots\n    indices = phy2log * maxlogcnt + phyrank\n    log2phy.view(num_layers, -1).scatter_(\n        -1,\n        indices,\n        torch.arange(num_replicas, dtype=torch.int64, device=device).expand(num_layers, -1),\n    )\n\n    # Ensure expert_count is correct\n    expert_count = logcnt\n    assert (expert_count.sum(dim=-1) == num_replicas).all()\n\n    return phy2log, log2phy, expert_count\n",
+      "scores": {
+        "score": 52.79855246202045,
+        "balancedness_gpu": 0.6633429393192228,
+        "balancedness_expert": 0.2505991103047041,
+        "avg_time": 0.3465583622693719,
+        "execution_time": 0.3465583622693719,
+        "balancedness_score": 59.70086453873005,
+        "speed_score": 0.02885516867784373,
+        "slow_penalty": 6.931167245387439,
+        "workload_0": 0.6003613508851514,
+        "workload_8": 0.39648114027593734,
+        "workload_9": 0.6296299106870406,
+        "workload_main": 0.7221105869614692
+      },
+      "primary_score": 52.79855246202045,
+      "behavior": {
+        "loop_nesting_max": 0.42115692334304244,
+        "cyclomatic_complexity": 0.3859160728820522,
+        "math_operators": 0.8720445431364225,
+        "execution_time": 0.5,
+        "workload_main": 0.5,
+        "workload_8": 0.5,
+        "workload_9": 0.5
+      },
+      "metadata": {},
+      "parents": [],
+      "created_at": "2026-01-22T07:04:34.372470"
+    },
+    {
+      "cell_index": 32,
+      "program_id": "690d61e3-f70c-43c8-b27f-437b55a1947a",
+      "code": "\"\"\"Expert parallelism load balancer for MoE models in distributed inference.\"\"\"\n\nimport torch\n\n\ndef balanced_packing(weight: torch.Tensor,\n                     num_packs: int) -> tuple[torch.Tensor, torch.Tensor]:\n    \"\"\"\n    Pack n weighted objects to m packs, such that each bin contains exactly\n    n/m objects and the weights of all packs are as balanced as possible.\n    \"\"\"\n    num_layers, num_groups = weight.shape\n    assert num_groups % num_packs == 0\n    groups_per_pack = num_groups // num_packs\n\n    if groups_per_pack == 1:\n        pack_index = torch.arange(weight.size(-1),\n                                  dtype=torch.int64,\n                                  device=weight.device).expand(weight.shape)\n        rank_in_pack = torch.zeros_like(weight, dtype=torch.int64)\n        return pack_index, rank_in_pack\n\n    # Use a heap-based approach for better performance\n    indices = weight.float().sort(-1, descending=True).indices\n    pack_index = torch.full_like(weight,\n                                 fill_value=-1,\n                                 dtype=torch.int64,\n                                 device=weight.device)\n    rank_in_pack = torch.full_like(pack_index, fill_value=-1)\n\n    for i in range(num_layers):\n        # Use a min-heap to track the current load of each pack\n        heap = [(0.0, p) for p in range(num_packs)]\n        heap.sort()\n        pack_items = [0] * num_packs\n\n        for group in indices[i]:\n            # Get the pack with minimum current weight\n            current_weight, pack = heap.pop(0)\n            pack_index[i, group] = pack\n            rank_in_pack[i, group] = pack_items[pack]\n            new_weight = current_weight + weight[i, group].item()\n            pack_items[pack] += 1\n            if pack_items[pack] < groups_per_pack:\n                # Insert in sorted order\n                j = 0\n                while j < len(heap) and heap[j][0] < new_weight:\n                    j += 1\n                heap.insert(j, (new_weight, pack))\n\n    return pack_index, rank_in_pack\n\n\ndef replicate_experts(\n        weight: torch.Tensor,\n        num_phy: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:\n    \"\"\"\n    Replicate `num_log` experts to `num_phy` replicas, such that the maximum\n    load of all replicas is minimized.\n    \"\"\"\n    n, num_log = weight.shape\n    num_redundant = num_phy - num_log\n    assert num_redundant >= 0\n    device = weight.device\n    phy2log = torch.arange(num_phy, dtype=torch.int64,\n                           device=device).repeat(n, 1)\n    rank = torch.zeros(n, num_phy, dtype=torch.int64, device=device)\n    logcnt = torch.ones(n, num_log, dtype=torch.int64, device=device)\n    arangen = torch.arange(n, dtype=torch.int64, device=device)\n\n    # Use a heap-based approach for better performance\n    for i in range(num_log, num_phy):\n        # Compute effective load (weight / current count) to prioritize overused experts\n        effective_load = weight / logcnt.clamp(min=1)\n        # Use argmax for efficiency\n        redundant_indices = effective_load.max(dim=-1).indices\n        phy2log[:, i] = redundant_indices\n        rank[:, i] = logcnt[arangen, redundant_indices]\n        logcnt[arangen, redundant_indices] += 1\n\n    return phy2log, rank, logcnt\n\n\ndef rebalance_experts_hierarchical(\n    weight: torch.Tensor,\n    num_physical_experts: int,\n    num_groups: int,\n    num_nodes: int,\n    num_gpus: int,\n):\n    \"\"\"Hierarchical load balancing: nodes -> GPUs -> experts.\"\"\"\n    num_layers, num_logical_experts = weight.shape\n    assert num_logical_experts % num_groups == 0\n    group_size = num_logical_experts // num_groups\n    assert num_groups % num_nodes == 0\n    groups_per_node = num_groups // num_nodes\n    assert num_gpus % num_nodes == 0\n    assert num_physical_experts % num_gpus == 0\n    phy_experts_per_gpu = num_physical_experts // num_gpus\n\n    def inverse(perm: torch.Tensor) -> torch.Tensor:\n        inv = torch.empty_like(perm)\n        inv.scatter_(\n            1,\n            perm,\n            torch.arange(perm.size(1), dtype=torch.int64,\n                         device=perm.device).expand(perm.shape),\n        )\n        return inv\n\n    # Step 1: pack groups to nodes\n    tokens_per_group = weight.unflatten(-1, (num_groups, group_size)).sum(-1)\n    group_pack_index, group_rank_in_pack = balanced_packing(\n        tokens_per_group, num_nodes)\n    log2mlog = (((group_pack_index * groups_per_node + group_rank_in_pack) *\n                 group_size).unsqueeze(-1) +\n                torch.arange(group_size,\n                             dtype=torch.int64,\n                             device=group_pack_index.device)).flatten(-2)\n    mlog2log = inverse(log2mlog)\n\n    # Step 2: construct redundant experts within nodes\n    tokens_per_mlog = weight.gather(-1, mlog2log).view(\n        -1, num_logical_experts // num_nodes)\n    phy2mlog, phyrank, mlogcnt = replicate_experts(\n        tokens_per_mlog, num_physical_experts // num_nodes)\n\n    # Step 3: pack physical_experts to GPUs\n    # Compute effective load per physical expert (weight / count)\n    effective_load = (tokens_per_mlog / mlogcnt.clamp(min=1)).gather(-1, phy2mlog)\n    pack_index, rank_in_pack = balanced_packing(effective_load,\n                                                num_gpus // num_nodes)\n    phy2pphy = pack_index * phy_experts_per_gpu + rank_in_pack\n    pphy2phy = inverse(phy2pphy)\n\n    # Map back to original logical experts\n    pphy2mlog = phy2mlog.gather(-1, pphy2phy)\n    base_offset = torch.arange(0,\n                               num_logical_experts,\n                               num_logical_experts // num_nodes,\n                               dtype=torch.int64,\n                               device=group_pack_index.device).view(1, -1, 1)\n    pphy2mlog = (pphy2mlog.view(num_layers, num_nodes, -1) + base_offset).flatten(-2)\n    pphy2log = mlog2log.gather(-1, pphy2mlog)\n    pphyrank = phyrank.gather(-1, pphy2phy).view(num_layers, -1)\n    logcnt = mlogcnt.view(num_layers, -1).gather(-1, log2mlog)\n    return pphy2log, pphyrank, logcnt\n\n\ndef rebalance_experts(\n    weight: torch.Tensor,\n    num_replicas: int,\n    num_groups: int,\n    num_nodes: int,\n    num_gpus: int,\n) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:\n    \"\"\"\n    Entry point for expert-parallelism load balancer.\n    \"\"\"\n    num_layers, num_logical_experts = weight.shape\n    # Ensure device consistency\n    device = weight.device\n    weight = weight.float().to(device)\n    if num_groups % num_nodes == 0:\n        phy2log, phyrank, logcnt = rebalance_experts_hierarchical(\n            weight, num_replicas, num_groups, num_nodes, num_gpus)\n    else:\n        # Fallback: treat all groups as one\n        phy2log, phyrank, logcnt = rebalance_experts_hierarchical(\n            weight, num_replicas, 1, 1, num_gpus)\n\n    # Build logical_to_physical_map\n    num_redundant_experts = num_replicas - num_logical_experts\n    maxlogcnt = num_redundant_experts + 1\n    log2phy = torch.full(\n        (num_layers, num_logical_experts, maxlogcnt),\n        -1,\n        dtype=torch.int64,\n        device=device,\n    )\n    # Scatter physical slot indices into logical expert slots\n    indices = phy2log * maxlogcnt + phyrank\n    log2phy.view(num_layers, -1).scatter_(\n        -1,\n        indices,\n        torch.arange(num_replicas, dtype=torch.int64, device=device).expand(num_layers, -1),\n    )\n\n    # Ensure expert_count is correct\n    expert_count = logcnt\n    assert (expert_count.sum(dim=-1) == num_replicas).all()\n\n    return phy2log, log2phy, expert_count\n",
+      "scores": {
+        "score": 52.79601929913108,
+        "balancedness_gpu": 0.6634497396626272,
+        "balancedness_expert": 0.2505991107719945,
+        "avg_time": 0.34716310872251843,
+        "execution_time": 0.34716310872251843,
+        "balancedness_score": 59.71047656963645,
+        "speed_score": 0.028804903945000765,
+        "slow_penalty": 6.943262174450369,
+        "workload_0": 0.594339353629347,
+        "workload_8": 0.4047513363805708,
+        "workload_9": 0.6296299106870406,
+        "workload_main": 0.7216575374932876
+      },
+      "primary_score": 52.79601929913108,
+      "behavior": {
+        "loop_nesting_max": 0.7169593748690237,
+        "cyclomatic_complexity": 0.473135269002759,
+        "math_operators": 0.9240109278709009,
+        "execution_time": 0.5,
+        "workload_main": 0.5,
+        "workload_8": 0.5,
+        "workload_9": 0.5
+      },
+      "metadata": {},
+      "parents": [],
+      "created_at": "2026-01-22T07:17:58.075286"
+    },
+    {
+      "cell_index": 22,
+      "program_id": "29556a3d-9ff6-42bc-845f-65b28fb7d235",
+      "code": "import torch\n\ndef rebalance_experts(\n    weight: torch.Tensor,\n    num_replicas: int,\n    num_groups: int,\n    num_nodes: int,\n    num_gpus: int,\n) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:\n    '''\n    Rearrange and replicate logical experts across physical GPU slots.\n\n    Parameters:\n        weight: [layers, num_logical_experts], load statistics\n        num_replicas: 288 (physical experts)\n        num_groups: 8\n        num_nodes: 4\n        num_gpus: 32\n\n    Returns:\n        physical_to_logical_map: [layers, num_replicas]\n        logical_to_physical_map: [layers, num_logical_experts, X]\n        expert_count: [layers, num_logical_experts]\n    '''\n    num_layers, num_logical_experts = weight.shape\n    device = weight.device\n    num_slots_per_gpu = num_replicas // num_gpus\n\n    # Initialize expert_count with at least one replica for each expert\n    expert_count = torch.ones(num_layers, num_logical_experts, dtype=torch.int64, device=device)\n    \n    # Calculate remaining replicas to distribute\n    remaining_replicas_to_distribute = num_replicas - num_logical_experts\n\n    # Normalize weights for proportional distribution\n    # Add a small epsilon to avoid division by zero if all weights are zero for a layer\n    # Cast to float for calculations to maintain precision\n    normalized_weight = weight.float() / (weight.float().sum(dim=-1, keepdim=True) + 1e-9)\n\n    # Distribute remaining replicas using an iterative greedy approach\n    # This approach aims to add replicas one by one to the experts\n    # that currently have the highest \"need\" based on their weight and current replica count.\n    # The \"need\" can be modeled as weight / current_replica_count, similar to how\n    # proportional allocation works but iteratively.\n\n    for _ in range(remaining_replicas_to_distribute):\n        # Calculate the \"cost\" or \"load\" per replica for each expert\n        # An expert with higher weight but fewer replicas will have a higher effective load\n        # This makes it a candidate for an additional replica\n        effective_load_per_replica = normalized_weight / expert_count.float()\n        \n        # Find the expert that needs a replica the most (highest effective load)\n        # Using max(dim=-1) to get the expert index for each layer\n        _, expert_to_add_replica_to = torch.max(effective_load_per_replica, dim=-1)\n        \n        # Add a replica to the chosen expert for each layer\n        expert_count[torch.arange(num_layers, device=device), expert_to_add_replica_to] += 1\n\n    # Ensure expert_count sums to num_replicas for all layers\n    assert (expert_count.sum(dim=-1) == num_replicas).all(), \"Expert count sum mismatch\"\n    assert (expert_count >= 1).all(), \"Some experts have less than one replica\"\n\n    # Create physical_to_logical_map\n    physical_to_logical_map = torch.empty(num_layers, num_replicas, dtype=torch.int64, device=device)\n    \n    for layer in range(num_layers):\n        current_physical_idx = 0\n        expert_indices_for_layer = []\n        for logical_expert_idx in range(num_logical_experts):\n            count = expert_count[layer, logical_expert_idx].item()\n            expert_indices_for_layer.extend([logical_expert_idx] * count)\n        \n        # Shuffle the assignments to distribute experts across physical slots\n        # This helps in balancing load across GPUs\n        perm = torch.randperm(num_replicas, device=device)\n        physical_to_logical_map[layer] = torch.tensor(expert_indices_for_layer, dtype=torch.int64, device=device)[perm]\n\n    # Create logical_to_physical_map\n    max_replicas = expert_count.max().item()\n    logical_to_physical_map = torch.full(\n        (num_layers, num_logical_experts, max_replicas),\n        -1,\n        dtype=torch.int64,\n        device=device,\n    )\n\n    for layer in range(num_layers):\n        # Group physical slots by the logical expert they map to\n        expert_physical_slots = [[] for _ in range(num_logical_experts)]\n        for physical_idx in range(num_replicas):\n            logical_expert_id = physical_to_logical_map[layer, physical_idx].item()\n            expert_physical_slots[logical_expert_id].append(physical_idx)\n        \n        for logical_expert_idx in range(num_logical_experts):\n            for i, physical_idx in enumerate(expert_physical_slots[logical_expert_idx]):\n                if i < max_replicas:\n                    logical_to_physical_map[layer, logical_expert_idx, i] = physical_idx\n\n    return physical_to_logical_map, logical_to_physical_map, expert_count",
+      "scores": {
+        "score": 52.28208678619963,
+        "balancedness_gpu": 0.6452279364127632,
+        "balancedness_expert": 0.28545247814264124,
+        "avg_time": 0.29113876863530924,
+        "execution_time": 0.29113876863530924,
+        "balancedness_score": 58.07051427714869,
+        "speed_score": 0.03434788175712303,
+        "slow_penalty": 5.822775372706185,
+        "workload_0": 0.6460779943584346,
+        "workload_8": 0.4320752709933437,
+        "workload_9": 0.6042711534354542,
+        "workload_main": 0.6876758189945343
+      },
+      "primary_score": 52.28208678619963,
+      "behavior": {
+        "loop_nesting_max": 0.7183128981999206,
+        "cyclomatic_complexity": 0.47303193015659883,
+        "math_operators": 0.33164079627522536,
+        "execution_time": 0.5,
+        "workload_main": 0.5,
+        "workload_8": 0.5,
+        "workload_9": 0.5
+      },
+      "metadata": {},
+      "parents": [],
+      "created_at": "2026-01-22T07:17:50.930257"
+    },
+    {
+      "cell_index": 0,
+      "program_id": "d828480a-a9ac-49b3-b3bf-37bef0d23ef9",
+      "code": "import torch\n\ndef rebalance_experts(\n    weight: torch.Tensor,\n    num_replicas: int,\n    num_groups: int,\n    num_nodes: int,\n    num_gpus: int,\n) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:\n    '''\n    Rearrange and replicate logical experts across physical GPU slots.\n\n    Parameters:\n        weight: [layers, num_logical_experts], load statistics\n        num_replicas: 288 (physical experts)\n        num_groups: 8\n        num_nodes: 4\n        num_gpus: 32\n\n    Returns:\n        physical_to_logical_map: [layers, num_replicas]\n        logical_to_physical_map: [layers, num_logical_experts, X]\n        expert_count: [layers, num_logical_experts]\n    '''\n    num_layers, num_logical_experts = weight.shape\n    device = weight.device\n    num_slots_per_gpu = num_replicas // num_gpus\n\n    # Initialize expert_count with at least one replica for each expert\n    expert_count = torch.ones(num_layers, num_logical_experts, dtype=torch.int64, device=device)\n    \n    # Calculate remaining replicas to distribute\n    remaining_replicas_to_distribute = num_replicas - num_logical_experts\n\n    # Normalize weights for proportional distribution\n    # Add a small epsilon to avoid division by zero if all weights are zero for a layer\n    # Cast to float for calculations to maintain precision\n    normalized_weight = weight.float() / (weight.float().sum(dim=-1, keepdim=True) + 1e-9)\n\n    # Distribute remaining replicas using an iterative greedy approach\n    # This approach aims to add replicas one by one to the experts\n    # that currently have the highest \"need\" based on their weight and current replica count.\n    # The \"need\" can be modeled as weight / current_replica_count, similar to how\n    # proportional allocation works but iteratively.\n\n    # Use a more efficient approach: batched computation without loop\n    # We'll simulate the greedy assignment by computing the marginal gain for each expert\n    # and selecting the one with highest gain at each step.\n\n    # Precompute the total weight per expert\n    total_weight = weight.sum(dim=0)  # [num_logical_experts]\n\n    # For each remaining replica, compute the next best expert to assign\n    # We use a priority queue-like approach via repeated max selection\n    # But since we can't use loops efficiently in PyTorch, we simulate via a loop\n    # This is acceptable since num_replicas - num_logical_experts <= 288 - 64 = 224, which is manageable.\n\n    for _ in range(remaining_replicas_to_distribute):\n        # Calculate the \"load per replica\" as weight / current_count\n        # This gives higher priority to experts with high weight and low count\n        effective_load_per_replica = normalized_weight / (expert_count.float() + 1e-9)\n        \n        # Find the expert with the highest effective load per replica\n        # Use torch.max to get the expert index for each layer\n        _, expert_to_add_replica_to = torch.max(effective_load_per_replica, dim=-1)\n        \n        # Update expert_count: add one replica to the chosen expert per layer\n        layer_indices = torch.arange(num_layers, device=device)\n        expert_count[layer_indices, expert_to_add_replica_to] += 1\n\n    # Ensure expert_count sums to num_replicas for all layers\n    assert (expert_count.sum(dim=-1) == num_replicas).all(), \"Expert count sum mismatch\"\n    assert (expert_count >= 1).all(), \"Some experts have less than one replica\"\n\n    # Create physical_to_logical_map\n    physical_to_logical_map = torch.empty(num_layers, num_replicas, dtype=torch.int64, device=device)\n    \n    # Use a vectorized approach to build the assignments\n    # For each layer, create a list of logical expert indices repeated by their count\n    # Then shuffle within each layer to improve load balancing\n\n    # Build a list of indices for each layer\n    for layer in range(num_layers):\n        # Get the count for each logical expert in this layer\n        counts = expert_count[layer]  # [num_logical_experts]\n        # Create a list of logical expert indices repeated by their count\n        # Use torch.repeat_interleave for efficiency\n        logical_indices = torch.arange(num_logical_experts, device=device).repeat_interleave(counts)\n        # Shuffle the indices to distribute across physical slots\n        perm = torch.randperm(num_replicas, device=device)\n        physical_to_logical_map[layer] = logical_indices[perm]\n\n    # Create logical_to_physical_map\n    max_replicas = expert_count.max().item()\n    logical_to_physical_map = torch.full(\n        (num_layers, num_logical_experts, max_replicas),\n        -1,\n        dtype=torch.int64,\n        device=device,\n    )\n\n    # Vectorized assignment using advanced indexing\n    # For each layer and each logical expert, find all physical slots\n    # Use torch.where to find indices where physical_to_logical_map matches the logical expert\n    for layer in range(num_layers):\n        for logical_expert_idx in range(num_logical_experts):\n            # Find all physical slots assigned to this logical expert\n            mask = (physical_to_logical_map[layer] == logical_expert_idx)\n            physical_indices = torch.nonzero(mask, as_tuple=True)[0]\n            # Assign to logical_to_physical_map\n            logical_to_physical_map[layer, logical_expert_idx, :len(physical_indices)] = physical_indices\n\n    return physical_to_logical_map, logical_to_physical_map, expert_count",
+      "scores": {
+        "score": 51.57112271477348,
+        "balancedness_gpu": 0.6553130644162954,
+        "balancedness_expert": 0.2854524786309015,
+        "avg_time": 0.37169783281437546,
+        "execution_time": 0.37169783281437546,
+        "balancedness_score": 58.97817579746659,
+        "speed_score": 0.026903573594398555,
+        "slow_penalty": 7.433956656287509,
+        "workload_0": 0.6519843785969007,
+        "workload_8": 0.45184581851810124,
+        "workload_9": 0.6049288978441899,
+        "workload_main": 0.6987151028132271
+      },
+      "primary_score": 51.57112271477348,
+      "behavior": {
+        "loop_nesting_max": 0.3722007990660431,
+        "cyclomatic_complexity": 0.3303809063419313,
+        "math_operators": 0.33183637861122195,
+        "execution_time": 0.5,
+        "workload_main": 0.5,
+        "workload_8": 0.5,
+        "workload_9": 0.5
+      },
+      "metadata": {},
+      "parents": [],
+      "created_at": "2026-01-22T07:17:09.105988"
+    },
+    {
+      "cell_index": 25,
+      "program_id": "6a5e8443-82b8-4dad-9873-4f8479924d7f",
+      "code": "import torch\n\ndef rebalance_experts(\n    weight: torch.Tensor,\n    num_replicas: int,\n    num_groups: int,\n    num_nodes: int,\n    num_gpus: int,\n) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:\n    '''\n    Rearrange and replicate logical experts across physical GPU slots.\n\n    Parameters:\n        weight: [layers, num_logical_experts], load statistics\n        num_replicas: 288 (physical experts)\n        num_groups: 8\n        num_nodes: 4\n        num_gpus: 32\n\n    Returns:\n        physical_to_logical_map: [layers, num_replicas]\n        logical_to_physical_map: [layers, num_logical_experts, X]\n        expert_count: [layers, num_logical_experts]\n    '''\n    num_layers, num_logical_experts = weight.shape\n    device = weight.device\n    num_slots_per_gpu = num_replicas // num_gpus\n\n    # Initialize expert_count with at least one replica for each expert\n    expert_count = torch.ones(num_layers, num_logical_experts, dtype=torch.int64, device=device)\n    \n    # Calculate remaining replicas to distribute\n    remaining_replicas_to_distribute = num_replicas - num_logical_experts\n\n    # Normalize weights for proportional distribution\n    weight_sum = weight.sum(dim=-1, keepdim=True) + 1e-9\n    normalized_weight = weight.float() / weight_sum\n\n    # Distribute remaining replicas using a priority-based greedy approach\n    # Assign replicas to the expert with highest (weight / count) ratio\n    for _ in range(remaining_replicas_to_distribute):\n        # Compute effective load per replica (higher means more need)\n        effective_load_per_replica = normalized_weight / (expert_count.float() + 1e-9)\n        # Select expert with maximum effective load for each layer\n        _, expert_to_add_replica_to = torch.max(effective_load_per_replica, dim=-1)\n        # Update count\n        expert_count[torch.arange(num_layers, device=device), expert_to_add_replica_to] += 1\n\n    # Verify total replica count\n    assert (expert_count.sum(dim=-1) == num_replicas).all(), \"Expert count sum mismatch\"\n    assert (expert_count >= 1).all(), \"Some experts have less than one replica\"\n\n    # Create physical_to_logical_map using vectorized expansion and shuffling\n    # Expand logical expert indices according to their counts\n    logical_experts = torch.arange(num_logical_experts, device=device)\n    # Use broadcasting to create expanded list for each layer\n    expanded = logical_experts.unsqueeze(0).unsqueeze(2).expand(num_layers, -1, expert_count.max().item())\n    # Create mask for valid entries based on counts\n    count_max = expert_count.max().item()\n    mask = torch.arange(count_max, device=device).unsqueeze(0).unsqueeze(0) < expert_count.unsqueeze(-1)\n    # Flatten and filter\n    assignments = expanded[mask]\n    # Reshape to [layers, num_replicas]\n    assignments = assignments.view(num_layers, num_replicas)\n    # Shuffle within each layer to distribute across physical slots\n    perm = torch.randperm(num_replicas, device=device)\n    physical_to_logical_map = assignments[:, perm]\n\n    # Create logical_to_physical_map\n    max_replicas = expert_count.max().item()\n    logical_to_physical_map = torch.full(\n        (num_layers, num_logical_experts, max_replicas),\n        -1,\n        dtype=torch.int64,\n        device=device,\n    )\n\n    # Vectorized assignment: for each layer, find physical slots per logical expert\n    for layer in range(num_layers):\n        # For each logical expert, find where it appears in physical_to_logical_map\n        for logical_expert_idx in range(num_logical_experts):\n            mask = (physical_to_logical_map[layer] == logical_expert_idx)\n            physical_indices = torch.nonzero(mask, as_tuple=True)[0]\n            logical_to_physical_map[layer, logical_expert_idx, :len(physical_indices)] = physical_indices\n\n    return physical_to_logical_map, logical_to_physical_map, expert_count",
+      "scores": {
+        "score": 51.379776701533146,
+        "balancedness_gpu": 0.6528556203562217,
+        "balancedness_expert": 0.28545247529088447,
+        "avg_time": 0.3702120339095762,
+        "execution_time": 0.3702120339095762,
+        "balancedness_score": 58.75700583205995,
+        "speed_score": 0.027011547664716074,
+        "slow_penalty": 7.404240678191524,
+        "workload_0": 0.6424670781647346,
+        "workload_8": 0.45938760631484316,
+        "workload_9": 0.6023738520430597,
+        "workload_main": 0.6977677894206309
+      },
+      "primary_score": 51.379776701533146,
+      "behavior": {
+        "loop_nesting_max": 0.3727744509252469,
+        "cyclomatic_complexity": 0.29730356342945463,
+        "math_operators": 0.3616067386085514,
+        "execution_time": 0.5,
+        "workload_main": 0.5,
+        "workload_8": 0.5,
+        "workload_9": 0.5
+      },
+      "metadata": {},
+      "parents": [],
+      "created_at": "2026-01-22T07:16:15.049314"
+    },
+    {
+      "cell_index": 29,
+      "program_id": "16c82a9f-cb83-49fd-99b0-e94d44fdf206",
+      "code": "import torch\n\ndef rebalance_experts(\n    weight: torch.Tensor,\n    num_replicas: int,\n    num_groups: int,\n    num_nodes: int,\n    num_gpus: int,\n) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:\n    '''\n    Rearrange and replicate logical experts across physical GPU slots.\n\n    Parameters:\n        weight: [layers, num_logical_experts], load statistics\n        num_replicas: 288 (physical experts)\n        num_groups: 8\n        num_nodes: 4\n        num_gpus: 32\n\n    Returns:\n        physical_to_logical_map: [layers, num_replicas]\n        logical_to_physical_map: [layers, num_logical_experts, X]\n        expert_count: [layers, num_logical_experts]\n    '''\n    num_layers, num_logical_experts = weight.shape\n    device = weight.device\n    num_slots_per_gpu = num_replicas // num_gpus\n\n    # Initialize expert_count with at least one replica for each expert\n    expert_count = torch.ones(num_layers, num_logical_experts, dtype=torch.int64, device=device)\n    \n    # Calculate remaining replicas to distribute\n    remaining_replicas_to_distribute = num_replicas - num_logical_experts\n\n    # Normalize weights for proportional distribution\n    # Add a small epsilon to avoid division by zero if all weights are zero for a layer\n    # Cast to float for calculations to maintain precision\n    weight_float = weight.float()\n    weight_sum = weight_float.sum(dim=-1, keepdim=True) + 1e-9\n    normalized_weight = weight_float / weight_sum\n\n    # Distribute remaining replicas using an iterative greedy approach\n    # This approach aims to add replicas one by one to the experts\n    # that currently have the highest \"need\" based on their weight and current replica count.\n    # The \"need\" can be modeled as weight / current_replica_count, similar to how\n    # proportional allocation works but iteratively.\n\n    for _ in range(remaining_replicas_to_distribute):\n        # Calculate the \"cost\" or \"load\" per replica for each expert\n        # An expert with higher weight but fewer replicas will have a higher effective load\n        # This makes it a candidate for an additional replica\n        effective_load_per_replica = normalized_weight / (expert_count.float() + 1e-9)\n        \n        # Find the expert that needs a replica the most (highest effective load)\n        # Using max(dim=-1) to get the expert index for each layer\n        _, expert_to_add_replica_to = torch.max(effective_load_per_replica, dim=-1)\n        \n        # Add a replica to the chosen expert for each layer\n        expert_count[torch.arange(num_layers, device=device), expert_to_add_replica_to] += 1\n\n    # Ensure expert_count sums to num_replicas for all layers\n    assert (expert_count.sum(dim=-1) == num_replicas).all(), \"Expert count sum mismatch\"\n    assert (expert_count >= 1).all(), \"Some experts have less than one replica\"\n\n    # Create physical_to_logical_map\n    physical_to_logical_map = torch.empty(num_layers, num_replicas, dtype=torch.int64, device=device)\n    \n    for layer in range(num_layers):\n        # Create list of logical expert IDs, repeated by their count\n        expert_indices_for_layer = []\n        for logical_expert_idx in range(num_logical_experts):\n            count = expert_count[layer, logical_expert_idx].item()\n            expert_indices_for_layer.extend([logical_expert_idx] * count)\n        \n        # Convert to tensor and shuffle to distribute across physical slots\n        # This helps in balancing load across GPUs\n        expert_tensor = torch.tensor(expert_indices_for_layer, dtype=torch.int64, device=device)\n        perm = torch.randperm(num_replicas, device=device)\n        physical_to_logical_map[layer] = expert_tensor[perm]\n        \n        # Ensure no out-of-bounds indexing\n        assert (physical_to_logical_map[layer] >= 0).all(), \"Invalid logical expert index in physical_to_logical_map\"\n        assert (physical_to_logical_map[layer] < num_logical_experts).all(), \"Logical expert index out of bounds\"\n\n    # Create logical_to_physical_map\n    max_replicas = expert_count.max().item()\n    logical_to_physical_map = torch.full(\n        (num_layers, num_logical_experts, max_replicas),\n        -1,\n        dtype=torch.int64,\n        device=device,\n    )\n\n    for layer in range(num_layers):\n        # Create a list of physical slots for each logical expert\n        expert_physical_slots = [[] for _ in range(num_logical_experts)]\n        for physical_idx in range(num_replicas):\n            logical_expert_id = physical_to_logical_map[layer, physical_idx].item()\n            expert_physical_slots[logical_expert_id].append(physical_idx)\n        \n        # Assign physical slots to logical_to_physical_map\n        for logical_expert_idx in range(num_logical_experts):\n            slots = expert_physical_slots[logical_expert_idx]\n            if slots:\n                logical_to_physical_map[layer, logical_expert_idx, :len(slots)] = torch.tensor(slots, dtype=torch.int64, device=device)\n\n    return physical_to_logical_map, logical_to_physical_map, expert_count",
+      "scores": {
+        "score": 51.361886168500064,
+        "balancedness_gpu": 0.6524665140360003,
+        "balancedness_expert": 0.28545248044798793,
+        "avg_time": 0.36935870236696,
+        "execution_time": 0.36935870236696,
+        "balancedness_score": 58.72198626324003,
+        "speed_score": 0.02707395259924035,
+        "slow_penalty": 7.3871740473392,
+        "workload_0": 0.6439623314086123,
+        "workload_8": 0.45649775683178323,
+        "workload_9": 0.6014978879473626,
+        "workload_main": 0.6956578015712579
+      },
+      "primary_score": 51.361886168500064,
+      "behavior": {
+        "loop_nesting_max": 0.37331095062302505,
+        "cyclomatic_complexity": 0.42769850417802946,
+        "math_operators": 0.3413869046917751,
+        "execution_time": 0.5,
+        "workload_main": 0.5,
+        "workload_8": 0.5,
+        "workload_9": 0.5
+      },
+      "metadata": {},
+      "parents": [],
+      "created_at": "2026-01-22T07:14:03.330135"
+    },
+    {
+      "cell_index": 3,
+      "program_id": "0d5bb032-f6d4-48cc-a707-a9fdfe695d3e",
+      "code": "import torch\n\ndef rebalance_experts(\n    weight: torch.Tensor,\n    num_replicas: int,\n    num_groups: int,\n    num_nodes: int,\n    num_gpus: int,\n) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:\n    '''\n    Rearrange and replicate logical experts across physical GPU slots.\n\n    Parameters:\n        weight: [layers, num_logical_experts], load statistics\n        num_replicas: 288 (physical experts)\n        num_groups: 8\n        num_nodes: 4\n        num_gpus: 32\n\n    Returns:\n        physical_to_logical_map: [layers, num_replicas]\n        logical_to_physical_map: [layers, num_logical_experts, X]\n        expert_count: [layers, num_logical_experts]\n    '''\n    num_layers, num_logical_experts = weight.shape\n    device = weight.device\n    num_slots_per_gpu = num_replicas // num_gpus\n\n    # Initialize expert_count with at least one replica for each expert\n    expert_count = torch.ones(num_layers, num_logical_experts, dtype=torch.int64, device=device)\n    \n    # Calculate remaining replicas to distribute\n    remaining_replicas_to_distribute = num_replicas - num_logical_experts\n\n    # Normalize weights for proportional distribution\n    # Add a small epsilon to avoid division by zero if all weights are zero for a layer\n    # Cast to float for calculations to maintain precision\n    weight_float = weight.float()\n    weight_sum = weight_float.sum(dim=-1, keepdim=True) + 1e-9\n    normalized_weight = weight_float / weight_sum\n\n    # Distribute remaining replicas using an iterative greedy approach\n    # This approach aims to add replicas one by one to the experts\n    # that currently have the highest \"need\" based on their weight and current replica count.\n    # The \"need\" can be modeled as weight / current_replica_count, similar to how\n    # proportional allocation works but iteratively.\n\n    for _ in range(remaining_replicas_to_distribute):\n        # Calculate the \"cost\" or \"load\" per replica for each expert\n        # An expert with higher weight but fewer replicas will have a higher effective load\n        # This makes it a candidate for an additional replica\n        effective_load_per_replica = normalized_weight / (expert_count.float() + 1e-9)\n        \n        # Find the expert that needs a replica the most (highest effective load)\n        # Using max(dim=-1) to get the expert index for each layer\n        _, expert_to_add_replica_to = torch.max(effective_load_per_replica, dim=-1)\n        \n        # Add a replica to the chosen expert for each layer\n        expert_count[torch.arange(num_layers, device=device), expert_to_add_replica_to] += 1\n\n    # Ensure expert_count sums to num_replicas for all layers\n    assert (expert_count.sum(dim=-1) == num_replicas).all(), \"Expert count sum mismatch\"\n    assert (expert_count >= 1).all(), \"Some experts have less than one replica\"\n\n    # Create physical_to_logical_map\n    physical_to_logical_map = torch.empty(num_layers, num_replicas, dtype=torch.int64, device=device)\n    \n    for layer in range(num_layers):\n        # Create list of logical expert IDs, repeated by their count\n        expert_indices_for_layer = []\n        for logical_expert_idx in range(num_logical_experts):\n            count = expert_count[layer, logical_expert_idx].item()\n            expert_indices_for_layer.extend([logical_expert_idx] * count)\n        \n        # Convert to tensor and shuffle to distribute across physical slots\n        # This helps in balancing load across GPUs\n        expert_tensor = torch.tensor(expert_indices_for_layer, dtype=torch.int64, device=device)\n        perm = torch.randperm(num_replicas, device=device)\n        physical_to_logical_map[layer] = expert_tensor[perm]\n\n    # Create logical_to_physical_map\n    max_replicas = expert_count.max().item()\n    logical_to_physical_map = torch.full(\n        (num_layers, num_logical_experts, max_replicas),\n        -1,\n        dtype=torch.int64,\n        device=device,\n    )\n\n    for layer in range(num_layers):\n        # Create a list of physical slots for each logical expert\n        expert_physical_slots = [[] for _ in range(num_logical_experts)]\n        for physical_idx in range(num_replicas):\n            logical_expert_id = physical_to_logical_map[layer, physical_idx].item()\n            expert_physical_slots[logical_expert_id].append(physical_idx)\n        \n        # Assign physical slots to logical_to_physical_map\n        for logical_expert_idx in range(num_logical_experts):\n            slots = expert_physical_slots[logical_expert_idx]\n            logical_to_physical_map[layer, logical_expert_idx, :len(slots)] = torch.tensor(slots, dtype=torch.int64, device=device)\n\n    return physical_to_logical_map, logical_to_physical_map, expert_count",
+      "scores": {
+        "score": 51.11670573889505,
+        "balancedness_gpu": 0.6518512618440779,
+        "balancedness_expert": 0.28545247529088447,
+        "avg_time": 0.378815295817648,
+        "execution_time": 0.378815295817648,
+        "balancedness_score": 58.66661356596701,
+        "speed_score": 0.02639808928099288,
+        "slow_penalty": 7.57630591635296,
+        "workload_0": 0.6478177177775101,
+        "workload_8": 0.4509306603586632,
+        "workload_9": 0.6168716362845859,
+        "workload_main": 0.6931493596188455
+      },
+      "primary_score": 51.11670573889505,
+      "behavior": {
+        "loop_nesting_max": 0.37940030207885056,
+        "cyclomatic_complexity": 0.3884041596816901,
+        "math_operators": 0.33117523117652997,
+        "execution_time": 0.5,
+        "workload_main": 0.5,
+        "workload_8": 0.5,
+        "workload_9": 0.5
+      },
+      "metadata": {},
+      "parents": [],
+      "created_at": "2026-01-22T07:11:56.651611"
+    },
+    {
+      "cell_index": 17,
+      "program_id": "3fb9f7dc-8615-4358-a1b3-a8895d326a43",
+      "code": "import torch\n\ndef rebalance_experts(\n    weight: torch.Tensor,\n    num_replicas: int,\n    num_groups: int,\n    num_nodes: int,\n    num_gpus: int,\n) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:\n    '''\n    Rearrange and replicate logical experts across physical GPU slots.\n\n    Parameters:\n        weight: [layers, num_logical_experts], load statistics\n        num_replicas: 288 (physical experts)\n        num_groups: 8\n        num_nodes: 4\n        num_gpus: 32\n\n    Returns:\n        physical_to_logical_map: [layers, num_replicas]\n        logical_to_physical_map: [layers, num_logical_experts, X]\n        expert_count: [layers, num_logical_experts]\n    '''\n    num_layers, num_logical_experts = weight.shape\n    device = weight.device\n    num_slots_per_gpu = num_replicas // num_gpus\n\n    # Initialize expert_count with at least one replica for each expert\n    expert_count = torch.ones(num_layers, num_logical_experts, dtype=torch.int64, device=device)\n    \n    # Calculate remaining replicas to distribute\n    remaining_replicas_to_distribute = num_replicas - num_logical_experts\n\n    # Normalize weights for proportional distribution\n    # Add a small epsilon to avoid division by zero if all weights are zero for a layer\n    # Cast to float for calculations to maintain precision\n    weight_float = weight.float()\n    weight_sum = weight_float.sum(dim=-1, keepdim=True) + 1e-9\n    normalized_weight = weight_float / weight_sum\n\n    # Distribute remaining replicas using an iterative greedy approach\n    # This approach aims to add replicas one by one to the experts\n    # that currently have the highest \"need\" based on their weight and current replica count.\n    # The \"need\" can be modeled as weight / current_replica_count, similar to how\n    # proportional allocation works but iteratively.\n\n    for _ in range(remaining_replicas_to_distribute):\n        # Calculate the \"cost\" or \"load\" per replica for each expert\n        # An expert with higher weight but fewer replicas will have a higher effective load\n        # This makes it a candidate for an additional replica\n        effective_load_per_replica = normalized_weight / (expert_count.float() + 1e-9)\n        \n        # Find the expert that needs a replica the most (highest effective load)\n        # Using max(dim=-1) to get the expert index for each layer\n        _, expert_to_add_replica_to = torch.max(effective_load_per_replica, dim=-1)\n        \n        # Add a replica to the chosen expert for each layer\n        expert_count[torch.arange(num_layers, device=device), expert_to_add_replica_to] += 1\n\n    # Ensure expert_count sums to num_replicas for all layers\n    assert (expert_count.sum(dim=-1) == num_replicas).all(), \"Expert count sum mismatch\"\n    assert (expert_count >= 1).all(), \"Some experts have less than one replica\"\n\n    # Create physical_to_logical_map\n    physical_to_logical_map = torch.empty(num_layers, num_replicas, dtype=torch.int64, device=device)\n    \n    for layer in range(num_layers):\n        # Create list of logical expert IDs, repeated by their count\n        expert_indices_for_layer = []\n        for logical_expert_idx in range(num_logical_experts):\n            count = expert_count[layer, logical_expert_idx].item()\n            expert_indices_for_layer.extend([logical_expert_idx] * count)\n        \n        # Convert to tensor and shuffle to distribute across physical slots\n        # This helps in balancing load across GPUs\n        expert_tensor = torch.tensor(expert_indices_for_layer, dtype=torch.int64, device=device)\n        perm = torch.randperm(num_replicas, device=device)\n        physical_to_logical_map[layer] = expert_tensor[perm]\n        \n        # Ensure all physical slots are assigned\n        assert (physical_to_logical_map[layer] >= 0).all(), \"Some physical slots have invalid logical expert mapping\"\n        assert (physical_to_logical_map[layer] < num_logical_experts).all(), \"Logical expert index out of bounds\"\n\n    # Create logical_to_physical_map\n    max_replicas = expert_count.max().item()\n    logical_to_physical_map = torch.full(\n        (num_layers, num_logical_experts, max_replicas),\n        -1,\n        dtype=torch.int64,\n        device=device,\n    )\n\n    for layer in range(num_layers):\n        # Create a list of physical slots for each logical expert\n        expert_physical_slots = [[] for _ in range(num_logical_experts)]\n        for physical_idx in range(num_replicas):\n            logical_expert_id = physical_to_logical_map[layer, physical_idx].item()\n            expert_physical_slots[logical_expert_id].append(physical_idx)\n        \n        # Assign physical slots to logical_to_physical_map\n        for logical_expert_idx in range(num_logical_experts):\n            slots = expert_physical_slots[logical_expert_idx]\n            logical_to_physical_map[layer, logical_expert_idx, :len(slots)] = torch.tensor(slots, dtype=torch.int64, device=device)\n            \n        # Validate logical_to_physical_map\n        assert (logical_to_physical_map[layer] >= -1).all(), \"Logical to physical map has invalid values\"\n        assert (logical_to_physical_map[layer] < num_replicas).all(), \"Physical slot index out of bounds\"\n\n    return physical_to_logical_map, logical_to_physical_map, expert_count",
+      "scores": {
+        "score": 50.81560044344776,
+        "balancedness_gpu": 0.6465532796952921,
+        "balancedness_expert": 0.28545247529088447,
+        "avg_time": 0.3700608655450527,
+        "execution_time": 0.3700608655450527,
+        "balancedness_score": 58.18979517257629,
+        "speed_score": 0.027022581772518067,
+        "slow_penalty": 7.401217310901053,
+        "workload_0": 0.6481129747253308,
+        "workload_8": 0.44254892448540745,
+        "workload_9": 0.6118821772327186,
+        "workload_main": 0.6867112088028773
+      },
+      "primary_score": 50.81560044344776,
+      "behavior": {
+        "loop_nesting_max": 0.36828404291835365,
+        "cyclomatic_complexity": 0.40007329064579084,
+        "math_operators": 0.36453482840244605,
+        "execution_time": 0.5,
+        "workload_main": 0.5,
+        "workload_8": 0.5,
+        "workload_9": 0.5
+      },
+      "metadata": {},
+      "parents": [],
+      "created_at": "2026-01-22T07:18:41.105795"
+    },
+    {
+      "cell_index": 40,
+      "program_id": "2b1c625a-57c6-4026-bcc8-a528f9a3c0ed",
+      "code": "import torch\n\ndef rebalance_experts(\n    weight: torch.Tensor,\n    num_replicas: int,\n    num_groups: int,\n    num_nodes: int,\n    num_gpus: int,\n) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:\n    '''\n    Rearrange and replicate logical experts across physical GPU slots.\n\n    Parameters:\n        weight: [layers, num_logical_experts], load statistics\n        num_replicas: 288 (physical experts)\n        num_groups: 8\n        num_nodes: 4\n        num_gpus: 32\n\n    Returns:\n        physical_to_logical_map: [layers, num_replicas]\n        logical_to_physical_map: [layers, num_logical_experts, X]\n        expert_count: [layers, num_logical_experts]\n    '''\n    num_layers, num_logical_experts = weight.shape\n    device = weight.device\n    num_slots_per_gpu = num_replicas // num_gpus\n\n    # Initialize expert_count with at least one replica for each expert\n    expert_count = torch.ones(num_layers, num_logical_experts, dtype=torch.int64, device=device)\n    \n    # Calculate remaining replicas to distribute\n    remaining_replicas_to_distribute = num_replicas - num_logical_experts\n\n    # Normalize weights for proportional distribution\n    # Add a small epsilon to avoid division by zero if all weights are zero for a layer\n    # Cast to float for calculations to maintain precision\n    normalized_weight = weight.float() / (weight.float().sum(dim=-1, keepdim=True) + 1e-9)\n\n    # Distribute remaining replicas using an iterative greedy approach\n    # This approach aims to add replicas one by one to the experts\n    # that currently have the highest \"need\" based on their weight and current replica count.\n    # The \"need\" can be modeled as weight / current_replica_count, similar to how\n    # proportional allocation works but iteratively.\n\n    for _ in range(remaining_replicas_to_distribute):\n        # Calculate the \"cost\" or \"load\" per replica for each expert\n        # An expert with higher weight but fewer replicas will have a higher effective load\n        # This makes it a candidate for an additional replica\n        effective_load_per_replica = normalized_weight / expert_count.float()\n        \n        # Find the expert that needs a replica the most (highest effective load)\n        # Using max(dim=-1) to get the expert index for each layer\n        _, expert_to_add_replica_to = torch.max(effective_load_per_replica, dim=-1)\n        \n        # Add a replica to the chosen expert for each layer\n        expert_count[torch.arange(num_layers, device=device), expert_to_add_replica_to] += 1\n\n    # Ensure expert_count sums to num_replicas for all layers\n    assert (expert_count.sum(dim=-1) == num_replicas).all(), \"Expert count sum mismatch\"\n    assert (expert_count >= 1).all(), \"Some experts have less than one replica\"\n\n    # Create physical_to_logical_map\n    physical_to_logical_map = torch.empty(num_layers, num_replicas, dtype=torch.int64, device=device)\n    \n    # Precompute all expert assignments without looping\n    # Build list of (logical_expert, count) for each layer\n    expert_assignments = []\n    for layer in range(num_layers):\n        layer_assignments = []\n        for logical_expert_idx in range(num_logical_experts):\n            count = expert_count[layer, logical_expert_idx].item()\n            layer_assignments.extend([logical_expert_idx] * count)\n        expert_assignments.append(torch.tensor(layer_assignments, dtype=torch.int64, device=device))\n    \n    # Shuffle each layer's assignment to distribute across physical slots\n    for layer in range(num_layers):\n        perm = torch.randperm(num_replicas, device=device)\n        physical_to_logical_map[layer] = expert_assignments[layer][perm]\n\n    # Create logical_to_physical_map\n    max_replicas = expert_count.max().item()\n    logical_to_physical_map = torch.full(\n        (num_layers, num_logical_experts, max_replicas),\n        -1,\n        dtype=torch.int64,\n        device=device,\n    )\n\n    # Vectorized assignment using scatter\n    for layer in range(num_layers):\n        # Create a list of physical indices for each logical expert\n        for logical_expert_idx in range(num_logical_experts):\n            # Find all physical slots assigned to this logical expert\n            mask = (physical_to_logical_map[layer] == logical_expert_idx)\n            physical_indices = torch.nonzero(mask, as_tuple=True)[0]\n            # Assign to logical_to_physical_map\n            logical_to_physical_map[layer, logical_expert_idx, :len(physical_indices)] = physical_indices\n\n    return physical_to_logical_map, logical_to_physical_map, expert_count",
+      "scores": {
+        "score": 49.898798623718015,
+        "balancedness_gpu": 0.6564942642546205,
+        "balancedness_expert": 0.28545247851616284,
+        "avg_time": 0.4603703400908588,
+        "execution_time": 0.4603703400908588,
+        "balancedness_score": 59.08448378291585,
+        "speed_score": 0.02172164261934511,
+        "slow_penalty": 9.207406801817177,
+        "workload_0": 0.6473766108322119,
+        "workload_8": 0.4442607551851555,
+        "workload_9": 0.617093667559441,
+        "workload_main": 0.7012166901153293
+      },
+      "primary_score": 49.898798623718015,
+      "behavior": {
+        "loop_nesting_max": 0.3809650458727821,
+        "cyclomatic_complexity": 0.3867146966035911,
+        "math_operators": 0.3146022761737598,
+        "execution_time": 0.5,
+        "workload_main": 0.5,
+        "workload_8": 0.5,
+        "workload_9": 0.5
+      },
+      "metadata": {},
+      "parents": [],
+      "created_at": "2026-01-22T07:10:22.132647"
+    },
+    {
+      "cell_index": 4,
+      "program_id": "0cd751fa-da5c-4d48-acdf-7bb7a17b8be1",
+      "code": "import torch\n\ndef rebalance_experts(\n    weight: torch.Tensor,\n    num_replicas: int,\n    num_groups: int,\n    num_nodes: int,\n    num_gpus: int,\n) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:\n    '''\n    Rearrange and replicate logical experts across physical GPU slots.\n\n    Parameters:\n        weight: [layers, num_logical_experts], load statistics\n        num_replicas: 288 (physical experts)\n        num_groups: 8\n        num_nodes: 4\n        num_gpus: 32\n\n    Returns:\n        physical_to_logical_map: [layers, num_replicas]\n        logical_to_physical_map: [layers, num_logical_experts, X]\n        expert_count: [layers, num_logical_experts]\n    '''\n    num_layers, num_logical_experts = weight.shape\n    device = weight.device\n    num_slots_per_gpu = num_replicas // num_gpus\n\n    # Ensure every logical expert has at least one replica initially\n    # This leaves num_replicas - num_logical_experts slots for additional replicas\n    initial_expert_count = torch.ones(num_layers, num_logical_experts, dtype=torch.int64, device=device)\n    remaining_replicas = num_replicas - num_logical_experts\n\n    # Normalize weights for proportional allocation of remaining replicas\n    # Add a small epsilon to avoid division by zero if all weights are zero for a layer\n    normalized_weight = weight.float() / (weight.float().sum(dim=-1, keepdim=True) + 1e-6)\n\n    # Distribute remaining replicas proportionally based on normalized weight\n    # Using a deterministic rounding approach (e.g., largest remainder method)\n    # to ensure sum is exactly `remaining_replicas`\n    num_additional_replicas_float = normalized_weight * remaining_replicas\n    num_additional_replicas_floor = torch.floor(num_additional_replicas_float).to(torch.int64)\n    current_sum = num_additional_replicas_floor.sum(dim=-1)\n    \n    # Distribute the remainder using the largest remainder method\n    remainder = remaining_replicas - current_sum\n    # Calculate fractional parts and sort to assign remaining slots\n    fractional_parts = num_additional_replicas_float - num_additional_replicas_floor.float()\n    \n    for i in range(num_layers):\n        if remainder[i] > 0:\n            # Get indices of experts with largest fractional parts\n            _, top_indices = torch.topk(fractional_parts[i], remainder[i], largest=True)\n            num_additional_replicas_floor[i, top_indices] += 1\n\n    expert_count = initial_expert_count + num_additional_replicas_floor\n    \n    # Ensure no expert has zero count (already handled by initial_expert_count)\n    # Ensure total sum is num_replicas\n    assert (expert_count.sum(dim=-1) == num_replicas).all(), f\"Expert count sum mismatch: {expert_count.sum(dim=-1)} vs {num_replicas}\"\n    assert (expert_count > 0).all(), \"Some experts have zero replicas\"\n\n\n    # Create physical_to_logical_map\n    physical_to_logical_map = torch.empty(num_layers, num_replicas, dtype=torch.int64, device=device)\n    \n    for layer in range(num_layers):\n        current_physical_idx = 0\n        for logical_expert_idx in range(num_logical_experts):\n            count = expert_count[layer, logical_expert_idx].item()\n            physical_to_logical_map[layer, current_physical_idx : current_physical_idx + count] = logical_expert_idx\n            current_physical_idx += count\n        \n        # Shuffle physical_to_logical_map to distribute replicas across GPUs\n        # This is a simple shuffling strategy. More sophisticated strategies\n        # could consider GPU topology, but for this paradigm, a global shuffle\n        # aims for better balance across all physical slots.\n        perm = torch.randperm(num_replicas, device=device)\n        physical_to_logical_map[layer] = physical_to_logical_map[layer, perm]\n\n    # Create logical_to_physical_map\n    max_replicas = expert_count.max().item()\n    logical_to_physical_map = torch.full(\n        (num_layers, num_logical_experts, max_replicas),\n        -1,\n        dtype=torch.int64,\n        device=device,\n    )\n\n    for layer in range(num_layers):\n        # Group physical slots by the logical expert they map to\n        logical_expert_assignments = [[] for _ in range(num_logical_experts)]\n        for physical_idx in range(num_replicas):\n            logical_expert_id = physical_to_logical_map[layer, physical_idx].item()\n            logical_expert_assignments[logical_expert_id].append(physical_idx)\n        \n        for logical_expert_idx in range(num_logical_experts):\n            for i, physical_idx in enumerate(logical_expert_assignments[logical_expert_idx]):\n                if i < max_replicas: # Safety check, should always be true if max_replicas is correct\n                    logical_to_physical_map[layer, logical_expert_idx, i] = physical_idx\n\n    return physical_to_logical_map, logical_to_physical_map, expert_count",
+      "scores": {
+        "score": 48.80702301651557,
+        "balancedness_gpu": 0.6286295600426794,
+        "balancedness_expert": 0.24153574803235286,
+        "avg_time": 0.3897646946372168,
+        "execution_time": 0.3897646946372168,
+        "balancedness_score": 56.57666040384115,
+        "speed_score": 0.025656505418757206,
+        "slow_penalty": 7.795293892744336,
+        "workload_0": 0.6511498392961135,
+        "workload_8": 0.44415612028649504,
+        "workload_9": 0.5941189830635651,
+        "workload_main": 0.6629590250212509
+      },
+      "primary_score": 48.80702301651557,
+      "behavior": {
+        "loop_nesting_max": 0.72160858731314,
+        "cyclomatic_complexity": 0.4557392062124422,
+        "math_operators": 0.3646094961623604,
+        "execution_time": 0.5,
+        "workload_main": 0.5,
+        "workload_8": 0.5,
+        "workload_9": 0.5
+      },
+      "metadata": {
+        "source": "punctuated_equilibrium",
+        "pe_type": "paradigm_shift"
+      },
+      "parents": [],
+      "created_at": "2026-01-22T06:59:27.878429"
+    },
+    {
+      "cell_index": 23,
+      "program_id": "d1a59fda-2adb-4ed8-9fdb-51bb11c0bb24",
+      "code": "import torch\n\ndef rebalance_experts(\n    weight: torch.Tensor,\n    num_replicas: int,\n    num_groups: int,\n    num_nodes: int,\n    num_gpus: int,\n) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:\n    '''\n    Rearrange and replicate logical experts across physical GPU slots.\n\n    Parameters:\n        weight: [layers, num_logical_experts], load statistics\n        num_replicas: 288 (physical experts)\n        num_groups: 8\n        num_nodes: 4\n        num_gpus: 32\n\n    Returns:\n        physical_to_logical_map: [layers, num_replicas]\n        logical_to_physical_map: [layers, num_logical_experts, X]\n        expert_count: [layers, num_logical_experts]\n    '''\n    num_layers, num_logical_experts = weight.shape\n    device = weight.device\n    num_slots_per_gpu = num_replicas // num_gpus\n\n    # Ensure every logical expert has at least one replica initially\n    # This leaves num_replicas - num_logical_experts slots for additional replicas\n    initial_expert_count = torch.ones(num_layers, num_logical_experts, dtype=torch.int64, device=device)\n    remaining_replicas = num_replicas - num_logical_experts\n\n    # Normalize weights for proportional allocation of remaining replicas\n    # Add a small epsilon to avoid division by zero if all weights are zero for a layer\n    weight_sum = weight.sum(dim=-1, keepdim=True)\n    normalized_weight = torch.where(\n        weight_sum > 0,\n        weight.float() / weight_sum,\n        torch.zeros_like(weight, dtype=torch.float)\n    )\n\n    # Distribute remaining replicas proportionally based on normalized weight\n    # Using a deterministic rounding approach (largest remainder method)\n    num_additional_replicas_float = normalized_weight * remaining_replicas\n    num_additional_replicas_floor = torch.floor(num_additional_replicas_float).to(torch.int64)\n    current_sum = num_additional_replicas_floor.sum(dim=-1)\n    \n    # Distribute the remainder using the largest remainder method\n    remainder = remaining_replicas - current_sum\n    # Calculate fractional parts and sort to assign remaining slots\n    fractional_parts = num_additional_replicas_float - num_additional_replicas_floor.float()\n    \n    # Use advanced indexing for vectorized assignment of remainder\n    for i in range(num_layers):\n        if remainder[i] > 0:\n            # Get indices of experts with largest fractional parts\n            _, top_indices = torch.topk(fractional_parts[i], remainder[i].item(), largest=True)\n            num_additional_replicas_floor[i, top_indices] += 1\n\n    expert_count = initial_expert_count + num_additional_replicas_floor\n    \n    # Ensure no expert has zero count (already handled by initial_expert_count)\n    # Ensure total sum is num_replicas\n    assert (expert_count.sum(dim=-1) == num_replicas).all(), f\"Expert count sum mismatch: {expert_count.sum(dim=-1)} vs {num_replicas}\"\n    assert (expert_count > 0).all(), \"Some experts have zero replicas\"\n\n\n    # Create physical_to_logical_map\n    physical_to_logical_map = torch.empty(num_layers, num_replicas, dtype=torch.int64, device=device)\n    \n    for layer in range(num_layers):\n        current_physical_idx = 0\n        for logical_expert_idx in range(num_logical_experts):\n            count = expert_count[layer, logical_expert_idx].item()\n            physical_to_logical_map[layer, current_physical_idx : current_physical_idx + count] = logical_expert_idx\n            current_physical_idx += count\n        \n        # Shuffle physical_to_logical_map to distribute replicas across GPUs\n        # Use a deterministic shuffle to improve reproducibility and balance\n        perm = torch.randperm(num_replicas, device=device)\n        physical_to_logical_map[layer] = physical_to_logical_map[layer, perm]\n\n    # Create logical_to_physical_map\n    max_replicas = expert_count.max().item()\n    logical_to_physical_map = torch.full(\n        (num_layers, num_logical_experts, max_replicas),\n        -1,\n        dtype=torch.int64,\n        device=device,\n    )\n\n    # Vectorized construction of logical_to_physical_map\n    for layer in range(num_layers):\n        # For each physical slot, record which logical expert it maps to\n        logical_expert_ids = physical_to_logical_map[layer]\n        # For each logical expert, find all physical slot indices\n        for logical_expert_idx in range(num_logical_experts):\n            mask = (logical_expert_ids == logical_expert_idx)\n            physical_indices = torch.nonzero(mask, as_tuple=True)[0]\n            num_assignments = len(physical_indices)\n            if num_assignments > 0:\n                logical_to_physical_map[layer, logical_expert_idx, :num_assignments] = physical_indices\n\n    return physical_to_logical_map, logical_to_physical_map, expert_count",
+      "scores": {
+        "score": 46.409226927855116,
+        "balancedness_gpu": 0.62933379963608,
+        "balancedness_expert": 0.24153574632349606,
+        "avg_time": 0.5125163306392179,
+        "execution_time": 0.5125163306392179,
+        "balancedness_score": 56.64004196724721,
+        "speed_score": 0.01951157339226216,
+        "slow_penalty": 10.250326612784358,
+        "workload_0": 0.6544056587997131,
+        "workload_8": 0.44383358890645785,
+        "workload_9": 0.5844926310663515,
+        "workload_main": 0.6639852420344593
+      },
+      "primary_score": 46.409226927855116,
+      "behavior": {
+        "loop_nesting_max": 0.36299779100627155,
+        "cyclomatic_complexity": 0.43615223771547307,
+        "math_operators": 0.38493254864193954,
+        "execution_time": 0.5,
+        "workload_main": 0.5,
+        "workload_8": 0.5,
+        "workload_9": 0.5
+      },
+      "metadata": {},
+      "parents": [],
+      "created_at": "2026-01-22T07:23:12.869913"
+    },
+    {
+      "cell_index": 47,
+      "program_id": "c7a96883-d491-4645-966a-99fa5959f2fb",
+      "code": "\"\"\"Expert parallelism load balancer for MoE models in distributed inference.\"\"\"\n\nimport torch\n\n\ndef balanced_packing(weight: torch.Tensor,\n                     num_packs: int) -> tuple[torch.Tensor, torch.Tensor]:\n    \"\"\"\n    Pack n weighted objects to m packs, such that each bin contains exactly\n    n/m objects and the weights of all packs are as balanced as possible.\n    \"\"\"\n    num_layers, num_groups = weight.shape\n    assert num_groups % num_packs == 0\n    groups_per_pack = num_groups // num_packs\n\n    if groups_per_pack == 1:\n        pack_index = torch.arange(weight.size(-1),\n                                  dtype=torch.int64,\n                                  device=weight.device).expand(weight.shape)\n        rank_in_pack = torch.zeros_like(weight, dtype=torch.int64)\n        return pack_index, rank_in_pack\n\n    indices = weight.float().sort(-1, descending=True).indices.cpu()\n    pack_index = torch.full_like(weight,\n                                 fill_value=-1,\n                                 dtype=torch.int64,\n                                 device=\"cpu\")\n    rank_in_pack = torch.full_like(pack_index, fill_value=-1)\n    for i in range(num_layers):\n        pack_weights = [0] * num_packs\n        pack_items = [0] * num_packs\n        for group in indices[i]:\n            pack = min(\n                (i\n                 for i in range(num_packs) if pack_items[i] < groups_per_pack),\n                key=pack_weights.__getitem__,\n            )\n            assert pack_items[pack] < groups_per_pack\n            pack_index[i, group] = pack\n            rank_in_pack[i, group] = pack_items[pack]\n            pack_weights[pack] += weight[i, group]\n            pack_items[pack] += 1\n    return pack_index, rank_in_pack\n\n\ndef replicate_experts(\n        weight: torch.Tensor,\n        num_phy: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:\n    \"\"\"\n    Replicate `num_log` experts to `num_phy` replicas, such that the maximum\n    load of all replicas is minimized.\n    \"\"\"\n    n, num_log = weight.shape\n    num_redundant = num_phy - num_log\n    assert num_redundant >= 0\n    device = weight.device\n    phy2log = torch.arange(num_phy, dtype=torch.int64,\n                           device=device).repeat(n, 1)\n    rank = torch.zeros(n, num_phy, dtype=torch.int64, device=device)\n    logcnt = torch.ones(n, num_log, dtype=torch.int64, device=device)\n    arangen = torch.arange(n, dtype=torch.int64, device=device)\n    for i in range(num_log, num_phy):\n        redundant_indices = (weight / logcnt).max(dim=-1).indices\n        phy2log[:, i] = redundant_indices\n        rank[:, i] = logcnt[arangen, redundant_indices]\n        logcnt[arangen, redundant_indices] += 1\n    return phy2log, rank, logcnt\n\n\ndef rebalance_experts_hierarchical(\n    weight: torch.Tensor,\n    num_physical_experts: int,\n    num_groups: int,\n    num_nodes: int,\n    num_gpus: int,\n):\n    \"\"\"Hierarchical load balancing: nodes -> GPUs -> experts.\"\"\"\n    num_layers, num_logical_experts = weight.shape\n    assert num_logical_experts % num_groups == 0\n    group_size = num_logical_experts // num_groups\n    assert num_groups % num_nodes == 0\n    groups_per_node = num_groups // num_nodes\n    assert num_gpus % num_nodes == 0\n    assert num_physical_experts % num_gpus == 0\n    phy_experts_per_gpu = num_physical_experts // num_gpus\n\n    def inverse(perm: torch.Tensor) -> torch.Tensor:\n        inv = torch.empty_like(perm)\n        inv.scatter_(\n            1,\n            perm,\n            torch.arange(perm.size(1), dtype=torch.int64,\n                         device=perm.device).expand(perm.shape),\n        )\n        return inv\n\n    # Step 1: pack groups to nodes\n    tokens_per_group = weight.unflatten(-1, (num_groups, group_size)).sum(-1)\n    group_pack_index, group_rank_in_pack = balanced_packing(\n        tokens_per_group, num_nodes)\n    log2mlog = (((group_pack_index * groups_per_node + group_rank_in_pack) *\n                 group_size).unsqueeze(-1) +\n                torch.arange(group_size,\n                             dtype=torch.int64,\n                             device=group_pack_index.device)).flatten(-2)\n    mlog2log = inverse(log2mlog)\n\n    # Step 2: construct redundant experts within nodes\n    tokens_per_mlog = weight.gather(-1, mlog2log).view(\n        -1, num_logical_experts // num_nodes)\n    phy2mlog, phyrank, mlogcnt = replicate_experts(\n        tokens_per_mlog, num_physical_experts // num_nodes)\n\n    # Step 3: pack physical_experts to GPUs\n    tokens_per_phy = (tokens_per_mlog / mlogcnt).gather(-1, phy2mlog)\n    pack_index, rank_in_pack = balanced_packing(tokens_per_phy,\n                                                num_gpus // num_nodes)\n    phy2pphy = pack_index * phy_experts_per_gpu + rank_in_pack\n    pphy2phy = inverse(phy2pphy)\n\n    pphy2mlog = phy2mlog.gather(-1, pphy2phy)\n    pphy2mlog = (pphy2mlog.view(num_layers, num_nodes, -1) + torch.arange(\n        0,\n        num_logical_experts,\n        num_logical_experts // num_nodes,\n        device=group_pack_index.device,\n    ).view(1, -1, 1)).flatten(-2)\n    pphy2log = mlog2log.gather(-1, pphy2mlog)\n    pphyrank = phyrank.gather(-1, pphy2phy).view(num_layers, -1)\n    logcnt = mlogcnt.view(num_layers, -1).gather(-1, log2mlog)\n    return pphy2log, pphyrank, logcnt\n\n\ndef rebalance_experts(\n    weight: torch.Tensor,\n    num_replicas: int,\n    num_groups: int,\n    num_nodes: int,\n    num_gpus: int,\n) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:\n    \"\"\"\n    Entry point for expert-parallelism load balancer.\n    \"\"\"\n    num_layers, num_logical_experts = weight.shape\n    weight = weight.float().cpu()\n    if num_groups % num_nodes == 0:\n        phy2log, phyrank, logcnt = rebalance_experts_hierarchical(\n            weight, num_replicas, num_groups, num_nodes, num_gpus)\n    else:\n        phy2log, phyrank, logcnt = rebalance_experts_hierarchical(\n            weight, num_replicas, 1, 1, num_gpus)\n    num_redundant_experts = num_replicas - num_logical_experts\n    maxlogcnt = num_redundant_experts + 1\n    log2phy: torch.Tensor = torch.full(\n        (num_layers, num_logical_experts, maxlogcnt),\n        -1,\n        dtype=torch.int64,\n        device=logcnt.device,\n    )\n    log2phy.view(num_layers, -1).scatter_(\n        -1,\n        phy2log * maxlogcnt + phyrank,\n        torch.arange(num_replicas, dtype=torch.int64,\n                     device=log2phy.device).expand(num_layers, -1),\n    )\n    return phy2log, log2phy, logcnt\n",
+      "scores": {
+        "score": 44.69714776522178,
+        "balancedness_gpu": 0.6633429393192228,
+        "balancedness_expert": 0.2505991103047041,
+        "avg_time": 0.750851749090626,
+        "execution_time": 0.750851749090626,
+        "balancedness_score": 59.70086453873005,
+        "speed_score": 0.013318208304250782,
+        "slow_penalty": 15.01703498181252,
+        "workload_0": 0.6003613508851514,
+        "workload_8": 0.39648114027593734,
+        "workload_9": 0.6296299106870406,
+        "workload_main": 0.7221105869614692
+      },
+      "primary_score": 44.69714776522178,
+      "behavior": {
+        "loop_nesting_max": 0.36108376986728385,
+        "cyclomatic_complexity": 0.3484854366457214,
+        "math_operators": 0.812061731746209,
+        "execution_time": 0.5226449641823248,
+        "workload_main": 0.6816597984970907,
+        "workload_8": 0.4341392050935169,
+        "workload_9": 0.3769960668745595
+      },
+      "metadata": {},
+      "parents": [],
+      "created_at": "2026-01-22T06:57:10.463998"
+    },
+    {
+      "cell_index": 8,
+      "program_id": "9621c22a-5076-4dbb-a071-25dbeb59495c",
+      "code": "import torch\n\ndef rebalance_experts(\n    weight: torch.Tensor,\n    num_replicas: int,\n    num_groups: int,\n    num_nodes: int,\n    num_gpus: int,\n) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:\n    '''\n    Rearrange and replicate logical experts across physical GPU slots.\n\n    Parameters:\n        weight: [layers, num_logical_experts], load statistics\n        num_replicas: 288 (physical experts)\n        num_groups: 8\n        num_nodes: 4\n        num_gpus: 32\n\n    Returns:\n        physical_to_logical_map: [layers, num_replicas]\n        logical_to_physical_map: [layers, num_logical_experts, X]\n        expert_count: [layers, num_logical_experts]\n    '''\n    num_layers, num_logical_experts = weight.shape\n    device = weight.device\n    num_slots_per_gpu = num_replicas // num_gpus\n\n    # Initialize expert_count with at least one replica for each expert\n    expert_count = torch.ones(num_layers, num_logical_experts, dtype=torch.int64, device=device)\n    \n    # Calculate remaining replicas to distribute\n    remaining_replicas_to_distribute = num_replicas - num_logical_experts\n\n    # Normalize weights for proportional distribution\n    # Add a small epsilon to avoid division by zero if all weights are zero for a layer\n    # Cast to float for calculations to maintain precision\n    weight_float = weight.float()\n    weight_sum = weight_float.sum(dim=-1, keepdim=True) + 1e-9\n    normalized_weight = weight_float / weight_sum\n\n    # Distribute remaining replicas using an iterative greedy approach\n    # This approach aims to add replicas one by one to the experts\n    # that currently have the highest \"need\" based on their weight and current replica count.\n    # The \"need\" can be modeled as weight / current_replica_count, similar to how\n    # proportional allocation works but iteratively.\n\n    for _ in range(remaining_replicas_to_distribute):\n        # Calculate the \"cost\" or \"load\" per replica for each expert\n        # An expert with higher weight but fewer replicas will have a higher effective load\n        # This makes it a candidate for an additional replica\n        effective_load_per_replica = normalized_weight / (expert_count.float() + 1e-9)\n        \n        # Find the expert that needs a replica the most (highest effective load)\n        # Using max(dim=-1) to get the expert index for each layer\n        _, expert_to_add_replica_to = torch.max(effective_load_per_replica, dim=-1)\n        \n        # Add a replica to the chosen expert for each layer\n        layer_indices = torch.arange(num_layers, device=device)\n        expert_count[layer_indices, expert_to_add_replica_to] += 1\n\n    # Ensure expert_count sums to num_replicas for all layers\n    assert (expert_count.sum(dim=-1) == num_replicas).all(), \"Expert count sum mismatch\"\n    assert (expert_count >= 1).all(), \"Some experts have less than one replica\"\n\n    # Create physical_to_logical_map\n    physical_to_logical_map = torch.empty(num_layers, num_replicas, dtype=torch.int64, device=device)\n    \n    for layer in range(num_layers):\n        # Create list of logical expert IDs, repeated by their count\n        expert_indices_for_layer = []\n        for logical_expert_idx in range(num_logical_experts):\n            count = expert_count[layer, logical_expert_idx].item()\n            expert_indices_for_layer.extend([logical_expert_idx] * count)\n        \n        # Convert to tensor and shuffle to distribute across physical slots\n        # This helps in balancing load across GPUs\n        expert_tensor = torch.tensor(expert_indices_for_layer, dtype=torch.int64, device=device)\n        perm = torch.randperm(num_replicas, device=device)\n        physical_to_logical_map[layer] = expert_tensor[perm]\n        \n        # Ensure all physical slots are assigned\n        assert (physical_to_logical_map[layer] >= 0).all(), \"Some physical slots have invalid logical expert mapping\"\n        assert (physical_to_logical_map[layer] < num_logical_experts).all(), \"Logical expert index out of bounds\"\n        \n        # Verify that the number of replicas matches exactly\n        assert len(expert_indices_for_layer) == num_replicas, f\"Expected {num_replicas} replicas, got {len(expert_indices_for_layer)}\"\n\n    # Create logical_to_physical_map\n    max_replicas = expert_count.max().item()\n    logical_to_physical_map = torch.full(\n        (num_layers, num_logical_experts, max_replicas),\n        -1,\n        dtype=torch.int64,\n        device=device,\n    )\n\n    for layer in range(num_layers):\n        # Create a list of physical slots for each logical expert\n        expert_physical_slots = [[] for _ in range(num_logical_experts)]\n        for physical_idx in range(num_replicas):\n            logical_expert_id = physical_to_logical_map[layer, physical_idx].item()\n            expert_physical_slots[logical_expert_id].append(physical_idx)\n        \n        # Assign physical slots to logical_to_physical_map\n        for logical_expert_idx in range(num_logical_experts):\n            slots = expert_physical_slots[logical_expert_idx]\n            if slots:\n                logical_to_physical_map[layer, logical_expert_idx, :len(slots)] = torch.tensor(slots, dtype=torch.int64, device=device)\n            \n        # Validate logical_to_physical_map\n        assert (logical_to_physical_map[layer] >= -1).all(), \"Logical to physical map has invalid values\"\n        assert (logical_to_physical_map[layer] < num_replicas).all(), \"Physical slot index out of bounds\"\n        \n        # Verify that each logical expert has correct number of replicas\n        for logical_expert_idx in range(num_logical_experts):\n            actual_count = (logical_to_physical_map[layer, logical_expert_idx] != -1).sum().item()\n            expected_count = expert_count[layer, logical_expert_idx].item()\n            assert actual_count == expected_count, f\"Logical expert {logical_expert_idx} has {actual_count} replicas, expected {expected_count}\"\n\n    # Final consistency check: ensure total replicas per layer is correct\n    assert (expert_count.sum(dim=-1) == num_replicas).all(), \"Expert count sum mismatch across layers\"\n    \n    return physical_to_logical_map, logical_to_physical_map, expert_count",
+      "scores": {
+        "score": 44.546232678577134,
+        "balancedness_gpu": 0.6503132149317167,
+        "balancedness_expert": 0.28545247851616284,
+        "avg_time": 0.6998123105493671,
+        "execution_time": 0.6998123105493671,
+        "balancedness_score": 58.5281893438545,
+        "speed_score": 0.014289545709977286,
+        "slow_penalty": 13.996246210987342,
+        "workload_0": 0.6468760108523652,
+        "workload_8": 0.4420916470060073,
+        "workload_9": 0.6008492954462513,
+        "workload_main": 0.6954762226972077
+      },
+      "primary_score": 44.546232678577134,
+      "behavior": {
+        "loop_nesting_max": 0.36185398834893456,
+        "cyclomatic_complexity": 0.4750622579843416,
+        "math_operators": 0.4007547873443271,
+        "execution_time": 0.5,
+        "workload_main": 0.5,
+        "workload_8": 0.5,
+        "workload_9": 0.5
+      },
+      "metadata": {},
+      "parents": [],
+      "created_at": "2026-01-22T07:22:50.018724"
+    },
+    {
+      "cell_index": 7,
+      "program_id": "ba1589c8-7e26-4a17-b193-90f2597bbb52",
+      "code": "import torch\n\ndef rebalance_experts(\n    weight: torch.Tensor,\n    num_replicas: int,\n    num_groups: int,\n    num_nodes: int,\n    num_gpus: int,\n) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:\n    '''\n    Rearrange and replicate logical experts across physical GPU slots.\n\n    Parameters:\n        weight: [layers, num_logical_experts], load statistics\n        num_replicas: 288 (physical experts)\n        num_groups: 8\n        num_nodes: 4\n        num_gpus: 32\n\n    Returns:\n        physical_to_logical_map: [layers, num_replicas]\n        logical_to_physical_map: [layers, num_logical_experts, X]\n        expert_count: [layers, num_logical_experts]\n    '''\n    num_layers, num_logical_experts = weight.shape\n    device = weight.device\n    num_slots_per_gpu = num_replicas // num_gpus\n\n    # Ensure every logical expert has at least one replica initially\n    expert_count = torch.ones(num_layers, num_logical_experts, dtype=torch.int64, device=device)\n    remaining_replicas = num_replicas - num_logical_experts\n\n    # Normalize weights for proportional allocation of remaining replicas\n    total_weight = weight.float().sum(dim=-1, keepdim=True)\n    # Avoid division by zero by using small epsilon\n    normalized_weight = weight.float() / (total_weight + 1e-8)\n\n    # Distribute remaining replicas using largest remainder method\n    expected_replicas = normalized_weight * remaining_replicas\n    floor_replicas = torch.floor(expected_replicas).to(torch.int64)\n    remainder = remaining_replicas - floor_replicas.sum(dim=-1)\n\n    # Add one extra replica to experts with largest fractional parts\n    fractional_parts = expected_replicas - floor_replicas.float()\n    for layer in range(num_layers):\n        if remainder[layer] > 0:\n            _, top_indices = torch.topk(fractional_parts[layer], remainder[layer].item(), largest=True, sorted=True)\n            floor_replicas[layer, top_indices] += 1\n\n    expert_count += floor_replicas\n    assert (expert_count.sum(dim=-1) == num_replicas).all(), f\"Expert count sum mismatch: {expert_count.sum(dim=-1)} vs {num_replicas}\"\n    assert (expert_count >= 1).all(), \"Some experts have less than one replica\"\n\n    # Create physical_to_logical_map with structured shuffling for GPU balance\n    physical_to_logical_map = torch.empty(num_layers, num_replicas, dtype=torch.int64, device=device)\n    for layer in range(num_layers):\n        # Build list of logical expert IDs with repetition according to expert_count\n        expert_indices = []\n        for logical_expert_idx in range(num_logical_experts):\n            count = expert_count[layer, logical_expert_idx].item()\n            expert_indices.extend([logical_expert_idx] * count)\n        \n        # Convert to tensor and shuffle using deterministic seed per layer\n        generator = torch.Generator(device=device)\n        generator.manual_seed(layer * 12345 + 17)\n        perm = torch.randperm(len(expert_indices), device=device, generator=generator)\n        physical_to_logical_map[layer] = torch.tensor(expert_indices, dtype=torch.int64, device=device)[perm]\n\n    # Create logical_to_physical_map with optimized indexing\n    max_replicas = expert_count.max().item()\n    logical_to_physical_map = torch.full(\n        (num_layers, num_logical_experts, max_replicas),\n        -1,\n        dtype=torch.int64,\n        device=device,\n    )\n\n    for layer in range(num_layers):\n        assignments = [[] for _ in range(num_logical_experts)]\n        for physical_idx in range(num_replicas):\n            logical_expert_id = physical_to_logical_map[layer, physical_idx].item()\n            assignments[logical_expert_id].append(physical_idx)\n        \n        for logical_expert_id in range(num_logical_experts):\n            for i, physical_idx in enumerate(assignments[logical_expert_id]):\n                logical_to_physical_map[layer, logical_expert_id, i] = physical_idx\n\n    # Apply GPU load balancing: assign high-load experts to least loaded GPUs\n    num_slots_per_gpu = num_replicas // num_gpus\n    for layer in range(num_layers):\n        # Build list of (logical_expert_id, weight) sorted by weight descending\n        expert_list = []\n        for slot_idx in range(num_replicas):\n            logical_expert_id = physical_to_logical_map[layer, slot_idx].item()\n            weight_val = weight[layer, logical_expert_id].float()\n            expert_list.append((logical_expert_id, weight_val))\n        \n        expert_list.sort(key=lambda x: x[1], reverse=True)\n\n        # Initialize GPU load tracking and new mapping\n        gpu_loads = torch.zeros(num_gpus, dtype=torch.float32, device=device)\n        new_physical_to_logical_map = torch.full((num_replicas,), -1, dtype=torch.int64, device=device)\n\n        # Assign each expert to the GPU with minimal current load\n        for logical_expert_id, _ in expert_list:\n            min_load_gpu = torch.argmin(gpu_loads).item()\n            start_idx = min_load_gpu * num_slots_per_gpu\n            end_idx = start_idx + num_slots_per_gpu\n\n            # Find an available slot in that GPU\n            for slot_idx in range(start_idx, end_idx):\n                if new_physical_to_logical_map[slot_idx] == -1:\n                    new_physical_to_logical_map[slot_idx] = logical_expert_id\n                    gpu_loads[min_load_gpu] += weight[layer, logical_expert_id].float()\n                    break\n\n        physical_to_logical_map[layer] = new_physical_to_logical_map\n\n    return physical_to_logical_map, logical_to_physical_map, expert_count",
+      "scores": {
+        "score": 36.54899982624959,
+        "balancedness_gpu": 0.6282611296989262,
+        "balancedness_expert": 0.24153575116255305,
+        "avg_time": 1.8187924872724002,
+        "execution_time": 1.8187924872724002,
+        "balancedness_score": 56.54350167290336,
+        "speed_score": 0.005498153346232896,
+        "slow_penalty": 20,
+        "workload_0": 0.6437999356565939,
+        "workload_8": 0.4299112865398878,
+        "workload_9": 0.5875891728159972,
+        "workload_main": 0.6652621105775255
+      },
+      "primary_score": 36.54899982624959,
+      "behavior": {
+        "loop_nesting_max": 0.7182901063287255,
+        "cyclomatic_complexity": 0.6603918520067541,
+        "math_operators": 0.5007789489003526,
+        "execution_time": 0.5,
+        "workload_main": 0.5,
+        "workload_8": 0.5,
+        "workload_9": 0.5
+      },
+      "metadata": {},
+      "parents": [],
+      "created_at": "2026-01-22T07:18:58.093429"
+    },
+    {
+      "cell_index": 24,
+      "program_id": "5dcd17cc-0dae-46c8-9cbf-9a6c66698590",
+      "code": "import torch\n\ndef rebalance_experts(\n    weight: torch.Tensor,\n    num_replicas: int,\n    num_groups: int,\n    num_nodes: int,\n    num_gpus: int,\n) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:\n    '''\n    Rearrange and replicate logical experts across physical GPU slots.\n\n    Parameters:\n        weight: [layers, num_logical_experts], load statistics\n        num_replicas: 288 (physical experts)\n        num_groups: 8\n        num_nodes: 4\n        num_gpus: 32\n\n    Returns:\n        physical_to_logical_map: [layers, num_replicas]\n        logical_to_physical_map: [layers, num_logical_experts, X]\n        expert_count: [layers, num_logical_experts]\n    '''\n    num_layers, num_logical_experts = weight.shape\n    device = weight.device\n    num_slots_per_gpu = num_replicas // num_gpus\n\n    # Ensure every logical expert has at least one replica initially\n    expert_count = torch.ones(num_layers, num_logical_experts, dtype=torch.int64, device=device)\n    remaining_replicas = num_replicas - num_logical_experts\n\n    # Normalize weights for proportional allocation of remaining replicas\n    total_weight = weight.float().sum(dim=-1, keepdim=True)\n    # Avoid division by zero by using small epsilon\n    normalized_weight = weight.float() / (total_weight + 1e-8)\n\n    # Distribute remaining replicas using largest remainder method\n    # Calculate fractional parts\n    expected_replicas = normalized_weight * remaining_replicas\n    floor_replicas = torch.floor(expected_replicas).to(torch.int64)\n    remainder = remaining_replicas - floor_replicas.sum(dim=-1)\n\n    # Add one extra replica to experts with largest fractional parts\n    fractional_parts = expected_replicas - floor_replicas.float()\n    for layer in range(num_layers):\n        if remainder[layer] > 0:\n            # Use stable sorting to break ties deterministically\n            _, top_indices = torch.topk(fractional_parts[layer], remainder[layer].item(), largest=True, sorted=True)\n            floor_replicas[layer, top_indices] += 1\n\n    expert_count += floor_replicas\n    assert (expert_count.sum(dim=-1) == num_replicas).all(), f\"Expert count sum mismatch: {expert_count.sum(dim=-1)} vs {num_replicas}\"\n    assert (expert_count >= 1).all(), \"Some experts have less than one replica\"\n\n    # Create physical_to_logical_map with structured shuffling for GPU balance\n    physical_to_logical_map = torch.empty(num_layers, num_replicas, dtype=torch.int64, device=device)\n    for layer in range(num_layers):\n        # Build list of logical expert IDs with repetition according to expert_count\n        expert_indices = []\n        for logical_expert_idx in range(num_logical_experts):\n            count = expert_count[layer, logical_expert_idx].item()\n            expert_indices.extend([logical_expert_idx] * count)\n        \n        # Convert to tensor and shuffle using deterministic seed per layer\n        # Use a fixed seed derived from layer index to ensure reproducibility\n        # Use torch.Generator for better reproducibility across devices\n        generator = torch.Generator(device=device)\n        generator.manual_seed(layer * 12345 + 17)\n        perm = torch.randperm(num_replicas, device=device, generator=generator)\n        physical_to_logical_map[layer] = torch.tensor(expert_indices, dtype=torch.int64, device=device)[perm]\n\n    # Create logical_to_physical_map with optimized indexing\n    max_replicas = expert_count.max().item()\n    logical_to_physical_map = torch.full(\n        (num_layers, num_logical_experts, max_replicas),\n        -1,\n        dtype=torch.int64,\n        device=device,\n    )\n\n    for layer in range(num_layers):\n        # Use a list of lists to collect physical slots per logical expert\n        assignments = [[] for _ in range(num_logical_experts)]\n        for physical_idx in range(num_replicas):\n            logical_expert_id = physical_to_logical_map[layer, physical_idx].item()\n            assignments[logical_expert_id].append(physical_idx)\n\n        # Assign collected physical slots to logical_to_physical_map\n        for logical_expert_id in range(num_logical_experts):\n            for i, physical_idx in enumerate(assignments[logical_expert_id]):\n                logical_to_physical_map[layer, logical_expert_id, i] = physical_idx\n\n    # Apply GPU load balancing by reordering physical slots within each GPU\n    # Each GPU has num_slots_per_gpu slots, and we want to balance load per GPU\n    num_slots_per_gpu = num_replicas // num_gpus\n    for layer in range(num_layers):\n        # Extract current GPU assignments and their weights\n        gpu_loads = torch.zeros(num_gpus, dtype=torch.float32, device=device)\n        for gpu_id in range(num_gpus):\n            start_idx = gpu_id * num_slots_per_gpu\n            end_idx = start_idx + num_slots_per_gpu\n            for slot_idx in range(start_idx, end_idx):\n                logical_expert_id = physical_to_logical_map[layer, slot_idx].item()\n                gpu_loads[gpu_id] += weight[layer, logical_expert_id].float()\n\n        # Reorder slots within each GPU to balance load\n        # Sort GPUs by load, then reassign slots in a round-robin fashion\n        # This ensures that high-load experts are spread across GPUs\n        sorted_gpu_ids = torch.argsort(gpu_loads, descending=True)\n        new_physical_to_logical_map = torch.empty(num_replicas, dtype=torch.int64, device=device)\n\n        # Assign experts to GPUs in a balanced way\n        # Distribute high-load experts across different GPUs\n        for i, gpu_id in enumerate(sorted_gpu_ids):\n            start_idx = gpu_id * num_slots_per_gpu\n            end_idx = start_idx + num_slots_per_gpu\n            for j in range(num_slots_per_gpu):\n                slot_idx = start_idx + j\n                new_physical_to_logical_map[slot_idx] = physical_to_logical_map[layer, slot_idx]\n\n        # Reassign based on sorted GPU load (round-robin for high-load experts)\n        # We'll use a more sophisticated reordering: assign the highest-weighted experts to the least loaded GPUs\n        # Create a list of (logical_expert_id, weight) for all experts in this layer\n        expert_weights = []\n        for slot_idx in range(num_replicas):\n            logical_expert_id = physical_to_logical_map[layer, slot_idx].item()\n            weight_val = weight[layer, logical_expert_id].float()\n            expert_weights.append((logical_expert_id, weight_val))\n\n        # Sort by weight descending\n        expert_weights.sort(key=lambda x: x[1], reverse=True)\n\n        # Assign experts to GPUs in round-robin fashion to balance load\n        gpu_idx = 0\n        gpu_loads = torch.zeros(num_gpus, dtype=torch.float32, device=device)\n        for logical_expert_id, _ in expert_weights:\n            # Find the GPU with minimal load\n            min_load_gpu = torch.argmin(gpu_loads).item()\n            # Assign this expert to that GPU\n            start_idx = min_load_gpu * num_slots_per_gpu\n            # Find an available slot in that GPU\n            for slot_idx in range(start_idx, start_idx + num_slots_per_gpu):\n                if new_physical_to_logical_map[slot_idx] == -1:  # Placeholder\n                    new_physical_to_logical_map[slot_idx] = logical_expert_id\n                    gpu_loads[min_load_gpu] += weight[layer, logical_expert_id].float()\n                    break\n            else:\n                # Fallback: assign to any available slot in that GPU\n                for slot_idx in range(start_idx, start_idx + num_slots_per_gpu):\n                    if new_physical_to_logical_map[slot_idx] == -1:\n                        new_physical_to_logical_map[slot_idx] = logical_expert_id\n                        gpu_loads[min_load_gpu] += weight[layer, logical_expert_id].float()\n                        break\n\n        physical_to_logical_map[layer] = new_physical_to_logical_map\n\n    return physical_to_logical_map, logical_to_physical_map, expert_count",
+      "scores": {
+        "score": 36.54639461137782,
+        "balancedness_gpu": 0.6282611296989262,
+        "balancedness_expert": 0.24153575116255305,
+        "avg_time": 3.45669293981998,
+        "execution_time": 3.45669293981998,
+        "balancedness_score": 56.54350167290336,
+        "speed_score": 0.0028929384744601546,
+        "slow_penalty": 20,
+        "workload_0": 0.6437999356565939,
+        "workload_8": 0.4299112865398878,
+        "workload_9": 0.5875891728159972,
+        "workload_main": 0.6652621105775255
+      },
+      "primary_score": 36.54639461137782,
+      "behavior": {
+        "loop_nesting_max": 0.9011236037428638,
+        "cyclomatic_complexity": 0.7756026863896571,
+        "math_operators": 0.5624535760781645,
+        "execution_time": 0.5,
+        "workload_main": 0.5,
+        "workload_8": 0.5,
+        "workload_9": 0.5
+      },
+      "metadata": {},
+      "parents": [],
+      "created_at": "2026-01-22T07:09:02.883755"
+    },
+    {
+      "cell_index": 42,
+      "program_id": "85f2a796-e1ed-46f1-ac8d-819e5f4e350c",
+      "code": "import torch\n\ndef rebalance_experts(\n    weight: torch.Tensor,\n    num_replicas: int,\n    num_groups: int,\n    num_nodes: int,\n    num_gpus: int,\n) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:\n    '''\n    Rearrange and replicate logical experts across physical GPU slots.\n\n    Parameters:\n        weight: [layers, num_logical_experts], load statistics\n        num_replicas: 288 (physical experts)\n        num_groups: 8\n        num_nodes: 4\n        num_gpus: 32\n\n    Returns:\n        physical_to_logical_map: [layers, num_replicas]\n        logical_to_physical_map: [layers, num_logical_experts, X]\n        expert_count: [layers, num_logical_experts]\n    '''\n    num_layers, num_logical_experts = weight.shape\n    device = weight.device\n    num_slots_per_gpu = num_replicas // num_gpus\n\n    # Ensure every logical expert has at least one replica initially\n    initial_expert_count = torch.ones(num_layers, num_logical_experts, dtype=torch.int64, device=device)\n    remaining_replicas = num_replicas - num_logical_experts\n\n    # Normalize weights for proportional allocation of remaining replicas\n    weight_sum = weight.float().sum(dim=-1, keepdim=True)\n    weight_sum = torch.where(weight_sum > 0, weight_sum, torch.ones_like(weight_sum))  # Avoid division by zero\n    normalized_weight = weight.float() / weight_sum\n\n    # Distribute remaining replicas proportionally using largest remainder method\n    expected_replicas = normalized_weight * remaining_replicas\n    floor_replicas = torch.floor(expected_replicas).to(torch.int64)\n    remainder = remaining_replicas - floor_replicas.sum(dim=-1)\n\n    # Assign remaining replicas to experts with largest fractional parts\n    fractional_parts = expected_replicas - floor_replicas.float()\n    for layer in range(num_layers):\n        if remainder[layer] > 0:\n            # Use torch.topk with integer k and ensure proper device\n            _, top_indices = torch.topk(fractional_parts[layer], remainder[layer].item(), largest=True)\n            floor_replicas[layer, top_indices] += 1\n\n    expert_count = initial_expert_count + floor_replicas\n    \n    # Ensure no expert has zero count (already handled by initial_expert_count)\n    # Ensure total sum is num_replicas\n    assert (expert_count.sum(dim=-1) == num_replicas).all(), f\"Expert count sum mismatch: {expert_count.sum(dim=-1)} vs {num_replicas}\"\n    assert (expert_count > 0).all(), \"Some experts have zero replicas\"\n\n\n    # Create physical_to_logical_map with load-balanced placement\n    physical_to_logical_map = torch.empty(num_layers, num_replicas, dtype=torch.int64, device=device)\n    \n    for layer in range(num_layers):\n        # Build list of logical expert IDs with repetition\n        expert_indices = []\n        for logical_expert_idx in range(num_logical_experts):\n            count = expert_count[layer, logical_expert_idx].item()\n            expert_indices.extend([logical_expert_idx] * count)\n        \n        # Sort experts by weight descending to place heavier experts first\n        # Use the actual weight to prioritize high-load experts\n        expert_weights = weight[layer, torch.tensor(expert_indices, device=device)]\n        _, sorted_indices = torch.sort(expert_weights, descending=True)\n        ordered_expert_indices = torch.tensor(expert_indices, device=device)[sorted_indices]\n        \n        # Distribute replicas in a round-robin fashion across GPUs to balance load\n        # Use a deterministic, staggered permutation to avoid clustering on GPUs\n        perm = torch.empty(num_replicas, dtype=torch.int64, device=device)\n        for i in range(num_replicas):\n            gpu_id = (i // num_slots_per_gpu) % num_gpus\n            slot_in_gpu = i % num_slots_per_gpu\n            # Use a staggered pattern: offset by the expert's index in the ordered list\n            # This helps spread high-load experts across GPUs\n            offset = (i // num_gpus) % num_logical_experts\n            physical_slot = gpu_id * num_slots_per_gpu + (slot_in_gpu + offset) % num_slots_per_gpu\n            perm[i] = physical_slot\n        physical_to_logical_map[layer] = ordered_expert_indices[perm]\n\n    # Create logical_to_physical_map\n    max_replicas = expert_count.max().item()\n    logical_to_physical_map = torch.full(\n        (num_layers, num_logical_experts, max_replicas),\n        -1,\n        dtype=torch.int64,\n        device=device,\n    )\n\n    for layer in range(num_layers):\n        # Use advanced indexing to find physical slots per logical expert\n        for logical_expert_id in range(num_logical_experts):\n            mask = (physical_to_logical_map[layer] == logical_expert_id)\n            physical_indices = torch.nonzero(mask, as_tuple=False).squeeze(-1)\n            num_assigned = min(len(physical_indices), max_replicas)\n            logical_to_physical_map[layer, logical_expert_id, :num_assigned] = physical_indices[:num_assigned]\n\n    return physical_to_logical_map, logical_to_physical_map, expert_count",
+      "scores": {
+        "score": 22.314646673381176,
+        "balancedness_gpu": 0.38108142228807246,
+        "balancedness_expert": 0.11862213264732474,
+        "avg_time": 0.5999674451780844,
+        "execution_time": 0.5999674451780844,
+        "balancedness_score": 34.29732800592652,
+        "speed_score": 0.01666757101634367,
+        "slow_penalty": 11.999348903561689,
+        "workload_0": 0.528038779338144,
+        "workload_8": 0.3874436362925592,
+        "workload_9": 0.33692548539807915,
+        "workload_main": 0.37082579422934997
+      },
+      "primary_score": 22.314646673381176,
+      "behavior": {
+        "loop_nesting_max": 0.37342168421161753,
+        "cyclomatic_complexity": 0.43573573089904966,
+        "math_operators": 0.5530820500951267,
+        "execution_time": 0.5,
+        "workload_main": 0.5,
+        "workload_8": 0.5,
+        "workload_9": 0.5
+      },
+      "metadata": {},
+      "parents": [],
+      "created_at": "2026-01-22T07:17:26.856274"
+    },
+    {
+      "cell_index": 20,
+      "program_id": "71be8f1a-5398-49a2-8576-c0fd5a8cccde",
+      "code": "import torch\n\ndef rebalance_experts(\n    weight: torch.Tensor,\n    num_replicas: int,\n    num_groups: int,\n    num_nodes: int,\n    num_gpus: int,\n) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:\n    '''\n    Rearrange and replicate logical experts across physical GPU slots.\n\n    Parameters:\n        weight: [layers, num_logical_experts], load statistics\n        num_replicas: 288 (physical experts)\n        num_groups: 8\n        num_nodes: 4\n        num_gpus: 32\n\n    Returns:\n        physical_to_logical_map: [layers, num_replicas]\n        logical_to_physical_map: [layers, num_logical_experts, X]\n        expert_count: [layers, num_logical_experts]\n    '''\n    num_layers, num_logical_experts = weight.shape\n    device = weight.device\n    num_slots_per_gpu = num_replicas // num_gpus\n    num_gpus_per_node = num_gpus // num_nodes\n\n    # Paradigm Shift: Linear Programming / Optimization based approach\n    # Instead of greedy or hierarchical heuristics, we formulate the replica\n    # distribution as a problem to minimize load imbalance under constraints.\n    # Since solving a full LP for integer assignments is complex and slow,\n    # we'll use a simplified, iterative optimization-like approach to\n    # distribute replicas and then assign them to physical slots.\n\n    # Step 1: Determine expert_count for each logical expert\n    # Goal: Distribute num_replicas such that expert_count is proportional to weight,\n    # and each expert has at least one replica.\n    \n    # Initialize expert_count with 1 for each expert (minimum requirement)\n    expert_count = torch.ones(num_layers, num_logical_experts, dtype=torch.int64, device=device)\n    \n    # Calculate remaining replicas to distribute\n    remaining_replicas = num_replicas - num_logical_experts\n\n    # Normalize weights to get target proportions\n    # Add a small epsilon to avoid division by zero or NaN if all weights are zero\n    normalized_weight = weight.float() / (weight.float().sum(dim=-1, keepdim=True) + 1e-9)\n\n    # Iteratively distribute remaining replicas to minimize load imbalance\n    # This simulates a \"water-filling\" or \"equalizing\" process.\n    # We add replicas one by one to the expert that currently has the lowest\n    # \"effective load\" per replica (weight / count) to balance them out.\n    # This is a common heuristic for load balancing, approximating an optimal distribution.\n    \n    for _ in range(remaining_replicas):\n        # Calculate the current \"load per replica\" for each expert\n        # An expert with higher weight but fewer replicas will have a higher effective load\n        # We want to add a replica to the one that currently has the highest \"need\"\n        # The \"need\" can be modeled as (weight / current_expert_count)\n        \n        # To avoid experts with extremely small weights getting too many replicas,\n        # we balance between raw weight and current count. A simple way is to consider\n        # the normalized weight divided by current count.\n        # Higher value means this expert is 'under-replicated' relative to its weight.\n        \n        # Using a slightly different metric than the greedy solution from Region 3\n        # to ensure fundamental difference. Instead of 'effective_load_per_replica = normalized_weight / expert_count.float()',\n        # we will use 'potential_gain = normalized_weight * (expert_count + 1).float() / expert_count.float()'\n        # or simply `normalized_weight / expert_count` for simplicity but focusing on the iterative aspect\n        # which is different from direct proportional allocation.\n        \n        # Let's use normalized_weight divided by current expert_count to find the most \"stressed\" expert\n        # This is essentially finding the expert whose current replica count is least proportional to its weight.\n        current_proportional_load = normalized_weight / expert_count.float()\n        \n        # Find the expert that has the highest current_proportional_load for each layer\n        _, expert_to_add_replica = torch.max(current_proportional_load, dim=-1)\n        \n        # Add one replica to the chosen expert for each layer\n        expert_count[torch.arange(num_layers, device=device), expert_to_add_replica] += 1\n\n    # Ensure expert_count sums to num_replicas for all layers\n    assert (expert_count.sum(dim=-1) == num_replicas).all(), f\"Expert count sum mismatch: {expert_count.sum(dim=-1)} vs {num_replicas}\"\n    assert (expert_count >= 1).all(), \"Some experts have less than one replica\"\n\n    # Step 2: Create physical_to_logical_map and logical_to_physical_map\n    # This step focuses on assigning the determined replicas to actual physical slots\n    # while attempting to balance load across GPUs.\n    \n    physical_to_logical_map = torch.empty(num_layers, num_replicas, dtype=torch.int64, device=device)\n    \n    # max_replicas is needed for logical_to_physical_map padding\n    max_replicas_per_expert = expert_count.max().item()\n    logical_to_physical_map = torch.full(\n        (num_layers, num_logical_experts, max_replicas_per_expert),\n        -1,\n        dtype=torch.int64,\n        device=device,\n    )\n\n    # For each layer, assign experts to physical slots trying to balance GPU load\n    for layer in range(num_layers):\n        # Create a list of (logical_expert_id, assigned_weight) for each replica\n        # We need to distribute these num_replicas items to num_gpus groups\n        # such that each group (GPU) has num_slots_per_gpu items and the sum of weights\n        # on each GPU is as balanced as possible.\n        \n        # Collect all logical expert assignments for this layer\n        all_expert_assignments = []\n        for logical_expert_idx in range(num_logical_experts):\n            count = expert_count[layer, logical_expert_idx].item()\n            expert_weight = weight[layer, logical_expert_idx].item()\n            for _ in range(count):\n                all_expert_assignments.append((logical_expert_idx, expert_weight))\n        \n        # Sort these assignments to help with greedy distribution\n        # Sorting by weight descending helps in bin packing to keep bins balanced\n        all_expert_assignments.sort(key=lambda x: x[1], reverse=True)\n\n        # Initialize GPU loads and assignments\n        gpu_loads = torch.zeros(num_gpus, dtype=torch.float32, device=device)\n        gpu_slot_counts = torch.zeros(num_gpus, dtype=torch.int64, device=device)\n        \n        # A list to hold the final physical to logical mapping for this layer\n        temp_physical_to_logical = torch.empty(num_replicas, dtype=torch.int64, device=device)\n        \n        # A list of lists to build logical_to_physical_map\n        temp_logical_to_physical_lists = [[] for _ in range(num_logical_experts)]\n\n        # Greedily assign experts to GPUs using a simple round-robin or min-load strategy\n        # This is a common heuristic for bin packing.\n        # We iterate through the sorted experts and assign each replica to the GPU\n        # that currently has the minimum load (sum of weights).\n        \n        # We need to know which physical slot index corresponds to the assignment\n        physical_slot_idx_counter = 0\n        \n        # Use a min-heap to keep track of GPU loads for efficient selection\n        import heapq\n        gpu_heap = [(0.0, g_idx) for g_idx in range(num_gpus)] # (current_load, gpu_index)\n        \n        # Keep track of physical slots assigned to each GPU\n        gpu_physical_slots = [[] for _ in range(num_gpus)]\n\n        for logical_expert_id, expert_w in all_expert_assignments:\n            # Pop the GPU with the minimum current load\n            current_load, gpu_idx = heapq.heappop(gpu_heap)\n\n            # Assign this expert replica to the physical slot within this GPU\n            # We need to map physical_slot_idx_counter to the actual GPU slot.\n            # For simplicity, we can just assign sequentially and then shuffle.\n            # A more direct assignment would be to assign to gpu_physical_slots[gpu_idx].append(physical_slot_idx_counter)\n            \n            # The current physical slot index is `physical_slot_idx_counter`\n            temp_physical_to_logical[physical_slot_idx_counter] = logical_expert_id\n            temp_logical_to_physical_lists[logical_expert_id].append(physical_slot_idx_counter)\n\n            # Update GPU load and push back to heap\n            new_load = current_load + expert_w\n            heapq.heappush(gpu_heap, (new_load, gpu_idx))\n            \n            physical_slot_idx_counter += 1\n\n        # The above logic assigns experts to slots based on global load balancing.\n        # Now we need to ensure slots are filled and then assign to physical_to_logical_map.\n        # The `temp_physical_to_logical` already holds the mapping for this layer.\n        \n        # To further balance within GPUs and ensure random distribution for better\n        # average case performance, we can shuffle the `temp_physical_to_logical`\n        # after assignments, or try to assign directly to GPU slots.\n        \n        # Let's refine the assignment to directly fill physical_to_logical_map\n        # while balancing across GPUs.\n        \n        # Initialize a list of lists to hold experts for each GPU\n        gpu_expert_assignments = [[] for _ in range(num_gpus)]\n        \n        # Reset GPU loads for this more refined assignment\n        gpu_loads = torch.zeros(num_gpus, dtype=torch.float32, device=device)\n\n        # Distribute the `all_expert_assignments` across GPUs\n        # This is a multi-way number partitioning problem heuristic.\n        # We'll use the \"Largest Processing Time\" or \"Greedy Algorithm\" approach\n        # where we assign the next expert replica to the GPU with the minimum current load.\n        \n        # Sort `all_expert_assignments` by weight descending\n        all_expert_assignments.sort(key=lambda x: x[1], reverse=True)\n\n        for logical_expert_id, expert_w in all_expert_assignments:\n            # Find the GPU with the minimum current load\n            min_load_gpu_idx = torch.argmin(gpu_loads).item()\n            \n            # Assign this expert replica to that GPU\n            gpu_expert_assignments[min_load_gpu_idx].append(logical_expert_id)\n            gpu_loads[min_load_gpu_idx] += expert_w\n        \n        # Now, `gpu_expert_assignments` contains lists of logical expert IDs for each GPU.\n        # We need to flatten this into `physical_to_logical_map` and populate `logical_to_physical_map`.\n        \n        # Concatenate all GPU assignments to form the layer's physical_to_logical_map\n        # And ensure each GPU gets `num_slots_per_gpu` experts.\n        # If the number of assignments per GPU is not exactly `num_slots_per_gpu`,\n        # there's an issue with the `expert_count` sum, which is already asserted.\n        \n        current_physical_slot = 0\n        for gpu_idx in range(num_gpus):\n            # Pad or truncate if necessary, though it should be exact given num_replicas\n            gpu_experts = gpu_expert_assignments[gpu_idx][:num_slots_per_gpu]\n            \n            # If a GPU somehow got fewer experts than num_slots_per_gpu (shouldn't happen with correct expert_count sum)\n            while len(gpu_experts) < num_slots_per_gpu:\n                # This indicates an issue with `expert_count` or logic, but as a fallback,\n                # we could add a dummy expert or replicate a low-load one.\n                # Given problem constraints, expert_count.sum() == num_replicas, so this path should not be taken.\n                # For robustness, we might pick the least loaded expert overall.\n                gpu_experts.append(0) # Fallback to expert 0\n            \n            # Randomly shuffle experts within each GPU to avoid patterns\n            torch.manual_seed(layer * 12345 + gpu_idx * 789 + 17) # Deterministic seed\n            perm_gpu = torch.randperm(len(gpu_experts), device=device)\n            shuffled_gpu_experts = torch.tensor(gpu_experts, dtype=torch.int64, device=device)[perm_gpu]\n\n            for expert_id in shuffled_gpu_experts:\n                physical_to_logical_map[layer, current_physical_slot] = expert_id\n                temp_logical_to_physical_lists[expert_id].append(current_physical_slot)\n                current_physical_slot += 1\n\n        # Populate logical_to_physical_map for this layer\n        for logical_expert_idx in range(num_logical_experts):\n            for i, physical_idx in enumerate(temp_logical_to_physical_lists[logical_expert_idx]):\n                if i < max_replicas_per_expert: # Safety check for padding\n                    logical_to_physical_map[layer, logical_expert_idx, i] = physical_idx\n    \n    return physical_to_logical_map, logical_to_physical_map, expert_count",
+      "scores": {
+        "score": 21.425341893526465,
+        "balancedness_gpu": 0.4601967020594303,
+        "balancedness_expert": 0.2854524757632617,
+        "avg_time": 1.309121878637763,
+        "execution_time": 1.309121878637763,
+        "balancedness_score": 41.41770318534873,
+        "speed_score": 0.007638708177733406,
+        "slow_penalty": 20,
+        "workload_0": 0.5741437242613878,
+        "workload_8": 0.41110175210386396,
+        "workload_9": 0.401878826958378,
+        "workload_main": 0.4648326995019539
+      },
+      "primary_score": 21.425341893526465,
+      "behavior": {
+        "loop_nesting_max": 0.7053214058077786,
+        "cyclomatic_complexity": 0.5811506417131646,
+        "math_operators": 0.4030017355215094,
+        "execution_time": 0.5,
+        "workload_main": 0.5,
+        "workload_8": 0.5,
+        "workload_9": 0.5
+      },
+      "metadata": {
+        "source": "punctuated_equilibrium",
+        "pe_type": "paradigm_shift"
+      },
+      "parents": [],
+      "created_at": "2026-01-22T07:09:39.364993"
+    },
+    {
+      "cell_index": 19,
+      "program_id": "cb3c7f6d-4292-4275-a177-2d5c2288a51e",
+      "code": "import torch\n\ndef rebalance_experts(\n    weight: torch.Tensor,\n    num_replicas: int,\n    num_groups: int,\n    num_nodes: int,\n    num_gpus: int,\n) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:\n    '''\n    Rearrange and replicate logical experts across physical GPU slots.\n\n    Parameters:\n        weight: [layers, num_logical_experts], load statistics\n        num_replicas: 288 (physical experts)\n        num_groups: 8\n        num_nodes: 4\n        num_gpus: 32\n\n    Returns:\n        physical_to_logical_map: [layers, num_replicas]\n        logical_to_physical_map: [layers, num_logical_experts, X]\n        expert_count: [layers, num_logical_experts]\n    '''\n    num_layers, num_logical_experts = weight.shape\n    device = weight.device\n    num_slots_per_gpu = num_replicas // num_gpus\n\n    # Ensure every logical expert has at least one replica initially\n    initial_expert_count = torch.ones(num_layers, num_logical_experts, dtype=torch.int64, device=device)\n    remaining_replicas = num_replicas - num_logical_experts\n\n    # Normalize weights for proportional allocation of remaining replicas\n    weight_sum = weight.float().sum(dim=-1, keepdim=True)\n    weight_sum = torch.where(weight_sum > 0, weight_sum, torch.ones_like(weight_sum))  # Avoid division by zero\n    normalized_weight = weight.float() / weight_sum\n\n    # Distribute remaining replicas proportionally using largest remainder method\n    expected_replicas = normalized_weight * remaining_replicas\n    floor_replicas = torch.floor(expected_replicas).to(torch.int64)\n    remainder = remaining_replicas - floor_replicas.sum(dim=-1)\n\n    # Assign remaining replicas to experts with largest fractional parts\n    fractional_parts = expected_replicas - floor_replicas.float()\n    for layer in range(num_layers):\n        if remainder[layer] > 0:\n            _, top_indices = torch.topk(fractional_parts[layer], remainder[layer].item(), largest=True)\n            floor_replicas[layer, top_indices] += 1\n\n    expert_count = initial_expert_count + floor_replicas\n    \n    # Ensure no expert has zero count (already handled by initial_expert_count)\n    # Ensure total sum is num_replicas\n    assert (expert_count.sum(dim=-1) == num_replicas).all(), f\"Expert count sum mismatch: {expert_count.sum(dim=-1)} vs {num_replicas}\"\n    assert (expert_count > 0).all(), \"Some experts have zero replicas\"\n\n\n    # Create physical_to_logical_map with load-balanced placement\n    physical_to_logical_map = torch.empty(num_layers, num_replicas, dtype=torch.int64, device=device)\n    \n    for layer in range(num_layers):\n        # Build list of logical expert IDs with repetition\n        expert_indices = []\n        for logical_expert_idx in range(num_logical_experts):\n            count = expert_count[layer, logical_expert_idx].item()\n            expert_indices.extend([logical_expert_idx] * count)\n        \n        # Use deterministic ordering to spread replicas across GPUs\n        # Sort experts by weight descending to place heavier experts first\n        expert_weights = weight[layer, torch.tensor(expert_indices, device=device)]\n        _, sorted_indices = torch.sort(expert_weights, descending=True)\n        ordered_expert_indices = torch.tensor(expert_indices, device=device)[sorted_indices]\n        \n        # Distribute replicas in a round-robin fashion across GPUs to balance load\n        # Each GPU gets slots in a staggered pattern\n        perm = torch.empty(num_replicas, dtype=torch.int64, device=device)\n        for i in range(num_replicas):\n            gpu_id = i % num_gpus\n            slot_in_gpu = i // num_gpus\n            # Assign to slot: staggered by logical expert index to avoid clustering\n            perm[i] = gpu_id * num_slots_per_gpu + (slot_in_gpu + i) % num_slots_per_gpu\n        physical_to_logical_map[layer] = ordered_expert_indices[perm]\n\n    # Create logical_to_physical_map\n    max_replicas = expert_count.max().item()\n    logical_to_physical_map = torch.full(\n        (num_layers, num_logical_experts, max_replicas),\n        -1,\n        dtype=torch.int64,\n        device=device,\n    )\n\n    for layer in range(num_layers):\n        # Use advanced indexing to find physical slots per logical expert\n        for logical_expert_id in range(num_logical_experts):\n            mask = (physical_to_logical_map[layer] == logical_expert_id)\n            physical_indices = torch.nonzero(mask, as_tuple=False).squeeze(-1)\n            num_assigned = min(len(physical_indices), max_replicas)\n            logical_to_physical_map[layer, logical_expert_id, :num_assigned] = physical_indices[:num_assigned]\n\n    return physical_to_logical_map, logical_to_physical_map, expert_count",
+      "scores": {
+        "score": -6.23583304709072,
+        "balancedness_gpu": 0.05923357772094992,
+        "balancedness_expert": 0.0065815085959176475,
+        "avg_time": 0.5792060028206006,
+        "execution_time": 0.5792060028206006,
+        "balancedness_score": 5.331021994885493,
+        "speed_score": 0.017265014435800544,
+        "slow_penalty": 11.584120056412013,
+        "workload_0": 0.050664502897403034,
+        "workload_8": 0.0521192746019816,
+        "workload_9": 0.060479240664603445,
+        "workload_main": 0.06103523924890172
+      },
+      "primary_score": -6.23583304709072,
+      "behavior": {
+        "loop_nesting_max": 0.37400169608000716,
+        "cyclomatic_complexity": 0.43099446776853156,
+        "math_operators": 0.493806520500082,
+        "execution_time": 0.5,
+        "workload_main": 0.5,
+        "workload_8": 0.5,
+        "workload_9": 0.5
+      },
+      "metadata": {},
+      "parents": [],
+      "created_at": "2026-01-22T07:15:45.611892"
+    }
+  ],
+  "sampler_stats": {
+    "ucb": {
+      "n_cells": 0,
+      "cell_stats": {}
+    },
+    "softmax": {
+      "n_cells": 0,
+      "cell_stats": {}
+    },
+    "uniform": {
+      "n_cells": 0,
+      "cell_stats": {}
+    },
+    "cyclic_annealing": {
+      "n_cells": 0,
+      "last_temperature": 1.2,
+      "t_max": 1.2,
+      "t_min": 0.15,
+      "n_cycles": 4,
+      "cell_stats": {}
+    },
+    "softmax_T0.3": {
+      "n_cells": 14,
+      "total_samples": 33,
+      "mean_success_rate": 0.23095238095238096,
+      "cell_stats": {
+        "47": {
+          "n_samples": 5,
+          "n_successes": 2,
+          "success_rate": 0.4
+        },
+        "26": {
+          "n_samples": 2,
+          "n_successes": 0,
+          "success_rate": 0.0
+        },
+        "22": {
+          "n_samples": 2,
+          "n_successes": 0,
+          "success_rate": 0.0
+        },
+        "33": {
+          "n_samples": 6,
+          "n_successes": 2,
+          "success_rate": 0.3333333333333333
+        },
+        "40": {
+          "n_samples": 3,
+          "n_successes": 0,
+          "success_rate": 0.0
+        },
+        "38": {
+          "n_samples": 4,
+          "n_successes": 0,
+          "success_rate": 0.0
+        },
+        "0": {
+          "n_samples": 1,
+          "n_successes": 0,
+          "success_rate": 0.0
+        },
+        "4": {
+          "n_samples": 1,
+          "n_successes": 1,
+          "success_rate": 1.0
+        },
+        "29": {
+          "n_samples": 2,
+          "n_successes": 0,
+          "success_rate": 0.0
+        },
+        "25": {
+          "n_samples": 1,
+          "n_successes": 1,
+          "success_rate": 1.0
+        },
+        "13": {
+          "n_samples": 1,
+          "n_successes": 0,
+          "success_rate": 0.0
+        },
+        "3": {
+          "n_samples": 2,
+          "n_successes": 1,
+          "success_rate": 0.5
+        },
+        "17": {
+          "n_samples": 2,
+          "n_successes": 0,
+          "success_rate": 0.0
+        },
+        "24": {
+          "n_samples": 1,
+          "n_successes": 0,
+          "success_rate": 0.0
+        }
+      }
+    },
+    "softmax_T0.7": {
+      "n_cells": 12,
+      "total_samples": 27,
+      "mean_success_rate": 0.43472222222222223,
+      "cell_stats": {
+        "47": {
+          "n_samples": 1,
+          "n_successes": 0,
+          "success_rate": 0.0
+        },
+        "4": {
+          "n_samples": 3,
+          "n_successes": 2,
+          "success_rate": 0.6666666666666666
+        },
+        "26": {
+          "n_samples": 4,
+          "n_successes": 1,
+          "success_rate": 0.25
+        },
+        "22": {
+          "n_samples": 5,
+          "n_successes": 4,
+          "success_rate": 0.8
+        },
+        "33": {
+          "n_samples": 4,
+          "n_successes": 4,
+          "success_rate": 1.0
+        },
+        "30": {
+          "n_samples": 1,
+          "n_successes": 0,
+          "success_rate": 0.0
+        },
+        "13": {
+          "n_samples": 1,
+          "n_successes": 1,
+          "success_rate": 1.0
+        },
+        "0": {
+          "n_samples": 2,
+          "n_successes": 1,
+          "success_rate": 0.5
+        },
+        "40": {
+          "n_samples": 2,
+          "n_successes": 1,
+          "success_rate": 0.5
+        },
+        "3": {
+          "n_samples": 2,
+          "n_successes": 1,
+          "success_rate": 0.5
+        },
+        "24": {
+          "n_samples": 1,
+          "n_successes": 0,
+          "success_rate": 0.0
+        },
+        "20": {
+          "n_samples": 1,
+          "n_successes": 0,
+          "success_rate": 0.0
+        }
+      }
+    },
+    "softmax_T1.0": {
+      "n_cells": 14,
+      "total_samples": 25,
+      "mean_success_rate": 0.375,
+      "cell_stats": {
+        "47": {
+          "n_samples": 3,
+          "n_successes": 0,
+          "success_rate": 0.0
+        },
+        "30": {
+          "n_samples": 2,
+          "n_successes": 0,
+          "success_rate": 0.0
+        },
+        "4": {
+          "n_samples": 4,
+          "n_successes": 1,
+          "success_rate": 0.25
+        },
+        "23": {
+          "n_samples": 1,
+          "n_successes": 0,
+          "success_rate": 0.0
+        },
+        "22": {
+          "n_samples": 2,
+          "n_successes": 1,
+          "success_rate": 0.5
+        },
+        "17": {
+          "n_samples": 2,
+          "n_successes": 1,
+          "success_rate": 0.5
+        },
+        "40": {
+          "n_samples": 1,
+          "n_successes": 1,
+          "success_rate": 1.0
+        },
+        "38": {
+          "n_samples": 2,
+          "n_successes": 1,
+          "success_rate": 0.5
+        },
+        "3": {
+          "n_samples": 2,
+          "n_successes": 0,
+          "success_rate": 0.0
+        },
+        "0": {
+          "n_samples": 1,
+          "n_successes": 0,
+          "success_rate": 0.0
+        },
+        "29": {
+          "n_samples": 2,
+          "n_successes": 1,
+          "success_rate": 0.5
+        },
+        "33": {
+          "n_samples": 1,
+          "n_successes": 1,
+          "success_rate": 1.0
+        },
+        "24": {
+          "n_samples": 1,
+          "n_successes": 1,
+          "success_rate": 1.0
+        },
+        "7": {
+          "n_samples": 1,
+          "n_successes": 0,
+          "success_rate": 0.0
+        }
+      }
+    },
+    "softmax_T1.2": {
+      "n_cells": 12,
+      "total_samples": 35,
+      "mean_success_rate": 0.4781746031746032,
+      "cell_stats": {
+        "47": {
+          "n_samples": 7,
+          "n_successes": 0,
+          "success_rate": 0.0
+        },
+        "4": {
+          "n_samples": 7,
+          "n_successes": 4,
+          "success_rate": 0.5714285714285714
+        },
+        "22": {
+          "n_samples": 4,
+          "n_successes": 4,
+          "success_rate": 1.0
+        },
+        "26": {
+          "n_samples": 2,
+          "n_successes": 2,
+          "success_rate": 1.0
+        },
+        "40": {
+          "n_samples": 2,
+          "n_successes": 2,
+          "success_rate": 1.0
+        },
+        "38": {
+          "n_samples": 3,
+          "n_successes": 2,
+          "success_rate": 0.6666666666666666
+        },
+        "3": {
+          "n_samples": 2,
+          "n_successes": 1,
+          "success_rate": 0.5
+        },
+        "13": {
+          "n_samples": 1,
+          "n_successes": 0,
+          "success_rate": 0.0
+        },
+        "19": {
+          "n_samples": 1,
+          "n_successes": 1,
+          "success_rate": 1.0
+        },
+        "42": {
+          "n_samples": 1,
+          "n_successes": 0,
+          "success_rate": 0.0
+        },
+        "24": {
+          "n_samples": 2,
+          "n_successes": 0,
+          "success_rate": 0.0
+        },
+        "29": {
+          "n_samples": 3,
+          "n_successes": 0,
+          "success_rate": 0.0
+        }
+      }
+    }
+  },
+  "run_state": {
+    "timestamp": "2026-01-22T07:24:04.146303",
+    "elapsed_seconds": 1613.6764953136444,
+    "total_cost": 0.3442091999999997,
+    "eval_count": 120,
+    "accept_count": 46,
+    "error_count": 25,
+    "best_score": 55.75075738858339
+  },
+  "score_history": [
+    {
+      "eval_number": 2,
+      "score": 44.681651917768725,
+      "best_score": 44.69714776522178,
+      "timestamp": 43.02285075187683,
+      "accepted": true,
+      "sampler": "softmax_T0.3",
+      "archive_size": 2,
+      "cell_index": 30,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 3,
+      "score": 44.05640499307168,
+      "best_score": 44.69714776522178,
+      "timestamp": 43.537741899490356,
+      "accepted": false,
+      "sampler": "softmax_T1.0",
+      "archive_size": 2,
+      "cell_index": 30,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 10,
+      "score": 52.14139762944116,
+      "best_score": 52.14139762944116,
+      "timestamp": 106.1394567489624,
+      "accepted": true,
+      "sampler": "softmax_T0.3",
+      "archive_size": 3,
+      "cell_index": 26,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 12,
+      "score": 12.799254123167778,
+      "best_score": 52.14139762944116,
+      "timestamp": 132.79120707511902,
+      "accepted": false,
+      "sampler": "softmax_T1.2",
+      "archive_size": 3,
+      "cell_index": 26,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 14,
+      "score": 44.568759080583,
+      "best_score": 52.14139762944116,
+      "timestamp": 172.39622926712036,
+      "accepted": false,
+      "sampler": "softmax_T1.0",
+      "archive_size": 4,
+      "cell_index": 26,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 16,
+      "score": -0.7605707665787129,
+      "best_score": 52.14139762944116,
+      "timestamp": 232.5111780166626,
+      "accepted": true,
+      "sampler": "softmax_T1.2",
+      "archive_size": 5,
+      "cell_index": 22,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 17,
+      "score": 44.06147991287622,
+      "best_score": 52.14139762944116,
+      "timestamp": 239.3108525276184,
+      "accepted": true,
+      "sampler": "softmax_T1.2",
+      "archive_size": 5,
+      "cell_index": 22,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 19,
+      "score": 29.904713048160538,
+      "best_score": 52.14139762944116,
+      "timestamp": 333.7791392803192,
+      "accepted": false,
+      "sampler": "softmax_T1.0",
+      "archive_size": 5,
+      "cell_index": 22,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 20,
+      "score": 39.87097258322139,
+      "best_score": 52.14139762944116,
+      "timestamp": 343.2925362586975,
+      "accepted": true,
+      "sampler": "softmax_T1.0",
+      "archive_size": 6,
+      "cell_index": 23,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 21,
+      "score": 44.26432829094151,
+      "best_score": 52.14139762944116,
+      "timestamp": 372.9165644645691,
+      "accepted": true,
+      "sampler": "softmax_T1.2",
+      "archive_size": 7,
+      "cell_index": 22,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 22,
+      "score": 31.161105270162075,
+      "best_score": 52.14139762944116,
+      "timestamp": 415.3336226940155,
+      "accepted": true,
+      "sampler": "softmax_T0.7",
+      "archive_size": 8,
+      "cell_index": 17,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 23,
+      "score": 51.96887808203154,
+      "best_score": 52.14139762944116,
+      "timestamp": 418.3520493507385,
+      "accepted": false,
+      "sampler": "softmax_T1.2",
+      "archive_size": 8,
+      "cell_index": 26,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 24,
+      "score": 39.28650801819512,
+      "best_score": 52.14139762944116,
+      "timestamp": 431.22763991355896,
+      "accepted": false,
+      "sampler": "softmax_T1.0",
+      "archive_size": 8,
+      "cell_index": 23,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 25,
+      "score": 39.708993308546695,
+      "best_score": 52.14139762944116,
+      "timestamp": 431.5430874824524,
+      "accepted": false,
+      "sampler": "softmax_T0.7",
+      "archive_size": 8,
+      "cell_index": 26,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 26,
+      "score": 30.421759451966267,
+      "best_score": 52.14139762944116,
+      "timestamp": 439.47998237609863,
+      "accepted": false,
+      "sampler": "softmax_T1.0",
+      "archive_size": 8,
+      "cell_index": 23,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 27,
+      "score": 52.79855246202045,
+      "best_score": 52.79855246202045,
+      "timestamp": 443.90812849998474,
+      "accepted": true,
+      "sampler": "softmax_T1.2",
+      "archive_size": 8,
+      "cell_index": 26,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 28,
+      "score": 44.256394789549205,
+      "best_score": 52.79855246202045,
+      "timestamp": 459.88749957084656,
+      "accepted": false,
+      "sampler": "softmax_T0.7",
+      "archive_size": 8,
+      "cell_index": 22,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 29,
+      "score": 34.18604995284087,
+      "best_score": 52.79855246202045,
+      "timestamp": 464.7532813549042,
+      "accepted": true,
+      "sampler": "softmax_T0.7",
+      "archive_size": 9,
+      "cell_index": 3,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 30,
+      "score": -14.612698806048378,
+      "best_score": 52.79855246202045,
+      "timestamp": 467.3675899505615,
+      "accepted": false,
+      "sampler": "softmax_T1.2",
+      "archive_size": 9,
+      "cell_index": 22,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 31,
+      "score": 30.480590912506578,
+      "best_score": 52.79855246202045,
+      "timestamp": 475.98670506477356,
+      "accepted": true,
+      "sampler": "softmax_T0.7",
+      "archive_size": 10,
+      "cell_index": 29,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 32,
+      "score": 31.039611115848665,
+      "best_score": 52.79855246202045,
+      "timestamp": 477.8952157497406,
+      "accepted": false,
+      "sampler": "softmax_T1.0",
+      "archive_size": 10,
+      "cell_index": 23,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 33,
+      "score": 45.93490958163015,
+      "best_score": 52.79855246202045,
+      "timestamp": 480.71057987213135,
+      "accepted": true,
+      "sampler": "softmax_T0.7",
+      "archive_size": 11,
+      "cell_index": 40,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 34,
+      "score": 48.46796492321293,
+      "best_score": 52.79855246202045,
+      "timestamp": 493.8571186065674,
+      "accepted": true,
+      "sampler": "softmax_T0.7",
+      "archive_size": 11,
+      "cell_index": 22,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 35,
+      "score": 48.175774788648674,
+      "best_score": 52.79855246202045,
+      "timestamp": 528.3800089359283,
+      "accepted": true,
+      "sampler": "softmax_T0.7",
+      "archive_size": 12,
+      "cell_index": 38,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 36,
+      "score": 44.2916391554173,
+      "best_score": 52.79855246202045,
+      "timestamp": 534.6066608428955,
+      "accepted": false,
+      "sampler": "softmax_T0.3",
+      "archive_size": 12,
+      "cell_index": 22,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 37,
+      "score": 52.70989070200852,
+      "best_score": 52.79855246202045,
+      "timestamp": 550.6268441677094,
+      "accepted": true,
+      "sampler": "softmax_T0.3",
+      "archive_size": 12,
+      "cell_index": 38,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 38,
+      "score": 50.47889996695196,
+      "best_score": 52.79855246202045,
+      "timestamp": 560.7682456970215,
+      "accepted": true,
+      "sampler": "softmax_T1.2",
+      "archive_size": 12,
+      "cell_index": 22,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 39,
+      "score": 45.40867070175965,
+      "best_score": 52.79855246202045,
+      "timestamp": 574.8751270771027,
+      "accepted": true,
+      "sampler": "softmax_T1.2",
+      "archive_size": 12,
+      "cell_index": 3,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 40,
+      "score": 44.677741207771994,
+      "best_score": 52.79855246202045,
+      "timestamp": 587.5681366920471,
+      "accepted": false,
+      "sampler": "softmax_T1.0",
+      "archive_size": 12,
+      "cell_index": 26,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 41,
+      "score": 53.098180260931194,
+      "best_score": 53.098180260931194,
+      "timestamp": 602.852854013443,
+      "accepted": true,
+      "sampler": "softmax_T0.3",
+      "archive_size": 12,
+      "cell_index": 38,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 44,
+      "score": 48.23477500062181,
+      "best_score": 53.098180260931194,
+      "timestamp": 611.3882899284363,
+      "accepted": false,
+      "sampler": "softmax_T0.3",
+      "archive_size": 12,
+      "cell_index": 22,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 45,
+      "score": 50.67718775114307,
+      "best_score": 53.098180260931194,
+      "timestamp": 620.2902760505676,
+      "accepted": true,
+      "sampler": "softmax_T1.2",
+      "archive_size": 12,
+      "cell_index": 22,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 46,
+      "score": 45.32622920092306,
+      "best_score": 53.098180260931194,
+      "timestamp": 642.432382106781,
+      "accepted": false,
+      "sampler": "softmax_T0.3",
+      "archive_size": 12,
+      "cell_index": 3,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 47,
+      "score": 22.08321220846583,
+      "best_score": 53.098180260931194,
+      "timestamp": 662.2156901359558,
+      "accepted": false,
+      "sampler": "softmax_T1.2",
+      "archive_size": 12,
+      "cell_index": 22,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 48,
+      "score": 21.327548838112627,
+      "best_score": 53.098180260931194,
+      "timestamp": 670.7256608009338,
+      "accepted": false,
+      "sampler": "softmax_T0.7",
+      "archive_size": 12,
+      "cell_index": 23,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 49,
+      "score": 29.29977908591014,
+      "best_score": 53.098180260931194,
+      "timestamp": 675.684154510498,
+      "accepted": true,
+      "sampler": "softmax_T0.7",
+      "archive_size": 13,
+      "cell_index": 13,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 50,
+      "score": 48.90469721719087,
+      "best_score": 53.098180260931194,
+      "timestamp": 699.2002067565918,
+      "accepted": true,
+      "sampler": "softmax_T1.2",
+      "archive_size": 14,
+      "cell_index": 0,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 51,
+      "score": 36.54639461137782,
+      "best_score": 53.098180260931194,
+      "timestamp": 712.4189472198486,
+      "accepted": true,
+      "sampler": "softmax_T0.7",
+      "archive_size": 15,
+      "cell_index": 24,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 52,
+      "score": 30.666361215542167,
+      "best_score": 53.098180260931194,
+      "timestamp": 720.957282781601,
+      "accepted": false,
+      "sampler": "softmax_T1.0",
+      "archive_size": 15,
+      "cell_index": 23,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 54,
+      "score": 50.68994331373054,
+      "best_score": 53.098180260931194,
+      "timestamp": 766.3954701423645,
+      "accepted": true,
+      "sampler": "softmax_T1.2",
+      "archive_size": 16,
+      "cell_index": 22,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 55,
+      "score": 29.300986663660865,
+      "best_score": 53.098180260931194,
+      "timestamp": 766.5961811542511,
+      "accepted": true,
+      "sampler": "softmax_T0.7",
+      "archive_size": 16,
+      "cell_index": 13,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 56,
+      "score": 39.069915861645896,
+      "best_score": 53.098180260931194,
+      "timestamp": 787.1383285522461,
+      "accepted": false,
+      "sampler": "softmax_T0.7",
+      "archive_size": 16,
+      "cell_index": 3,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 57,
+      "score": 49.898798623718015,
+      "best_score": 53.098180260931194,
+      "timestamp": 791.6649713516235,
+      "accepted": true,
+      "sampler": "softmax_T0.7",
+      "archive_size": 16,
+      "cell_index": 40,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 58,
+      "score": 47.3096716746645,
+      "best_score": 53.098180260931194,
+      "timestamp": 795.5175695419312,
+      "accepted": true,
+      "sampler": "softmax_T1.0",
+      "archive_size": 16,
+      "cell_index": 3,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 59,
+      "score": 52.42334427788697,
+      "best_score": 53.098180260931194,
+      "timestamp": 824.384664773941,
+      "accepted": false,
+      "sampler": "softmax_T0.3",
+      "archive_size": 16,
+      "cell_index": 38,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 60,
+      "score": 52.906480976386206,
+      "best_score": 53.098180260931194,
+      "timestamp": 833.712785243988,
+      "accepted": true,
+      "sampler": "softmax_T1.2",
+      "archive_size": 16,
+      "cell_index": 30,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 61,
+      "score": 31.044743337105224,
+      "best_score": 53.098180260931194,
+      "timestamp": 876.9866061210632,
+      "accepted": false,
+      "sampler": "softmax_T1.2",
+      "archive_size": 16,
+      "cell_index": 23,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 62,
+      "score": 51.11670573889505,
+      "best_score": 53.098180260931194,
+      "timestamp": 886.1843659877777,
+      "accepted": true,
+      "sampler": "softmax_T1.0",
+      "archive_size": 16,
+      "cell_index": 3,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 63,
+      "score": 48.24647747029398,
+      "best_score": 53.098180260931194,
+      "timestamp": 886.6878304481506,
+      "accepted": false,
+      "sampler": "softmax_T0.3",
+      "archive_size": 16,
+      "cell_index": 38,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 65,
+      "score": 39.102006728347725,
+      "best_score": 53.098180260931194,
+      "timestamp": 910.4330024719238,
+      "accepted": true,
+      "sampler": "softmax_T1.2",
+      "archive_size": 16,
+      "cell_index": 13,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 67,
+      "score": 50.69277062632488,
+      "best_score": 53.098180260931194,
+      "timestamp": 921.5108134746552,
+      "accepted": true,
+      "sampler": "softmax_T0.3",
+      "archive_size": 16,
+      "cell_index": 22,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 68,
+      "score": 48.73812681287895,
+      "best_score": 53.098180260931194,
+      "timestamp": 925.0515666007996,
+      "accepted": false,
+      "sampler": "softmax_T0.3",
+      "archive_size": 16,
+      "cell_index": 38,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 69,
+      "score": 50.9908873124876,
+      "best_score": 53.098180260931194,
+      "timestamp": 932.958920955658,
+      "accepted": true,
+      "sampler": "softmax_T0.7",
+      "archive_size": 16,
+      "cell_index": 0,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 70,
+      "score": 46.936087890157594,
+      "best_score": 53.098180260931194,
+      "timestamp": 954.9697308540344,
+      "accepted": false,
+      "sampler": "softmax_T1.0",
+      "archive_size": 16,
+      "cell_index": 3,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 71,
+      "score": 49.51173556922289,
+      "best_score": 53.098180260931194,
+      "timestamp": 963.4309635162354,
+      "accepted": false,
+      "sampler": "softmax_T0.3",
+      "archive_size": 16,
+      "cell_index": 0,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 72,
+      "score": 50.88357952277097,
+      "best_score": 53.098180260931194,
+      "timestamp": 997.6462700366974,
+      "accepted": false,
+      "sampler": "softmax_T1.0",
+      "archive_size": 16,
+      "cell_index": 0,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 73,
+      "score": 26.86813609370742,
+      "best_score": 53.098180260931194,
+      "timestamp": 1005.7003784179688,
+      "accepted": false,
+      "sampler": "softmax_T0.3",
+      "archive_size": 16,
+      "cell_index": 22,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 74,
+      "score": 49.45851523329542,
+      "best_score": 53.098180260931194,
+      "timestamp": 1011.8837189674377,
+      "accepted": false,
+      "sampler": "softmax_T0.3",
+      "archive_size": 16,
+      "cell_index": 0,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 75,
+      "score": 51.361886168500064,
+      "best_score": 53.098180260931194,
+      "timestamp": 1012.8625447750092,
+      "accepted": true,
+      "sampler": "softmax_T0.7",
+      "archive_size": 16,
+      "cell_index": 29,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 76,
+      "score": 45.33946951583711,
+      "best_score": 53.098180260931194,
+      "timestamp": 1032.1822447776794,
+      "accepted": false,
+      "sampler": "softmax_T1.2",
+      "archive_size": 16,
+      "cell_index": 3,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 78,
+      "score": 36.19853130464218,
+      "best_score": 53.098180260931194,
+      "timestamp": 1055.19895029068,
+      "accepted": true,
+      "sampler": "softmax_T1.2",
+      "archive_size": 16,
+      "cell_index": 17,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 79,
+      "score": 51.243258862236694,
+      "best_score": 53.098180260931194,
+      "timestamp": 1078.316157579422,
+      "accepted": true,
+      "sampler": "softmax_T0.7",
+      "archive_size": 16,
+      "cell_index": 0,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 81,
+      "score": 49.09643023450545,
+      "best_score": 53.098180260931194,
+      "timestamp": 1107.6921577453613,
+      "accepted": false,
+      "sampler": "softmax_T0.3",
+      "archive_size": 16,
+      "cell_index": 22,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 82,
+      "score": -6.23583304709072,
+      "best_score": 53.098180260931194,
+      "timestamp": 1115.1458644866943,
+      "accepted": true,
+      "sampler": "softmax_T1.0",
+      "archive_size": 17,
+      "cell_index": 19,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 83,
+      "score": 51.379776701533146,
+      "best_score": 53.098180260931194,
+      "timestamp": 1144.5821859836578,
+      "accepted": true,
+      "sampler": "softmax_T1.0",
+      "archive_size": 18,
+      "cell_index": 25,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 85,
+      "score": 50.91470991409507,
+      "best_score": 53.098180260931194,
+      "timestamp": 1167.363102197647,
+      "accepted": true,
+      "sampler": "softmax_T1.2",
+      "archive_size": 18,
+      "cell_index": 22,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 86,
+      "score": 50.865048766411626,
+      "best_score": 53.098180260931194,
+      "timestamp": 1179.5514245033264,
+      "accepted": false,
+      "sampler": "softmax_T0.7",
+      "archive_size": 18,
+      "cell_index": 25,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 87,
+      "score": 51.57112271477348,
+      "best_score": 53.098180260931194,
+      "timestamp": 1198.6389775276184,
+      "accepted": true,
+      "sampler": "softmax_T1.2",
+      "archive_size": 18,
+      "cell_index": 0,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 88,
+      "score": 47.20089648782579,
+      "best_score": 53.098180260931194,
+      "timestamp": 1213.20694565773,
+      "accepted": true,
+      "sampler": "softmax_T0.3",
+      "archive_size": 18,
+      "cell_index": 17,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 89,
+      "score": 22.314646673381176,
+      "best_score": 53.098180260931194,
+      "timestamp": 1216.3898179531097,
+      "accepted": true,
+      "sampler": "softmax_T1.2",
+      "archive_size": 19,
+      "cell_index": 42,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 90,
+      "score": 55.75075738858339,
+      "best_score": 55.75075738858339,
+      "timestamp": 1217.2733356952667,
+      "accepted": true,
+      "sampler": "softmax_T0.7",
+      "archive_size": 19,
+      "cell_index": 13,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 91,
+      "score": 32.389250995063875,
+      "best_score": 55.75075738858339,
+      "timestamp": 1217.8966536521912,
+      "accepted": false,
+      "sampler": "softmax_T0.3",
+      "archive_size": 19,
+      "cell_index": 29,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 92,
+      "score": 52.28208678619963,
+      "best_score": 55.75075738858339,
+      "timestamp": 1240.4635717868805,
+      "accepted": true,
+      "sampler": "softmax_T1.0",
+      "archive_size": 19,
+      "cell_index": 22,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 93,
+      "score": 52.79601929913108,
+      "best_score": 55.75075738858339,
+      "timestamp": 1247.6124138832092,
+      "accepted": true,
+      "sampler": "softmax_T0.7",
+      "archive_size": 20,
+      "cell_index": 32,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 94,
+      "score": 49.48786396937909,
+      "best_score": 55.75075738858339,
+      "timestamp": 1255.2831089496613,
+      "accepted": false,
+      "sampler": "softmax_T0.7",
+      "archive_size": 20,
+      "cell_index": 3,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 95,
+      "score": 48.907652462828,
+      "best_score": 55.75075738858339,
+      "timestamp": 1274.7643630504608,
+      "accepted": false,
+      "sampler": "softmax_T0.3",
+      "archive_size": 20,
+      "cell_index": 38,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 96,
+      "score": 50.81560044344776,
+      "best_score": 55.75075738858339,
+      "timestamp": 1290.6390235424042,
+      "accepted": true,
+      "sampler": "softmax_T0.3",
+      "archive_size": 20,
+      "cell_index": 17,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 97,
+      "score": -5.401856040458798,
+      "best_score": 55.75075738858339,
+      "timestamp": 1294.8950643539429,
+      "accepted": false,
+      "sampler": "softmax_T1.2",
+      "archive_size": 20,
+      "cell_index": 42,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 98,
+      "score": 36.54899982624959,
+      "best_score": 55.75075738858339,
+      "timestamp": 1307.6274824142456,
+      "accepted": true,
+      "sampler": "softmax_T1.0",
+      "archive_size": 21,
+      "cell_index": 7,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 100,
+      "score": 48.73098465176833,
+      "best_score": 55.75075738858339,
+      "timestamp": 1346.5094327926636,
+      "accepted": false,
+      "sampler": "softmax_T1.0",
+      "archive_size": 21,
+      "cell_index": 38,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 101,
+      "score": 50.92747230877256,
+      "best_score": 55.75075738858339,
+      "timestamp": 1357.6423044204712,
+      "accepted": false,
+      "sampler": "softmax_T0.3",
+      "archive_size": 21,
+      "cell_index": 29,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 102,
+      "score": 49.85257166655256,
+      "best_score": 55.75075738858339,
+      "timestamp": 1386.2494614124298,
+      "accepted": false,
+      "sampler": "softmax_T0.3",
+      "archive_size": 21,
+      "cell_index": 3,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 103,
+      "score": 52.78865742644845,
+      "best_score": 55.75075738858339,
+      "timestamp": 1389.3668563365936,
+      "accepted": false,
+      "sampler": "softmax_T0.7",
+      "archive_size": 21,
+      "cell_index": 32,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 104,
+      "score": 49.1481795888951,
+      "best_score": 55.75075738858339,
+      "timestamp": 1392.3185184001923,
+      "accepted": false,
+      "sampler": "softmax_T0.3",
+      "archive_size": 21,
+      "cell_index": 3,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 106,
+      "score": 36.54895855059261,
+      "best_score": 55.75075738858339,
+      "timestamp": 1416.1191520690918,
+      "accepted": false,
+      "sampler": "softmax_T0.3",
+      "archive_size": 21,
+      "cell_index": 7,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 107,
+      "score": 50.94124926795594,
+      "best_score": 55.75075738858339,
+      "timestamp": 1430.5969672203064,
+      "accepted": false,
+      "sampler": "softmax_T1.2",
+      "archive_size": 21,
+      "cell_index": 29,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 109,
+      "score": 40.604274186214724,
+      "best_score": 55.75075738858339,
+      "timestamp": 1439.4481463432312,
+      "accepted": false,
+      "sampler": "softmax_T1.0",
+      "archive_size": 21,
+      "cell_index": 29,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 110,
+      "score": 36.54893958701818,
+      "best_score": 55.75075738858339,
+      "timestamp": 1460.7120370864868,
+      "accepted": false,
+      "sampler": "softmax_T1.0",
+      "archive_size": 21,
+      "cell_index": 7,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 112,
+      "score": 52.27676242429103,
+      "best_score": 55.75075738858339,
+      "timestamp": 1480.6733446121216,
+      "accepted": false,
+      "sampler": "softmax_T0.3",
+      "archive_size": 21,
+      "cell_index": 22,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 113,
+      "score": 38.78737708966466,
+      "best_score": 55.75075738858339,
+      "timestamp": 1482.4752728939056,
+      "accepted": false,
+      "sampler": "softmax_T0.3",
+      "archive_size": 21,
+      "cell_index": 13,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 114,
+      "score": 38.582480153916606,
+      "best_score": 55.75075738858339,
+      "timestamp": 1522.0669674873352,
+      "accepted": false,
+      "sampler": "softmax_T1.2",
+      "archive_size": 21,
+      "cell_index": 17,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 116,
+      "score": 44.546232678577134,
+      "best_score": 55.75075738858339,
+      "timestamp": 1539.5534286499023,
+      "accepted": true,
+      "sampler": "softmax_T1.0",
+      "archive_size": 22,
+      "cell_index": 8,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 117,
+      "score": 45.39356418064432,
+      "best_score": 55.75075738858339,
+      "timestamp": 1551.4250996112823,
+      "accepted": false,
+      "sampler": "softmax_T0.3",
+      "archive_size": 22,
+      "cell_index": 3,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 118,
+      "score": 46.409226927855116,
+      "best_score": 55.75075738858339,
+      "timestamp": 1562.4032368659973,
+      "accepted": true,
+      "sampler": "softmax_T1.2",
+      "archive_size": 22,
+      "cell_index": 23,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 120,
+      "score": 36.54895968774018,
+      "best_score": 55.75075738858339,
+      "timestamp": 1613.6760728359222,
+      "accepted": false,
+      "sampler": "softmax_T1.2",
+      "archive_size": 22,
+      "cell_index": 7,
+      "is_punctuated_equilibrium": false
+    }
+  ]
+}
