@@ -26,6 +26,7 @@ from algoforge.island import run_multi_island_pe
 
 # --- Constants ---
 CENTROIDS_FILE = Path(__file__).parent / "centroids.json"
+OPTIMIZED_PROMPTS_FILE = Path(__file__).parent / "optimized_prompts.json"
 BUDGET = 5.00
 
 # Behavioral dimensions (must match centroids.json)
@@ -71,10 +72,50 @@ MODEL_INFO = {
     },
 }
 
+# Model key mapping for prompt overrides
+MODEL_KEY_MAP = {
+    "openrouter/xiaomi/mimo-v2-flash": "mimo",
+    "openrouter/deepseek/deepseek-v3.2": "deepseek",
+    "Qwen/Qwen3-30B-A3B-Instruct-2507": "qwen",
+}
+
+
+def load_optimized_prompts() -> dict:
+    """Load optimized prompts from JSON file."""
+    if OPTIMIZED_PROMPTS_FILE.exists():
+        print(f"Loading optimized prompts from: {OPTIMIZED_PROMPTS_FILE}")
+        with open(OPTIMIZED_PROMPTS_FILE) as f:
+            return json.load(f)
+    print("Warning: No optimized_prompts.json found, using defaults")
+    return {}
+
+
+def build_prompt_overrides(optimized: dict) -> dict:
+    """Build prompt_overrides dict for AlgoforgeConfig."""
+    overrides = {
+        "mutation": {},
+        "paradigm_shift": None,
+    }
+
+    # Map model keys back to full model names
+    mutation_prompts = optimized.get("mutation", {})
+    for model, key in MODEL_KEY_MAP.items():
+        if key in mutation_prompts:
+            overrides["mutation"][model] = mutation_prompts[key]
+
+    if optimized.get("paradigm_shift"):
+        overrides["paradigm_shift"] = optimized["paradigm_shift"]
+
+    return overrides
+
 
 def build_config() -> AlgoforgeConfig:
     """Build AlgoforgeConfig for multi-island PE."""
     run_dir = f"runs/{datetime.now().strftime('%Y%m%d_%H%M%S')}_mipe"
+
+    # Load optimized prompts
+    optimized = load_optimized_prompts()
+    prompt_overrides = build_prompt_overrides(optimized)
 
     config = AlgoforgeConfig(
         problem_description=PROBLEM_DESCRIPTION,
@@ -140,6 +181,7 @@ def build_config() -> AlgoforgeConfig:
             local_endpoints=LOCAL_ENDPOINTS,
             model_info=MODEL_INFO,
         ),
+        prompt_overrides=prompt_overrides,
     )
 
     return config

@@ -404,12 +404,43 @@ class MultiIslandPERunner:
             stats["triggered"] = False
             return stats
 
-        prompt = CROSS_ISLAND_PE_PROMPT.format(
-            problem_description=self.config.problem_description,
-            function_signature=self.config.function_signature,
-            n_islands=self.n_islands,
-            island_solutions="\n\n".join(island_solutions),
-        )
+        # Check for optimized paradigm_shift prompt
+        optimized_instruction = None
+        if hasattr(self.config, 'prompt_overrides') and self.config.prompt_overrides:
+            optimized_instruction = self.config.prompt_overrides.get("paradigm_shift")
+
+        if optimized_instruction:
+            # Use optimized prompt structure
+            prompt = f"""# Cross-Island Paradigm Shift
+
+## Problem
+{self.config.problem_description}
+
+## Function Signature
+```python
+{self.config.function_signature}
+```
+
+## Instructions
+{optimized_instruction}
+
+## Current Best Solutions from Each Island
+
+{self.n_islands} islands have been evolving independently. Below are the best solutions from each:
+
+{chr(10).join(island_solutions)}
+
+## Output
+Output ONLY complete, runnable Python code in a ```python block.
+"""
+        else:
+            # Use default prompt
+            prompt = CROSS_ISLAND_PE_PROMPT.format(
+                problem_description=self.config.problem_description,
+                function_signature=self.config.function_signature,
+                n_islands=self.n_islands,
+                island_solutions="\n\n".join(island_solutions),
+            )
 
         # Generate paradigm shift
         heavy_model = self.config.punctuated_equilibrium.heavy_model
