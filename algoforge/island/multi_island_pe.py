@@ -15,6 +15,7 @@ import logging
 import random
 import types
 from datetime import datetime
+from itertools import cycle
 from pathlib import Path
 from typing import Optional, Callable
 
@@ -179,9 +180,14 @@ class MultiIslandPERunner:
         self._create_islands()
 
         # State tracking
-        self.total_cost = 0.0
-        self.eval_count = 0
+        self.state = PipelineState(config.budget)
         self.pe_events = []
+        self.last_pe_eval = 0  # Track last PE event
+
+        # Concurrency primitives
+        self.archive_lock = asyncio.Lock()
+        self.code_queue = asyncio.Queue()
+        self.stop_event = asyncio.Event()
 
     def _load_centroids(self) -> dict:
         """Load centroids from JSON file."""
@@ -288,7 +294,7 @@ class MultiIslandPERunner:
                     timeout=300,
                 )
                 content = response.content
-                self.total_cost += response.cost
+                self.state.add_cost(response.cost)
 
                 new_code = extract_code(content)
                 if not new_code:
@@ -424,7 +430,7 @@ class MultiIslandPERunner:
                 **extras,
             )
             content = response.content
-            self.total_cost += response.cost
+            self.state.add_cost(response.cost)
 
         except Exception as e:
             logger.warning(f"[PE] Paradigm shift generation failed: {e}")
@@ -490,97 +496,160 @@ class MultiIslandPERunner:
         self.pe_events.append(stats)
         return stats
 
-    async def run_evolution_step(
-        self,
-        island_idx: int,
-        executor: ResilientProcessPool,
-    ) -> dict:
-        """Run single evolution step on one island."""
-        pool = self.islands[island_idx]
+    async def _llm_producer(self, worker_id: int, island_cycle) -> None:
+        """Sample from islands in round-robin and generate code."""
+        while not self.stop_event.is_set():
+            if self.state.budget_exhausted:
+                break
 
-        if pool.size() == 0:
-            return {"error": "Island empty"}
+            try:
+                island_idx = next(island_cycle)
+                pool = self.islands[island_idx]
 
-        # Sample parent
-        context = {"budget_progress": 0.5}  # Simplified
-        sampler_name, model = pool.get_weighted_sampler_config()
-        n_parents = self.config.pipeline.n_parents + self.config.pipeline.n_inspirations
-        sample = pool.sample(sampler_name, n_parents=n_parents, context=context)
+                if pool.size() == 0:
+                    await asyncio.sleep(0.1)
+                    continue
 
-        parent = sample.parent
-        inspirations = [p for p in sample.inspirations if random.random() < 0.8]
-        parents = [parent] + inspirations
+                async with self.archive_lock:
+                    sampler_name, model = pool.get_weighted_sampler_config()
+                    n_parents = self.config.pipeline.n_parents + self.config.pipeline.n_inspirations
+                    context = {"budget_progress": self.state.budget_progress}
+                    sample = pool.sample(sampler_name, n_parents=n_parents, context=context)
 
-        # Build prompt
-        builder = PromptBuilder()
-        builder.add_section("Problem", self.config.problem_description, priority=10)
-        builder.add_section("Signature", f"```python\n{self.config.function_signature}\n```", priority=20)
-        builder.add_parents([ProgramWithScore(p, None) for p in parents], priority=30)
-        builder.set_output_mode(OutputMode.FULL)
-        prompt = builder.build()
+                parent = sample.parent
+                inspirations = [p for p in sample.inspirations if random.random() < 0.8]
+                parents = [parent] + inspirations
 
-        # Generate
-        try:
-            llm = get_llm_client()
-            response = await llm.acompletion(
-                model=model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=self.config.pipeline.temperature,
-                max_tokens=self.config.pipeline.max_tokens,
-                timeout=300,
-            )
-            content = response.content
-            self.total_cost += response.cost
-        except Exception as e:
-            logger.warning(f"[Evo-{island_idx}] LLM error: {e}")
-            return {"error": str(e)}
+                builder = PromptBuilder()
+                builder.add_section("Problem", self.config.problem_description, priority=10)
+                builder.add_section("Signature", f"```python\n{self.config.function_signature}\n```", priority=20)
+                builder.add_parents([ProgramWithScore(p, None) for p in parents], priority=30)
+                builder.set_output_mode(OutputMode.FULL)
+                prompt = builder.build()
 
-        code = extract_code(content)
-        if not code:
-            return {"error": "No code extracted"}
+                self.state.llm_in_flight += 1
+                try:
+                    llm = get_llm_client()
+                    response = await llm.acompletion(
+                        model=model,
+                        messages=[{"role": "user", "content": prompt}],
+                        temperature=self.config.pipeline.temperature,
+                        max_tokens=self.config.pipeline.max_tokens,
+                        timeout=300,
+                    )
+                    content = response.content
+                    cost = response.cost
+                except Exception as e:
+                    logger.warning(f"[LLM-{worker_id}] Error: {e}")
+                    await asyncio.sleep(1.0)
+                    continue
+                finally:
+                    self.state.llm_in_flight -= 1
 
-        # Evaluate
-        try:
-            result = await executor.run(
-                _evaluate_code,
-                code,
-                self.config.score_fn,
-                self.config.inputs,
-                self.fn_name,
-                timeout=self.config.pipeline.eval_timeout
-            )
-        except Exception as e:
-            return {"error": str(e)}
+                self.state.add_cost(cost)
 
-        if "error" in result:
-            pool.update_sampler(sampler_name, sample.metadata.get("source_cell"), success=False)
-            return {"error": result["error"]}
+                if self.state.budget_exhausted:
+                    self.stop_event.set()
+                    break
 
-        # Add to archive
-        program = Program(code=code)
-        eval_result = EvaluationResult(
-            scores=result,
-            is_valid=True,
-        )
+                code = extract_code(content)
+                if not code:
+                    continue
 
-        accepted, cell_idx = pool.add(program, eval_result)
-        pool.update_sampler(sampler_name, sample.metadata.get("source_cell"), success=accepted)
+                await self.code_queue.put({
+                    "code": code,
+                    "sampler": sampler_name,
+                    "source_cell": sample.metadata.get("source_cell"),
+                    "model": model,
+                    "island_idx": island_idx,
+                })
 
-        score = result.get('score', 0)
-        self.eval_count += 1
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"[LLM-{worker_id}] Unexpected error: {e}")
+                await asyncio.sleep(1.0)
 
-        status = "accepted" if accepted else "rejected"
-        logger.info(
-            f"[Eval #{self.eval_count}] Island {island_idx} {sampler_name:15s} {status:12s} | "
-            f"score: {score:.1f} | best: {pool._best_score:.1f} | cost: ${self.total_cost:.3f}"
-        )
+    async def _eval_consumer(self, worker_id: int, executor: ResilientProcessPool) -> None:
+        """Evaluate code and add to source island."""
+        while not self.stop_event.is_set() or not self.code_queue.empty():
+            try:
+                item = await asyncio.wait_for(self.code_queue.get(), timeout=2.0)
+            except asyncio.TimeoutError:
+                continue
+            except asyncio.CancelledError:
+                break
 
-        return {
-            "accepted": accepted,
-            "score": score,
-            "cell": cell_idx,
-            "island": island_idx,
-        }
+            island_idx = item["island_idx"]
+            pool = self.islands[island_idx]
+
+            self.state.eval_in_flight += 1
+            try:
+                result = await executor.run(
+                    _evaluate_code,
+                    item["code"],
+                    self.config.score_fn,
+                    self.config.inputs,
+                    self.fn_name,
+                    timeout=self.config.pipeline.eval_timeout
+                )
+            except TimeoutError:
+                result = {"error": "Timeout"}
+            except Exception as e:
+                result = {"error": str(e)}
+            finally:
+                self.state.eval_in_flight -= 1
+
+            async with self.archive_lock:
+                if "error" not in result:
+                    program = Program(code=item["code"])
+                    eval_result = EvaluationResult(
+                        scores=result,
+                        is_valid=True,
+                    )
+
+                    accepted, cell_idx = pool.add(program, eval_result)
+                    pool.update_sampler(item["sampler"], item["source_cell"], success=accepted)
+
+                    if accepted:
+                        self.state.record_accept()
+                    else:
+                        self.state.record_reject()
+
+                    score = result.get('score', 0)
+                    is_new_best = score > self.state.best_score_so_far
+
+                    self.state.record_score(
+                        score=score,
+                        accepted=accepted,
+                        sampler=item["sampler"],
+                        archive_size=sum(p.size() for p in self.islands),
+                    )
+
+                    if is_new_best:
+                        status = "NEW BEST ★"
+                    elif accepted:
+                        status = "accepted"
+                    else:
+                        status = "rejected"
+
+                    logger.info(
+                        f"[Eval #{self.state.eval_count}] Island {island_idx} {item['sampler']:15s} "
+                        f"{status:12s} | score: {score:.1f} | best: {self.state.best_score_so_far:.1f} | "
+                        f"cost: ${self.state.total_cost:.3f}"
+                    )
+                else:
+                    pool.update_sampler(item["sampler"], item["source_cell"], success=False)
+                    self.state.record_error(result["error"])
+                    logger.debug(f"[Eval] Island {island_idx} ERROR: {result['error'][:50]}")
+
+            # Check for PE trigger
+            if (self.state.eval_count > 0 and
+                self.state.eval_count % self.pe_interval == 0 and
+                self.state.eval_count > self.last_pe_eval):
+                self.last_pe_eval = self.state.eval_count
+                logger.info(f"\n[MultiIslandPE] === Cross-Island PE Event @ eval {self.state.eval_count} ===")
+                await self.trigger_cross_island_pe(executor)
 
     async def run_async(self) -> AlgoforgeResult:
         """
@@ -617,22 +686,49 @@ class MultiIslandPERunner:
             logger.info("[MultiIslandPE] Phase 2: Seeding islands")
             self.seed_islands(seeds)
 
-            # Phase 3: Evolution with cross-island PE
-            logger.info(f"[MultiIslandPE] Phase 3: Evolution (budget=${self.config.budget.dollars}, pe_interval={self.pe_interval})")
+            # Phase 3: Evolution with cross-island PE (parallel workers)
+            n_workers = self.config.pipeline.n_llm_workers
+            logger.info(
+                f"[MultiIslandPE] Phase 3: Evolution with {n_workers} LLM workers "
+                f"(budget=${self.config.budget.dollars}, pe_interval={self.pe_interval})"
+            )
 
-            island_cycle = 0
-            while self.total_cost < self.config.budget.dollars:
-                # Check for PE event
-                if self.eval_count > 0 and self.eval_count % self.pe_interval == 0:
-                    logger.info(f"\n[MultiIslandPE] === Cross-Island PE Event @ eval {self.eval_count} ===")
-                    await self.trigger_cross_island_pe(executor)
+            island_indices = list(range(self.n_islands))
 
-                # Round-robin evolution step
-                island_idx = island_cycle % self.n_islands
-                await self.run_evolution_step(island_idx, executor)
-                island_cycle += 1
+            # Spawn parallel LLM producers
+            producers = [
+                asyncio.create_task(
+                    self._llm_producer(worker_id=i, island_cycle=cycle(island_indices))
+                )
+                for i in range(n_workers)
+            ]
 
-            logger.info(f"[MultiIslandPE] Budget exhausted: ${self.total_cost:.3f}")
+            # Spawn parallel eval consumers
+            consumers = [
+                asyncio.create_task(self._eval_consumer(worker_id=i, executor=executor))
+                for i in range(self.config.pipeline.n_eval_processes)
+            ]
+
+            # Wait for budget exhaustion
+            while not self.state.budget_exhausted:
+                await asyncio.sleep(1.0)
+
+            # Shutdown
+            self.stop_event.set()
+
+            for task in producers:
+                task.cancel()
+            await asyncio.gather(*producers, return_exceptions=True)
+
+            # Drain queue
+            while not self.code_queue.empty():
+                await asyncio.sleep(0.5)
+
+            for task in consumers:
+                task.cancel()
+            await asyncio.gather(*consumers, return_exceptions=True)
+
+            logger.info(f"[MultiIslandPE] Budget exhausted: ${self.state.total_cost:.3f}")
 
             # Build result
             best_code = ""
@@ -652,19 +748,19 @@ class MultiIslandPERunner:
             for i, pool in enumerate(self.islands):
                 logger.info(f"  Island {i}: archive={pool.size()}, best={pool._best_score:.1f}")
             logger.info(f"  Global best: {best_score:.1f}")
-            logger.info(f"  Total evals: {self.eval_count}")
-            logger.info(f"  Total cost: ${self.total_cost:.3f}")
+            logger.info(f"  Total evals: {self.state.eval_count}")
+            logger.info(f"  Total cost: ${self.state.total_cost:.3f}")
             logger.info(f"  PE events: {len(self.pe_events)}")
             logger.info("="*60)
 
             return AlgoforgeResult(
                 best_program=best_code,
                 best_score=best_score,
-                total_evaluations=self.eval_count,
-                total_cost=self.total_cost,
+                total_evaluations=self.state.eval_count,
+                total_cost=self.state.total_cost,
                 archive_size=total_archive,
-                runtime_seconds=0,  # Not tracked here
-                score_history=[],
+                runtime_seconds=self.state.elapsed_seconds,
+                score_history=self.state.get_score_history_list(),
             )
 
         finally:
