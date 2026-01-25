@@ -73,6 +73,13 @@ MODEL_INFO = {
         "input_cost_per_token": 0.0000005,
         "output_cost_per_token": 0.000003,
     },
+    "z-ai/glm-4.7": {
+        "max_tokens": 16384,
+        "max_input_tokens": 202752,
+        "max_output_tokens": 16384,
+        "input_cost_per_token": 0.0000004,
+        "output_cost_per_token": 0.0000015,
+    },
 }
 
 # Model key mapping for prompt overrides
@@ -164,29 +171,28 @@ def build_config_with_optimized_prompts(optimized: dict) -> AlgoforgeConfig:
         cvt=CVTConfig(
             n_centroids=40,
             defer_centroids=True,
-            predefined_centroids_file="/home/ttanveer/algoforge/examples/txn_scheduling/centroids.json"
         ),
         init=InitConfig(
-            enabled=False,
-            n_diverse_seeds=3,
-            n_variants_per_seed=5,
+            enabled=True,
+            n_diverse_seeds=5,
+            n_variants_per_seed=20,
             diversity_model=PARADIGM_SHIFT_MODEL,
             variant_models=LIGHT_MODELS,
             temperature=0.8,
         ),
-        meta_advice=MetaAdviceConfig(enabled=False, interval=50, model=PARADIGM_SHIFT_MODEL),
+        meta_advice=MetaAdviceConfig(enabled=True, interval=50, model=PARADIGM_SHIFT_MODEL),
         pipeline=PipelineConfig(n_llm_workers=8, n_eval_processes=8, n_inspirations=1, output_mode="full", eval_timeout=300),
         behavior=BehaviorConfig(ast_features=TXN_AST_FEATURES, score_keys=TXN_SCORE_KEYS, init_noise=0.0),
         punctuated_equilibrium=PunctuatedEquilibriumConfig(
             enabled=True,
             interval=5,
             n_clusters=3,
-            n_variants=0,
+            n_variants=3,
             heavy_model=PARADIGM_SHIFT_MODEL,
             variant_models=LIGHT_MODELS,
             behavior_noise=0.0,
             temperature=0.7,
-            reasoning_effort="disabled",
+            reasoning_effort="low",
         ),
         output_dir=run_dir,
         llm=LLMProviderConfig(

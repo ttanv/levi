@@ -38,13 +38,12 @@ Your function is called on 3 workloads. Total makespan is summed.
 """
 
 FUNCTION_SIGNATURE = """
-def get_best_schedule(workload, num_seqs: int) -> tuple[int, list[int]]:
+def get_best_schedule(workload) -> tuple[int, list[int]]:
     '''
     Optimize schedule for a single workload.
 
     Args:
         workload: Workload object with num_txns, txns, get_opt_seq_cost
-        num_seqs: Hint for number of sequences to try
 
     Returns:
         (makespan, schedule) where schedule is a permutation of [0, num_txns)
@@ -54,7 +53,7 @@ def get_best_schedule(workload, num_seqs: int) -> tuple[int, list[int]]:
 
 SEED_PROGRAM = '''import random
 
-def get_best_schedule(workload, num_seqs):
+def get_best_schedule(workload):
     """Get optimal schedule using greedy cost sampling strategy."""
     random.seed(42)
 
@@ -111,7 +110,7 @@ A workload object with:
 
 ## Function Signature
 ```python
-def get_best_schedule(workload, num_seqs: int) -> tuple[int, list[int]]:
+def get_best_schedule(workload) -> tuple[int, list[int]]:
     '''Returns (makespan, schedule) for a single workload.'''
     pass
 ```
@@ -191,7 +190,7 @@ def score_fn(get_best_schedule, inputs):
     try:
         total = 0
         for w in inputs:
-            _, schedule = get_best_schedule(w, 10)
+            _, schedule = get_best_schedule(w)
             if set(schedule) != set(range(w.num_txns)):
                 return {"error": "Invalid schedule: not a permutation"}
             total += w.get_opt_seq_cost(schedule)
