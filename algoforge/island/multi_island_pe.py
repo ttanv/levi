@@ -582,13 +582,14 @@ class MultiIslandPERunner:
             "island": island_idx,
         }
 
-    async def run_async(self, max_evals: int = 100) -> AlgoforgeResult:
+    async def run_async(self) -> AlgoforgeResult:
         """
         Main evolution loop.
 
         1. Generate and seed islands with diverse seeds
         2. Round-robin evolution across islands
         3. Trigger cross-island PE every pe_interval evals
+        4. Stop when budget exhausted
         """
         # Initialize unified LLM client
         llm_config = UnifiedLLMClientConfig(
@@ -617,10 +618,10 @@ class MultiIslandPERunner:
             self.seed_islands(seeds)
 
             # Phase 3: Evolution with cross-island PE
-            logger.info(f"[MultiIslandPE] Phase 3: Evolution (max_evals={max_evals}, pe_interval={self.pe_interval})")
+            logger.info(f"[MultiIslandPE] Phase 3: Evolution (budget=${self.config.budget.dollars}, pe_interval={self.pe_interval})")
 
             island_cycle = 0
-            while self.eval_count < max_evals:
+            while self.total_cost < self.config.budget.dollars:
                 # Check for PE event
                 if self.eval_count > 0 and self.eval_count % self.pe_interval == 0:
                     logger.info(f"\n[MultiIslandPE] === Cross-Island PE Event @ eval {self.eval_count} ===")
@@ -631,10 +632,7 @@ class MultiIslandPERunner:
                 await self.run_evolution_step(island_idx, executor)
                 island_cycle += 1
 
-                # Check budget
-                if self.total_cost >= self.config.budget.dollars:
-                    logger.info(f"[MultiIslandPE] Budget exhausted: ${self.total_cost:.3f}")
-                    break
+            logger.info(f"[MultiIslandPE] Budget exhausted: ${self.total_cost:.3f}")
 
             # Build result
             best_code = ""
@@ -673,9 +671,9 @@ class MultiIslandPERunner:
             executor.shutdown()
             clear_llm_client()
 
-    def run(self, max_evals: int = 100) -> AlgoforgeResult:
+    def run(self) -> AlgoforgeResult:
         """Synchronous wrapper for run_async."""
-        return asyncio.run(self.run_async(max_evals))
+        return asyncio.run(self.run_async())
 
 
 async def run_multi_island_pe_async(
@@ -683,17 +681,15 @@ async def run_multi_island_pe_async(
     centroids_file: str,
     n_islands: int = 4,
     pe_interval: int = 5,
-    max_evals: int = 100,
 ) -> AlgoforgeResult:
     """
     Run multi-island PE evolution.
 
     Args:
-        config: AlgoForge configuration
+        config: AlgoForge configuration (budget from config.budget.dollars)
         centroids_file: Path to centroids.json with shared behavior space
         n_islands: Number of islands (default 4)
         pe_interval: Evals between cross-island PE events (default 5)
-        max_evals: Maximum evaluations (default 100)
 
     Returns:
         AlgoforgeResult with best program found
@@ -707,7 +703,7 @@ async def run_multi_island_pe_async(
         pe_interval=pe_interval,
     )
 
-    return await runner.run_async(max_evals=max_evals)
+    return await runner.run_async()
 
 
 def run_multi_island_pe(
@@ -715,17 +711,15 @@ def run_multi_island_pe(
     centroids_file: str,
     n_islands: int = 4,
     pe_interval: int = 5,
-    max_evals: int = 100,
 ) -> AlgoforgeResult:
     """
     Run multi-island PE evolution (synchronous).
 
     Args:
-        config: AlgoForge configuration
+        config: AlgoForge configuration (budget from config.budget.dollars)
         centroids_file: Path to centroids.json with shared behavior space
         n_islands: Number of islands (default 4)
         pe_interval: Evals between cross-island PE events (default 5)
-        max_evals: Maximum evaluations (default 100)
 
     Returns:
         AlgoforgeResult with best program found
@@ -735,5 +729,4 @@ def run_multi_island_pe(
         centroids_file=centroids_file,
         n_islands=n_islands,
         pe_interval=pe_interval,
-        max_evals=max_evals,
     ))

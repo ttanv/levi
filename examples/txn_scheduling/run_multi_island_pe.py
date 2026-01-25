@@ -164,7 +164,6 @@ if __name__ == "__main__":
         centroids_file=str(CENTROIDS_FILE),
         n_islands=4,
         pe_interval=5,
-        max_evals=100,
     )
 
     print()

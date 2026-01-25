@@ -1,0 +1,1245 @@
+{
+  "metadata": {
+    "archive_size": 8,
+    "n_centroids": 50,
+    "best_score": 67.43607150939127,
+    "generation": 0,
+    "feature_names": [
+      "loop_nesting_max",
+      "comparison_count",
+      "call_count",
+      "branch_count"
+    ],
+    "learned_bounds": {
+      "loop_nesting_max": {
+        "min": 0.0,
+        "max": 1.0
+      },
+      "comparison_count": {
+        "min": 0.0,
+        "max": 1.0
+      },
+      "call_count": {
+        "min": 0.0,
+        "max": 1.0
+      },
+      "branch_count": {
+        "min": 0.0,
+        "max": 1.0
+      }
+    }
+  },
+  "elites": [
+    {
+      "cell_index": 43,
+      "program_id": "da7e2912-8e20-405e-bb99-eea0d60e8a95",
+      "code": "import random\nimport time\nimport math\n\ndef get_best_schedule(workload):\n    '''\n    Optimize transaction scheduling using conflict-aware initialization,\n    adaptive simulated annealing with specialized moves, and local search.\n    \n    Args:\n        workload: Workload object with num_txns, txns, get_opt_seq_cost\n\n    Returns:\n        (makespan, schedule) where schedule is a permutation of [0, num_txns)\n    '''\n    num_txns = workload.num_txns\n    txns = workload.txns\n    get_cost = workload.get_opt_seq_cost\n    \n    # --- 1. Conflict Analysis ---\n    txn_reads = [set() for _ in range(num_txns)]\n    txn_writes = [set() for _ in range(num_txns)]\n    \n    for i in range(num_txns):\n        for op_type, key, _, _ in txns[i]:\n            if op_type == 'r':\n                txn_reads[i].add(key)\n            else:\n                txn_writes[i].add(key)\n    \n    conflict_degree = [0] * num_txns\n    for i in range(num_txns):\n        for j in range(i + 1, num_txns):\n            conflict = (txn_writes[i] & txn_writes[j] or \n                       txn_writes[i] & txn_reads[j] or \n                       txn_writes[j] & txn_reads[i])\n            if conflict:\n                conflict_degree[i] += 1\n                conflict_degree[j] += 1\n    \n    # --- 2. Initial Schedule Generation ---\n    def greedy_construct():\n        # Sort by conflict degree (descending) to handle high-degree txns early\n        sorted_txns = sorted(range(num_txns), key=lambda x: conflict_degree[x], reverse=True)\n        schedule = []\n        \n        for txn in sorted_txns:\n            best_pos = 0\n            best_cost = float('inf')\n            \n            # Insert at position that minimizes cost\n            for pos in range(len(schedule) + 1):\n                test = schedule[:pos] + [txn] + schedule[pos:]\n                c = get_cost(test)\n                if c < best_cost:\n                    best_cost = c\n                    best_pos = pos\n            \n            schedule.insert(best_pos, txn)\n        \n        return schedule\n    \n    # Generate several candidates\n    best_schedule = greedy_construct()\n    best_cost = get_cost(best_schedule)\n    \n    # Try a few random restarts\n    for _ in range(2):\n        # Randomized order based on conflict degree\n        shuffled = sorted(range(num_txns), key=lambda x: (conflict_degree[x], random.random()), reverse=True)\n        schedule = []\n        for txn in shuffled:\n            best_pos = 0\n            best_cost_temp = float('inf')\n            for pos in range(len(schedule) + 1):\n                test = schedule[:pos] + [txn] + schedule[pos:]\n                c = get_cost(test)\n                if c < best_cost_temp:\n                    best_cost_temp = c\n                    best_pos = pos\n            schedule.insert(best_pos, txn)\n        \n        c = get_cost(schedule)\n        if c < best_cost:\n            best_cost = c\n            best_schedule = schedule\n    \n    # --- 3. Simulated Annealing ---\n    current_schedule = best_schedule[:]\n    current_cost = best_cost\n    \n    initial_temp = max(1.0, best_cost * 0.05)\n    final_temp = 1e-7\n    alpha = 0.9994\n    max_iter = 25000\n    \n    temp = initial_temp\n    iteration = 0\n    no_improve = 0\n    start_time = time.time()\n    \n    # Cost cache to avoid redundant computations\n    cost_cache = {tuple(current_schedule): current_cost}\n    \n    def cached_cost(seq):\n        key = tuple(seq)\n        if key not in cost_cache:\n            cost_cache[key] = get_cost(seq)\n        return cost_cache[key]\n    \n    while temp > final_temp and iteration < max_iter:\n        if time.time() - start_time > 26:\n            break\n            \n        # Generate neighbor\n        r = random.random()\n        neighbor = current_schedule[:]\n        \n        if r < 0.35:  # Swap\n            i, j = random.sample(range(num_txns), 2)\n            neighbor[i], neighbor[j] = neighbor[j], neighbor[i]\n        elif r < 0.65:  # Move\n            idx = random.randint(0, num_txns - 1)\n            val = neighbor.pop(idx)\n            new_pos = random.randint(0, num_txns - 1)\n            neighbor.insert(new_pos, val)\n        elif r < 0.85:  # Reverse\n            i = random.randint(0, num_txns - 2)\n            j = random.randint(i + 1, min(i + 20, num_txns - 1))\n            neighbor[i:j+1] = reversed(neighbor[i:j+1])\n        else:  # Shuffle block\n            block_size = random.randint(3, min(10, num_txns))\n            start = random.randint(0, num_txns - block_size)\n            block = neighbor[start:start+block_size]\n            random.shuffle(block)\n            neighbor[start:start+block_size] = block\n        \n        neighbor_cost = cached_cost(neighbor)\n        delta = neighbor_cost - current_cost\n        \n        # Accept\n        if delta < 0 or math.exp(-delta / temp) > random.random():\n            current_schedule = neighbor\n            current_cost = neighbor_cost\n            \n            if current_cost < best_cost:\n                best_cost = current_cost\n                best_schedule = current_schedule[:]\n                no_improve = 0\n            else:\n                no_improve += 1\n        else:\n            no_improve += 1\n        \n        # Cooling\n        if no_improve > 150:\n            temp *= 1.08\n            no_improve = 0\n        else:\n            temp *= alpha\n        \n        iteration += 1\n    \n    # --- 4. Local Search (2-opt style) ---\n    def local_search(schedule, cost):\n        improved = True\n        best_s = schedule[:]\n        best_c = cost\n        \n        # Limited iterations for time\n        ls_iter = 0\n        max_ls = 2000\n        \n        while improved and ls_iter < max_ls and time.time() - start_time < 28:\n            improved = False\n            ls_iter += 1\n            \n            # Try swapping distant pairs\n            for i in range(num_txns - 1):\n                for j in range(i + 2, num_txns):\n                    # Reverse segment between i and j\n                    new_s = schedule[:i] + list(reversed(schedule[i:j+1])) + schedule[j+1:]\n                    new_c = cached_cost(new_s)\n                    \n                    if new_c < best_c:\n                        best_s = new_s\n                        best_c = new_c\n                        improved = True\n                        break\n                if improved:\n                    break\n            \n            if improved:\n                schedule = best_s[:]\n        \n        return best_s, best_c\n    \n    if time.time() - start_time < 27:\n        best_schedule, best_cost = local_search(best_schedule, best_cost)\n    \n    return best_cost, best_schedule",
+      "scores": {
+        "score": 67.43607150939127,
+        "makespan": 239
+      },
+      "primary_score": 67.43607150939127,
+      "behavior": {
+        "loop_nesting_max": 0.6,
+        "comparison_count": 0.475,
+        "call_count": 1.0,
+        "branch_count": 0.68
+      },
+      "metadata": {},
+      "parents": [],
+      "created_at": "2026-01-24T19:51:22.351759"
+    },
+    {
+      "cell_index": 26,
+      "program_id": "f826f598-1ec1-44f8-92cf-7d52b13a418f",
+      "code": "import random\nimport time\nimport math\nimport heapq\nfrom collections import defaultdict\n\ndef get_best_schedule(workload):\n    '''\n    Optimize schedule for a single workload.\n\n    Args:\n        workload: Workload object with num_txns, txns, get_opt_seq_cost\n\n    Returns:\n        (makespan, schedule) where schedule is a permutation of [0, num_txns)\n    '''\n    num_txns = workload.num_txns\n    txns = workload.txns\n    get_cost = workload.get_opt_seq_cost\n    \n    # --- 1. Conflict Graph Construction ---\n    txn_reads = [set() for _ in range(num_txns)]\n    txn_writes = [set() for _ in range(num_txns)]\n    \n    for i in range(num_txns):\n        for op_type, key, _, _ in txns[i]:\n            if op_type == 'r':\n                txn_reads[i].add(key)\n            else:  # 'w'\n                txn_writes[i].add(key)\n    \n    # Build conflict matrix and compute conflict degrees\n    conflict_matrix = [[False] * num_txns for _ in range(num_txns)]\n    conflict_degree = [0] * num_txns\n    \n    for i in range(num_txns):\n        for j in range(i + 1, num_txns):\n            conflict = (txn_writes[i] & txn_writes[j] or \n                       txn_writes[i] & txn_reads[j] or \n                       txn_writes[j] & txn_reads[i])\n            if conflict:\n                conflict_matrix[i][j] = conflict_matrix[j][i] = True\n                conflict_degree[i] += 1\n                conflict_degree[j] += 1\n    \n    # --- 2. Initial Schedule Generation ---\n    def greedy_initialization():\n        # Sort by conflict degree (descending) for better initial ordering\n        sorted_txns = sorted(range(num_txns), key=lambda x: conflict_degree[x], reverse=True)\n        schedule = []\n        \n        for txn in sorted_txns:\n            best_pos = len(schedule)\n            best_cost = float('inf')\n            \n            # Try inserting at different positions\n            for pos in range(len(schedule) + 1):\n                test_schedule = schedule[:pos] + [txn] + schedule[pos:]\n                cost = get_cost(test_schedule)\n                if cost < best_cost:\n                    best_cost = cost\n                    best_pos = pos\n            \n            schedule.insert(best_pos, txn)\n        \n        return schedule\n    \n    # Generate multiple initial schedules and pick best\n    best_schedule = greedy_initialization()\n    best_cost = get_cost(best_schedule)\n    \n    for _ in range(3):\n        candidate = greedy_initialization()\n        cost = get_cost(candidate)\n        if cost < best_cost:\n            best_cost = cost\n            best_schedule = candidate\n    \n    # --- 3. Simulated Annealing with Adaptive Moves ---\n    current_schedule = best_schedule[:]\n    current_cost = best_cost\n    \n    # Adaptive temperature parameters\n    initial_temp = current_cost * 0.1\n    final_temp = 1e-8\n    alpha = 0.9995\n    max_iter = 20000\n    \n    temp = initial_temp\n    iteration = 0\n    no_improve_count = 0\n    start_time = time.time()\n    \n    while temp > final_temp and iteration < max_iter:\n        if time.time() - start_time > 25:\n            break\n            \n        # Adaptive move selection based on iteration\n        r = random.random()\n        neighbor = current_schedule[:]\n        \n        if r < 0.4:  # Swap two transactions\n            i, j = random.sample(range(num_txns), 2)\n            neighbor[i], neighbor[j] = neighbor[j], neighbor[i]\n        elif r < 0.7:  # Move transaction to new position\n            idx = random.randint(0, num_txns - 1)\n            val = neighbor.pop(idx)\n            new_pos = random.randint(0, num_txns - 1)\n            neighbor.insert(new_pos, val)\n        elif r < 0.85:  # Reverse subsequence\n            i = random.randint(0, num_txns - 2)\n            j = random.randint(i + 1, num_txns - 1)\n            neighbor[i:j+1] = reversed(neighbor[i:j+1])\n        else:  # Shuffle a small block\n            block_size = random.randint(3, min(8, num_txns))\n            start = random.randint(0, num_txns - block_size)\n            block = neighbor[start:start+block_size]\n            random.shuffle(block)\n            neighbor[start:start+block_size] = block\n        \n        neighbor_cost = get_cost(neighbor)\n        delta = neighbor_cost - current_cost\n        \n        # Acceptance criterion\n        if delta < 0 or random.random() < math.exp(-delta / temp):\n            current_schedule = neighbor\n            current_cost = neighbor_cost\n            \n            if current_cost < best_cost:\n                best_cost = current_cost\n                best_schedule = current_schedule[:]\n                no_improve_count = 0\n            else:\n                no_improve_count += 1\n        else:\n            no_improve_count += 1\n        \n        # Adaptive cooling based on improvement rate\n        if no_improve_count > 100:\n            temp *= 1.05  # Slight reheating\n            no_improve_count = 0\n        else:\n            temp *= alpha\n        \n        iteration += 1\n    \n    # --- 4. Local Search Refinement ---\n    def local_search_improvement(schedule):\n        improved = True\n        while improved:\n            improved = False\n            for i in range(num_txns):\n                for j in range(i + 1, num_txns):\n                    # Try swapping i and j\n                    new_schedule = schedule[:]\n                    new_schedule[i], new_schedule[j] = new_schedule[j], new_schedule[i]\n                    new_cost = get_cost(new_schedule)\n                    \n                    if new_cost < best_cost:\n                        return new_schedule, new_cost\n        return schedule, best_cost\n    \n    # Apply local search if time permits\n    if time.time() - start_time < 28:\n        best_schedule, best_cost = local_search_improvement(best_schedule)\n    \n    return best_cost, best_schedule",
+      "scores": {
+        "score": 65.8520027155465,
+        "makespan": 246
+      },
+      "primary_score": 65.8520027155465,
+      "behavior": {
+        "loop_nesting_max": 0.6,
+        "comparison_count": 0.375,
+        "call_count": 1.0,
+        "branch_count": 0.52
+      },
+      "metadata": {},
+      "parents": [],
+      "created_at": "2026-01-24T19:41:50.177934"
+    },
+    {
+      "cell_index": 27,
+      "program_id": "529263c1-af01-4428-a0bc-ca3be561539f",
+      "code": "import random\nimport time\nimport math\nimport heapq\nfrom collections import defaultdict, deque\nimport numpy as np\n\ndef get_best_schedule(workload):\n    '''\n    Optimize schedule for a single workload.\n\n    Args:\n        workload: Workload object with num_txns, txns, get_opt_seq_cost\n\n    Returns:\n        (makespan, schedule) where schedule is a permutation of [0, num_txns)\n    '''\n    num_txns = workload.num_txns\n    txns = workload.txns\n    get_cost = workload.get_opt_seq_cost\n    \n    # --- 1. Comprehensive Conflict Analysis ---\n    txn_reads = [set() for _ in range(num_txns)]\n    txn_writes = [set() for _ in range(num_txns)]\n    txn_all_keys = [set() for _ in range(num_txns)]\n    \n    for i in range(num_txns):\n        for op_type, key, _, _ in txns[i]:\n            txn_all_keys[i].add(key)\n            if op_type == 'r':\n                txn_reads[i].add(key)\n            else:\n                txn_writes[i].add(key)\n    \n    # Build detailed conflict matrix\n    ww_conflicts = [[False] * num_txns for _ in range(num_txns)]\n    wr_conflicts = [[False] * num_txns for _ in range(num_txns)]\n    conflict_degree = [0] * num_txns\n    conflict_weight = [0.0] * num_txns\n    \n    for i in range(num_txns):\n        for j in range(i + 1, num_txns):\n            ww_conflict = bool(txn_writes[i] & txn_writes[j])\n            wr_conflict_ij = bool(txn_writes[i] & txn_reads[j])\n            wr_conflict_ji = bool(txn_writes[j] & txn_reads[i])\n            \n            if ww_conflict or wr_conflict_ij or wr_conflict_ji:\n                ww_conflicts[i][j] = ww_conflicts[j][i] = ww_conflict\n                wr_conflicts[i][j] = wr_conflict_ij\n                wr_conflicts[j][i] = wr_conflict_ji\n                conflict_degree[i] += 1\n                conflict_degree[j] += 1\n                conflict_weight[i] += len(txn_writes[i] & txn_writes[j]) * 2.0\n                conflict_weight[i] += len(txn_writes[i] & txn_reads[j]) * 1.5\n                conflict_weight[j] += len(txn_writes[j] & txn_reads[i]) * 1.5\n    \n    # --- 2. Multi-strategy Initialization ---\n    def generate_initial_schedules():\n        schedules = []\n        \n        # Strategy 1: Conflict-aware greedy insertion\n        def conflict_greedy():\n            remaining = list(range(num_txns))\n            remaining.sort(key=lambda x: conflict_weight[x], reverse=True)\n            schedule = []\n            \n            while remaining:\n                best_txn = None\n                best_pos = 0\n                best_cost = float('inf')\n                \n                for idx, txn in enumerate(remaining[:min(20, len(remaining))]):\n                    for pos in range(len(schedule) + 1):\n                        test = schedule[:pos] + [txn] + schedule[pos:]\n                        cost = get_cost(test)\n                        if cost < best_cost:\n                            best_cost = cost\n                            best_txn = txn\n                            best_pos = pos\n                \n                schedule.insert(best_pos, best_txn)\n                remaining.remove(best_txn)\n            \n            return schedule\n        \n        # Strategy 2: Topological-like ordering\n        def topological_ordering():\n            # Create a directed graph where edge i->j means i should come before j\n            in_degree = [0] * num_txns\n            adj = [[] for _ in range(num_txns)]\n            \n            for i in range(num_txns):\n                for j in range(num_txns):\n                    if i != j:\n                        if ww_conflicts[i][j] and len(txn_writes[i]) > len(txn_writes[j]):\n                            adj[j].append(i)\n                            in_degree[i] += 1\n                        elif wr_conflicts[i][j]:\n                            adj[j].append(i)\n                            in_degree[i] += 1\n            \n            # Kahn's algorithm with priority queue\n            heap = []\n            for i in range(num_txns):\n                if in_degree[i] == 0:\n                    heapq.heappush(heap, (-conflict_weight[i], i))\n            \n            schedule = []\n            while heap:\n                _, node = heapq.heappop(heap)\n                schedule.append(node)\n                \n                for neighbor in adj[node]:\n                    in_degree[neighbor] -= 1\n                    if in_degree[neighbor] == 0:\n                        heapq.heappush(heap, (-conflict_weight[neighbor], neighbor))\n            \n            if len(schedule) < num_txns:\n                remaining = [i for i in range(num_txns) if i not in schedule]\n                schedule.extend(remaining)\n            \n            return schedule\n        \n        # Strategy 3: Key-based clustering\n        def key_clustering():\n            # Group transactions by their most frequent keys\n            key_to_txns = defaultdict(list)\n            for i in range(num_txns):\n                for key in txn_all_keys[i]:\n                    key_to_txns[key].append(i)\n            \n            # Order keys by contention (number of transactions accessing them)\n            sorted_keys = sorted(key_to_txns.keys(), \n                               key=lambda k: len(key_to_txns[k]), \n                               reverse=True)\n            \n            schedule = []\n            scheduled = set()\n            \n            for key in sorted_keys:\n                txns_for_key = [t for t in key_to_txns[key] if t not in scheduled]\n                if not txns_for_key:\n                    continue\n                \n                # Order transactions for this key: writes first, then reads\n                txns_for_key.sort(key=lambda t: (len(txn_writes[t] & {key}), \n                                               -len(txn_reads[t] & {key})))\n                \n                for txn in txns_for_key:\n                    if txn not in scheduled:\n                        # Find best insertion position\n                        best_pos = len(schedule)\n                        best_cost = float('inf')\n                        \n                        for pos in range(len(schedule) + 1):\n                            test = schedule[:pos] + [txn] + schedule[pos:]\n                            cost = get_cost(test)\n                            if cost < best_cost:\n                                best_cost = cost\n                                best_pos = pos\n                        \n                        schedule.insert(best_pos, txn)\n                        scheduled.add(txn)\n            \n            # Add any remaining transactions\n            for i in range(num_txns):\n                if i not in scheduled:\n                    schedule.append(i)\n            \n            return schedule\n        \n        # Generate schedules from all strategies\n        schedules.append(conflict_greedy())\n        schedules.append(topological_ordering())\n        schedules.append(key_clustering())\n        \n        # Add some random variations\n        random.seed(42)\n        for _ in range(2):\n            seq = list(range(num_txns))\n            weights = [conflict_weight[i] + 1 for i in range(num_txns)]\n            seq.sort(key=lambda x: random.random() * weights[x], reverse=True)\n            schedules.append(seq)\n        \n        return schedules\n    \n    # Generate and evaluate initial schedules\n    initial_schedules = generate_initial_schedules()\n    best_schedule = min(initial_schedules, key=lambda s: get_cost(s))\n    best_cost = get_cost(best_schedule)\n    \n    # --- 3. Enhanced Simulated Annealing with Adaptive Strategies ---\n    current_schedule = best_schedule[:]\n    current_cost = best_cost\n    \n    # Dynamic SA parameters\n    initial_temp = max(100.0, current_cost * 0.05)\n    final_temp = 1e-6\n    alpha = 0.9997\n    max_iter = 50000\n    start_time = time.time()\n    \n    temp = initial_temp\n    iteration = 0\n    no_improve = 0\n    accept_rate = 0.0\n    accept_window = deque(maxlen=100)\n    \n    # Cost cache for performance\n    cost_cache = {tuple(current_schedule): current_cost}\n    \n    def get_cached_cost(seq):\n        key = tuple(seq)\n        if key not in cost_cache:\n            cost_cache[key] = get_cost(seq)\n        return cost_cache[key]\n    \n    # Specialized neighborhood moves\n    def get_neighbor(seq, iteration):\n        n = len(seq)\n        new_seq = seq[:]\n        \n        # Adaptive move selection based on iteration and temperature\n        r = random.random()\n        \n        if r < 0.25:  # Smart swap of conflicting transactions\n            # Find pairs with high conflict probability\n            conflict_pairs = []\n            for i in range(n - 1):\n                for j in range(i + 1, min(i + 20, n)):\n                    if ww_conflicts[seq[i]][seq[j]] or wr_conflicts[seq[i]][seq[j]]:\n                        conflict_pairs.append((i, j))\n            \n            if conflict_pairs:\n                i, j = random.choice(conflict_pairs)\n                # Bias swap direction based on write counts\n                if len(txn_writes[seq[i]]) > len(txn_writes[seq[j]]):\n                    if random.random() < 0.7:  # Higher write count should come later\n                        pass  # Keep as is for swap\n                new_seq[i], new_seq[j] = new_seq[j], new_seq[i]\n            else:\n                i, j = random.sample(range(n), 2)\n                new_seq[i], new_seq[j] = new_seq[j], new_seq[i]\n                \n        elif r < 0.5:  # Intelligent insertion\n            idx = random.randint(0, n - 1)\n            txn = new_seq[idx]\n            \n            # Decide direction based on conflict characteristics\n            forward_conflicts = sum(1 for j in range(idx + 1, min(idx + 10, n)) \n                                  if ww_conflicts[txn][new_seq[j]] or wr_conflicts[txn][new_seq[j]])\n            backward_conflicts = sum(1 for j in range(max(0, idx - 10), idx) \n                                   if ww_conflicts[txn][new_seq[j]] or wr_conflicts[txn][new_seq[j]])\n            \n            if forward_conflicts > backward_conflicts:\n                # Move earlier to resolve conflicts\n                new_pos = random.randint(0, max(0, idx - random.randint(1, 5)))\n            else:\n                # Move later\n                new_pos = random.randint(min(idx + 1, n - 1), n - 1)\n            \n            val = new_seq.pop(idx)\n            new_seq.insert(new_pos, val)\n            \n        elif r < 0.75:  # Block operations\n            block_size = random.randint(3, min(10, n))\n            start = random.randint(0, n - block_size)\n            \n            if random.random() < 0.5:\n                # Reverse block\n                new_seq[start:start+block_size] = reversed(new_seq[start:start+block_size])\n            else:\n                # Shuffle block\n                block = new_seq[start:start+block_size]\n                random.shuffle(block)\n                new_seq[start:start+block_size] = block\n                \n        else:  # Large-scale perturbation (less frequent)\n            # Perform multiple moves\n            for _ in range(random.randint(2, 4)):\n                i, j = random.sample(range(n), 2)\n                new_seq[i], new_seq[j] = new_seq[j], new_seq[i]\n        \n        return new_seq\n    \n    # Main SA loop\n    while temp > final_temp and iteration < max_iter:\n        if time.time() - start_time > 28:\n            break\n        \n        neighbor = get_neighbor(current_schedule, iteration)\n        neighbor_cost = get_cached_cost(neighbor)\n        delta = neighbor_cost - current_cost\n        \n        # Adaptive acceptance\n        accept_prob = 1.0 if delta < 0 else math.exp(-delta / temp)\n        \n        if random.random() < accept_prob:\n            current_schedule = neighbor\n            current_cost = neighbor_cost\n            accept_window.append(1)\n            \n            if current_cost < best_cost:\n                best_cost = current_cost\n                best_schedule = current_schedule[:]\n                no_improve = 0\n            else:\n                no_improve += 1\n        else:\n            accept_window.append(0)\n            no_improve += 1\n        \n        # Update acceptance rate\n        if len(accept_window) == 100:\n            accept_rate = sum(accept_window) / 100.0\n        \n        # Adaptive temperature control\n        if iteration % 100 == 0:\n            if accept_rate < 0.2:\n                temp *= 1.1  # Reheat if acceptance too low\n            elif accept_rate > 0.5:\n                temp *= 0.99  # Cool faster if acceptance high\n            else:\n                temp *= alpha\n        \n        iteration += 1\n    \n    # --- 4. Intensive Local Search ---\n    def intensive_local_search(schedule, cost, time_limit):\n        start_search = time.time()\n        n = len(schedule)\n        improved = True\n        \n        while improved and time.time() - start_search < time_limit:\n            improved = False\n            \n            # Try all pairwise swaps in random order\n            indices = list(range(n))\n            random.shuffle(indices)\n            \n            for idx_i in indices:\n                for idx_j in indices:\n                    if idx_i >= idx_j:\n                        continue\n                    \n                    if time.time() - start_search >= time_limit:\n                        return schedule, cost\n                    \n                    # Try swap\n                    new_schedule = schedule[:]\n                    new_schedule[idx_i], new_schedule[idx_j] = new_schedule[idx_j], new_schedule[idx_i]\n                    new_cost = get_cost(new_schedule)\n                    \n                    if new_cost < cost:\n                        schedule = new_schedule\n                        cost = new_cost\n                        improved = True\n                        break\n                \n                if improved:\n                    break\n            \n            # Try insertion moves\n            if not improved:\n                for i in range(n):\n                    for j in range(n):\n                        if i == j:\n                            continue\n                        \n                        if time.time() - start_search >= time_limit:\n                            return schedule, cost\n                        \n                        new_schedule = schedule[:]\n                        val = new_schedule.pop(i)\n                        new_schedule.insert(j, val)\n                        new_cost = get_cost(new_schedule)\n                        \n                        if new_cost < cost:\n                            schedule = new_schedule\n                            cost = new_cost\n                            improved = True\n                            break\n                    \n                    if improved:\n                        break\n        \n        return schedule, cost\n    \n    # Apply intensive local search with remaining time\n    remaining = 29.5 - (time.time() - start_time)\n    if remaining > 0.5:\n        best_schedule, best_cost = intensive_local_search(best_schedule, best_cost, remaining)\n    \n    return best_cost, best_schedule",
+      "scores": {
+        "score": 65.8520027155465,
+        "makespan": 246
+      },
+      "primary_score": 65.8520027155465,
+      "behavior": {
+        "loop_nesting_max": 0.6,
+        "comparison_count": 0.95,
+        "call_count": 1.0,
+        "branch_count": 1.0
+      },
+      "metadata": {},
+      "parents": [],
+      "created_at": "2026-01-24T19:50:40.238550"
+    },
+    {
+      "cell_index": 47,
+      "program_id": "8a1bae80-72c8-42a7-91f1-4c82c670d26e",
+      "code": "import random\nimport time\nimport math\nfrom collections import deque\n\ndef get_best_schedule(workload):\n    \"\"\"\n    Optimize transaction scheduling using multiple strategies:\n    1. Conflict graph analysis with heuristics\n    2. Multiple initial candidates\n    3. Simulated annealing with specialized moves\n    4. Local search improvements\n    \"\"\"\n    num_txns = workload.num_txns\n    txns = workload.txns\n    get_cost = workload.get_opt_seq_cost\n    \n    # Build transaction properties\n    txn_operations = []\n    for i in range(num_txns):\n        reads = set()\n        writes = set()\n        for op_type, key, _, _ in txns[i]:\n            if op_type == 'r':\n                reads.add(key)\n            else:  # 'w'\n                writes.add(key)\n        txn_operations.append((reads, writes))\n    \n    # Build conflict matrix\n    conflict_matrix = [[False] * num_txns for _ in range(num_txns)]\n    for i in range(num_txns):\n        r_i, w_i = txn_operations[i]\n        for j in range(i + 1, num_txns):\n            r_j, w_j = txn_operations[j]\n            conflict = bool((w_i & w_j) or (w_i & r_j) or (w_j & r_i))\n            if conflict:\n                conflict_matrix[i][j] = conflict_matrix[j][i] = True\n    \n    # Strategy 1: Conflict-aware heuristic\n    def conflict_heuristic_schedule():\n        # Create dependency based on write conflicts\n        deps = [[] for _ in range(num_txns)]\n        indeg = [0] * num_txns\n        \n        for i in range(num_txns):\n            r_i, w_i = txn_operations[i]\n            for j in range(i + 1, num_txns):\n                r_j, w_j = txn_operations[j]\n                if w_i & w_j:\n                    # Transaction with more writes should be earlier\n                    if len(w_i) > len(w_j):\n                        deps[j].append(i)\n                        indeg[i] += 1\n                    else:\n                        deps[i].append(j)\n                        indeg[j] += 1\n                elif w_i & r_j:\n                    deps[i].append(j)\n                    indeg[j] += 1\n                elif w_j & r_i:\n                    deps[j].append(i)\n                    indeg[i] += 1\n        \n        # Topological sort with heuristics\n        queue = deque([i for i in range(num_txns) if indeg[i] == 0])\n        result = []\n        \n        while queue:\n            # Pick transaction that conflicts most with remaining\n            candidates = list(queue)\n            candidates.sort(key=lambda x: -sum(conflict_matrix[x][y] for y in range(num_txns) \n                                              if y not in result and indeg[y] == 0))\n            node = candidates[0]\n            result.append(node)\n            queue.remove(node)\n            \n            for neighbor in deps[node]:\n                indeg[neighbor] -= 1\n                if indeg[neighbor] == 0:\n                    queue.append(neighbor)\n        \n        # Handle cycles or remaining\n        if len(result) < num_txns:\n            remaining = [i for i in range(num_txns) if i not in result]\n            remaining.sort(key=lambda x: (len(txn_operations[x][1]), len(txn_operations[x][0])), \n                          reverse=True)\n            result.extend(remaining)\n        \n        return result\n    \n    # Strategy 2: Write-heavy first\n    def write_heavy_schedule():\n        seq = list(range(num_txns))\n        seq.sort(key=lambda x: len(txn_operations[x][1]), reverse=True)\n        return seq\n    \n    # Strategy 3: Operation count\n    def op_count_schedule():\n        seq = list(range(num_txns))\n        seq.sort(key=lambda x: len(txns[x]), reverse=True)\n        return seq\n    \n    # Strategy 4: Weighted random\n    def weighted_random_schedule():\n        seq = list(range(num_txns))\n        weights = [len(txn_operations[i][1]) * 2 + len(txn_operations[i][0]) + 1 for i in range(num_txns)]\n        seq.sort(key=lambda x: random.random() * weights[x], reverse=True)\n        return seq\n    \n    # Generate initial candidates\n    random.seed(42)\n    strategies = [\n        conflict_heuristic_schedule,\n        write_heavy_schedule,\n        op_count_schedule,\n        weighted_random_schedule\n    ]\n    \n    best_cost = float('inf')\n    best_seq = None\n    \n    for strategy in strategies:\n        seq = strategy()\n        cost = get_cost(seq)\n        if cost < best_cost:\n            best_cost = cost\n            best_seq = seq\n    \n    # Simulated Annealing\n    current_seq = best_seq[:]\n    current_cost = best_cost\n    \n    # Parameters\n    start_temp = 1.0\n    end_temp = 0.001\n    cooling_rate = 0.9995\n    max_iterations = 15000\n    time_limit = 28\n    \n    temp = start_temp\n    start_time = time.time()\n    \n    # Cost cache\n    cost_cache = {tuple(best_seq): best_cost}\n    \n    def get_cached_cost(seq):\n        key = tuple(seq)\n        if key not in cost_cache:\n            cost_cache[key] = get_cost(seq)\n        return cost_cache[key]\n    \n    def get_neighbor(seq):\n        n = len(seq)\n        new_seq = seq[:]\n        move = random.random()\n        \n        if move < 0.4:\n            # Swap conflicting pairs\n            conflict_pairs = []\n            for i in range(n):\n                for j in range(i + 1, n):\n                    if conflict_matrix[seq[i]][seq[j]]:\n                        conflict_pairs.append((i, j))\n            \n            if conflict_pairs:\n                i, j = random.choice(conflict_pairs)\n                new_seq[i], new_seq[j] = new_seq[j], new_seq[i]\n            else:\n                i, j = random.sample(range(n), 2)\n                new_seq[i], new_seq[j] = new_seq[j], new_seq[i]\n                \n        elif move < 0.7:\n            # Move transaction\n            idx = random.randint(0, n - 1)\n            new_pos = random.randint(0, n - 1)\n            val = new_seq.pop(idx)\n            new_seq.insert(new_pos, val)\n            \n        elif move < 0.9:\n            # Block reversal\n            i = random.randint(0, n - 2)\n            j = random.randint(i + 1, min(i + 15, n - 1))\n            new_seq[i:j+1] = reversed(new_seq[i:j+1])\n        \n        else:\n            # Shuffle small block\n            i = random.randint(0, n - 1)\n            j = min(i + random.randint(2, 10), n - 1)\n            block = new_seq[i:j]\n            random.shuffle(block)\n            new_seq[i:j] = block\n        \n        return new_seq\n    \n    # SA main loop\n    iteration = 0\n    while iteration < max_iterations and time.time() - start_time < time_limit:\n        iteration += 1\n        \n        neighbor = get_neighbor(current_seq)\n        neighbor_cost = get_cached_cost(neighbor)\n        \n        delta = neighbor_cost - current_cost\n        \n        if delta < 0 or random.random() < math.exp(-delta / temp):\n            current_seq = neighbor\n            current_cost = neighbor_cost\n            \n            if current_cost < best_cost:\n                best_cost = current_cost\n                best_seq = current_seq[:]\n        \n        # Cooling\n        temp *= cooling_rate\n        if temp < end_temp:\n            temp = end_temp\n    \n    # Final local search\n    improved = True\n    iterations = 0\n    while improved and iterations < 100 and time.time() - start_time < time_limit:\n        improved = False\n        iterations += 1\n        \n        # Try swaps\n        for i in range(num_txns):\n            for j in range(i + 1, min(i + 20, num_txns)):\n                new_seq = best_seq[:]\n                new_seq[i], new_seq[j] = new_seq[j], new_seq[i]\n                new_cost = get_cost(new_seq)\n                if new_cost < best_cost:\n                    best_cost = new_cost\n                    best_seq = new_seq\n                    improved = True\n                    break\n            if improved:\n                break\n        \n        # Try moves\n        if not improved:\n            for i in range(num_txns):\n                for j in range(num_txns):\n                    if i == j:\n                        continue\n                    new_seq = best_seq[:]\n                    val = new_seq.pop(i)\n                    new_seq.insert(j, val)\n                    new_cost = get_cost(new_seq)\n                    if new_cost < best_cost:\n                        best_cost = new_cost\n                        best_seq = new_seq\n                        improved = True\n                        break\n                if improved:\n                    break\n    \n    return best_cost, best_seq",
+      "scores": {
+        "score": 60.64720525005658,
+        "makespan": 269
+      },
+      "primary_score": 60.64720525005658,
+      "behavior": {
+        "loop_nesting_max": 0.6,
+        "comparison_count": 0.6,
+        "call_count": 1.0,
+        "branch_count": 0.96
+      },
+      "metadata": {},
+      "parents": [],
+      "created_at": "2026-01-24T19:48:15.085042"
+    },
+    {
+      "cell_index": 25,
+      "program_id": "c2b6177a-7c45-48a7-9589-b7b7dbd2ab38",
+      "code": "import random\nimport math\nimport heapq\nfrom collections import defaultdict, deque\nimport itertools\nimport time\n\ndef get_best_schedule(workload):\n    \"\"\"Optimize schedule using conflict graph analysis, simulated annealing, and local search.\"\"\"\n    \n    n = workload.num_txns\n    \n    # Precompute read/write sets for faster conflict detection\n    read_sets = [set() for _ in range(n)]\n    write_sets = [set() for _ in range(n)]\n    for i in range(n):\n        for op_type, key, pos, txn_len in workload.txns[i]:\n            if op_type == 'r':\n                read_sets[i].add(key)\n            else:\n                write_sets[i].add(key)\n    \n    # Build conflict graph\n    conflict_matrix = [[False] * n for _ in range(n)]\n    for i in range(n):\n        for j in range(i + 1, n):\n            # Write-write conflict\n            if write_sets[i] & write_sets[j]:\n                conflict_matrix[i][j] = conflict_matrix[j][i] = True\n            # Write-read conflict\n            elif write_sets[i] & read_sets[j]:\n                conflict_matrix[i][j] = conflict_matrix[j][i] = True\n            # Read-write conflict  \n            elif read_sets[i] & write_sets[j]:\n                conflict_matrix[i][j] = conflict_matrix[j][i] = True\n    \n    # Degree-based ordering as initial solution\n    def degree_based_ordering():\n        # Sort by conflict degree (descending) - place high-conflict transactions first\n        degrees = [(sum(conflict_matrix[i]), i) for i in range(n)]\n        degrees.sort(reverse=True)\n        return [i for _, i in degrees]\n    \n    # Greedy constructive heuristic\n    def greedy_construct():\n        remaining = set(range(n))\n        order = []\n        \n        while remaining:\n            best_txn = None\n            best_score = float('inf')\n            \n            # Try a sample of candidates\n            candidates = list(remaining)\n            if len(candidates) > 20:\n                candidates = random.sample(candidates, 20)\n            \n            for txn in candidates:\n                # Estimate cost by conflicts with already placed transactions\n                conflicts = 0\n                for placed in order:\n                    if conflict_matrix[txn][placed]:\n                        conflicts += 1\n                \n                # Also consider conflicts with remaining transactions\n                future_conflicts = 0\n                for other in remaining:\n                    if other != txn and conflict_matrix[txn][other]:\n                        future_conflicts += 1\n                \n                score = conflicts * 2 + future_conflicts\n                if score < best_score:\n                    best_score = score\n                    best_txn = txn\n            \n            if best_txn is None:\n                best_txn = random.choice(list(remaining))\n            \n            order.append(best_txn)\n            remaining.remove(best_txn)\n        \n        return order\n    \n    # Simulated annealing\n    def simulated_annealing(initial_order, iterations=2000):\n        current = initial_order[:]\n        current_cost = workload.get_opt_seq_cost(current)\n        best = current[:]\n        best_cost = current_cost\n        \n        T_start = 10.0\n        T_end = 0.01\n        alpha = (T_end / T_start) ** (1.0 / iterations)\n        \n        T = T_start\n        \n        for _ in range(iterations):\n            # Generate neighbor by swapping two random positions\n            i, j = random.sample(range(n), 2)\n            neighbor = current[:]\n            neighbor[i], neighbor[j] = neighbor[j], neighbor[i]\n            \n            neighbor_cost = workload.get_opt_seq_cost(neighbor)\n            \n            if neighbor_cost < current_cost:\n                current = neighbor\n                current_cost = neighbor_cost\n                if neighbor_cost < best_cost:\n                    best = neighbor[:]\n                    best_cost = neighbor_cost\n            else:\n                delta = neighbor_cost - current_cost\n                if random.random() < math.exp(-delta / T):\n                    current = neighbor\n                    current_cost = neighbor_cost\n            \n            T *= alpha\n        \n        return best, best_cost\n    \n    # Local search with 2-opt swaps\n    def local_search(order, max_iterations=500):\n        current = order[:]\n        current_cost = workload.get_opt_seq_cost(current)\n        \n        improved = True\n        iteration = 0\n        \n        while improved and iteration < max_iterations:\n            improved = False\n            \n            for i in range(n):\n                for j in range(i + 1, n):\n                    # Try swapping i and j\n                    neighbor = current[:]\n                    neighbor[i], neighbor[j] = neighbor[j], neighbor[i]\n                    \n                    neighbor_cost = workload.get_opt_seq_cost(neighbor)\n                    \n                    if neighbor_cost < current_cost:\n                        current = neighbor\n                        current_cost = neighbor_cost\n                        improved = True\n                        break\n                \n                if improved:\n                    break\n            \n            iteration += 1\n        \n        return current, current_cost\n    \n    # Generate multiple initial solutions\n    solutions = []\n    \n    # Try degree-based ordering\n    deg_order = degree_based_ordering()\n    deg_cost = workload.get_opt_seq_cost(deg_order)\n    solutions.append((deg_cost, deg_order))\n    \n    # Try greedy constructive\n    for _ in range(3):\n        greedy_order = greedy_construct()\n        greedy_cost = workload.get_opt_seq_cost(greedy_order)\n        solutions.append((greedy_cost, greedy_order))\n    \n    # Try random permutations\n    for _ in range(2):\n        random_order = list(range(n))\n        random.shuffle(random_order)\n        random_cost = workload.get_opt_seq_cost(random_order)\n        solutions.append((random_cost, random_order))\n    \n    # Start with the best initial solution\n    solutions.sort(key=lambda x: x[0])\n    best_cost, best_order = solutions[0]\n    \n    # Apply simulated annealing from multiple starting points\n    for cost, order in solutions[:3]:  # Try top 3 initial solutions\n        sa_order, sa_cost = simulated_annealing(order, iterations=1500)\n        if sa_cost < best_cost:\n            best_cost = sa_cost\n            best_order = sa_order\n    \n    # Final local search\n    final_order, final_cost = local_search(best_order, max_iterations=300)\n    \n    return final_cost, final_order",
+      "scores": {
+        "score": 56.34758995247794,
+        "makespan": 288
+      },
+      "primary_score": 56.34758995247794,
+      "behavior": {
+        "loop_nesting_max": 0.6,
+        "comparison_count": 0.275,
+        "call_count": 1.0,
+        "branch_count": 0.6
+      },
+      "metadata": {},
+      "parents": [],
+      "created_at": "2026-01-24T19:43:18.558778"
+    },
+    {
+      "cell_index": 28,
+      "program_id": "c6e351ac-fe6e-4b31-8bea-164d5a78fd06",
+      "code": "import random\nimport heapq\nimport math\nimport time\nfrom collections import defaultdict, deque\n\ndef get_best_schedule(workload):\n    \"\"\"\n    Optimize transaction scheduling using a multi-strategy approach:\n    1. Conflict graph analysis with topological ordering heuristics\n    2. Beam search with lookahead evaluation\n    3. Iterated local search with simulated annealing\n    4. Parallel transaction group optimization\n    \"\"\"\n    num_txns = workload.num_txns\n    txns = workload.txns\n    get_cost = workload.get_opt_seq_cost\n    \n    # 1. Precompute transaction properties and conflict relationships\n    txn_read_sets = []\n    txn_write_sets = []\n    \n    for i in range(num_txns):\n        reads = set()\n        writes = set()\n        for op_type, key, pos, txn_len in txns[i]:\n            if op_type == 'r':\n                reads.add(key)\n            else:\n                writes.add(key)\n        txn_read_sets.append(reads)\n        txn_write_sets.append(writes)\n    \n    # Build conflict graph and compute conflict degrees\n    conflict_graph = defaultdict(list)\n    conflict_degree = [0] * num_txns\n    \n    for i in range(num_txns):\n        for j in range(i + 1, num_txns):\n            # Conflicts occur on write-write or read-write overlap\n            if (txn_write_sets[i] & txn_write_sets[j]) or \\\n               (txn_write_sets[i] & txn_read_sets[j]) or \\\n               (txn_write_sets[j] & txn_read_sets[i]):\n                conflict_graph[i].append(j)\n                conflict_graph[j].append(i)\n                conflict_degree[i] += 1\n                conflict_degree[j] += 1\n    \n    # 2. Generate initial solution using multiple heuristics\n    def generate_initial_solution(strategy='conflict_aware'):\n        if strategy == 'conflict_aware':\n            # Sort by conflict degree (most conflicting first)\n            order = list(range(num_txns))\n            order.sort(key=lambda x: conflict_degree[x], reverse=True)\n            return order\n        elif strategy == 'greedy_insertion':\n            # Greedy insertion with lookahead\n            remaining = set(range(num_txns))\n            seq = []\n            while remaining:\n                best_txn = None\n                best_cost = float('inf')\n                # Sample candidates for efficiency\n                candidates = random.sample(list(remaining), min(10, len(remaining)))\n                for txn in candidates:\n                    test_seq = seq + [txn]\n                    cost = get_cost(test_seq)\n                    if cost < best_cost:\n                        best_cost = cost\n                        best_txn = txn\n                seq.append(best_txn)\n                remaining.remove(best_txn)\n            return seq\n        else:  # random\n            seq = list(range(num_txns))\n            random.shuffle(seq)\n            return seq\n    \n    # Generate multiple initial solutions and pick best\n    best_seq = list(range(num_txns))\n    best_cost = get_cost(best_seq)\n    \n    for strategy in ['conflict_aware', 'greedy_insertion', 'random']:\n        candidate = generate_initial_solution(strategy)\n        candidate_cost = get_cost(candidate)\n        if candidate_cost < best_cost:\n            best_cost = candidate_cost\n            best_seq = candidate\n    \n    # 3. Beam search with adaptive beam width\n    def beam_search(initial_seq, beam_width=5, depth_ratio=0.3):\n        beams = [(best_cost, initial_seq)]\n        max_depth = max(1, int(num_txns * depth_ratio))\n        \n        for depth in range(max_depth):\n            new_beams = []\n            for cost, seq in beams:\n                if len(seq) == num_txns:\n                    heapq.heappush(new_beams, (cost, seq))\n                    continue\n                \n                # Determine which transactions to consider next\n                remaining = [t for t in range(num_txns) if t not in seq]\n                \n                # Prioritize transactions with high conflict to already scheduled ones\n                def priority_score(txn):\n                    scheduled_conflicts = sum(1 for s in seq if txn in conflict_graph[s])\n                    return scheduled_conflicts\n                \n                remaining.sort(key=priority_score, reverse=True)\n                \n                # Consider top candidates\n                candidates = remaining[:min(beam_width * 2, len(remaining))]\n                \n                for txn in candidates:\n                    new_seq = seq + [txn]\n                    # If not complete, fill remaining positions greedily for cost estimation\n                    if len(new_seq) < num_txns:\n                        temp_seq = list(new_seq)\n                        temp_remaining = [t for t in remaining if t != txn]\n                        \n                        # Greedy fill\n                        while temp_remaining:\n                            best_next = None\n                            best_next_cost = float('inf')\n                            # Sample for efficiency\n                            sample_size = min(5, len(temp_remaining))\n                            sampled = random.sample(temp_remaining, sample_size)\n                            \n                            for next_txn in sampled:\n                                test_seq = temp_seq + [next_txn]\n                                cost_est = get_cost(test_seq)\n                                if cost_est < best_next_cost:\n                                    best_next_cost = cost_est\n                                    best_next = next_txn\n                            \n                            if best_next is not None:\n                                temp_seq.append(best_next)\n                                temp_remaining.remove(best_next)\n                            else:\n                                break\n                        \n                        est_cost = get_cost(temp_seq)\n                        heapq.heappush(new_beams, (est_cost, temp_seq))\n                    else:\n                        full_cost = get_cost(new_seq)\n                        heapq.heappush(new_beams, (full_cost, new_seq))\n            \n            # Keep only top beams\n            beams = heapq.nsmallest(beam_width, new_beams)\n            \n            # Early exit if we have complete solution\n            if all(len(seq) == num_txns for _, seq in beams):\n                break\n        \n        # Return best complete solution\n        complete_solutions = [(cost, seq) for cost, seq in beams if len(seq) == num_txns]\n        if complete_solutions:\n            return min(complete_solutions, key=lambda x: x[0])\n        else:\n            return beams[0]\n    \n    # 4. Local search with multiple neighborhood operators\n    def local_search(seq, cost, max_iterations=2000):\n        current_seq = list(seq)\n        current_cost = cost\n        best_seq = list(seq)\n        best_cost = cost\n        \n        iteration = 0\n        while iteration < max_iterations:\n            improved = False\n            \n            # Try different neighborhood moves\n            move_type = random.random()\n            \n            if move_type < 0.4:\n                # Swap two random positions\n                i, j = random.sample(range(num_txns), 2)\n                new_seq = list(current_seq)\n                new_seq[i], new_seq[j] = new_seq[j], new_seq[i]\n            elif move_type < 0.7:\n                # Move a transaction to a different position\n                i = random.randint(0, num_txns - 1)\n                j = random.randint(0, num_txns - 1)\n                while i == j:\n                    j = random.randint(0, num_txns - 1)\n                new_seq = list(current_seq)\n                val = new_seq.pop(i)\n                new_seq.insert(j, val)\n            else:\n                # Reverse a random subsequence\n                i = random.randint(0, num_txns - 2)\n                j = random.randint(i + 1, num_txns - 1)\n                new_seq = list(current_seq)\n                new_seq[i:j+1] = reversed(new_seq[i:j+1])\n            \n            new_cost = get_cost(new_seq)\n            \n            # Accept if better\n            if new_cost < current_cost:\n                current_seq = new_seq\n                current_cost = new_cost\n                improved = True\n                \n                if new_cost < best_cost:\n                    best_seq = list(new_seq)\n                    best_cost = new_cost\n            \n            # Occasionally accept worse moves (simulated annealing)\n            elif iteration < max_iterations * 0.8:\n                temperature = 1.0 - (iteration / (max_iterations * 0.8))\n                delta = new_cost - current_cost\n                if random.random() < math.exp(-delta / (temperature + 1e-6)):\n                    current_seq = new_seq\n                    current_cost = new_cost\n            \n            iteration += 1\n            if not improved and iteration > max_iterations // 2:\n                # Random restart\n                if random.random() < 0.1:\n                    idx = random.randint(0, num_txns - 1)\n                    current_seq = list(best_seq)\n                    # Apply a random perturbation\n                    i, j = random.sample(range(num_txns), 2)\n                    current_seq[i], current_seq[j] = current_seq[j], current_seq[i]\n                    current_cost = get_cost(current_seq)\n        \n        return best_cost, best_seq\n    \n    # 5. Main optimization loop\n    start_time = time.time()\n    time_limit = 28.0  # Conservative time limit\n    \n    # Phase 1: Beam search from multiple starting points\n    for beam_width in [3, 5, 7]:\n        if time.time() - start_time > time_limit * 0.4:\n            break\n        \n        # Generate diverse starting point\n        initial = generate_initial_solution('greedy_insertion')\n        initial_cost = get_cost(initial)\n        \n        bs_cost, bs_seq = beam_search(initial, beam_width=beam_width, depth_ratio=0.3)\n        \n        # Apply local search\n        ls_cost, ls_seq = local_search(bs_seq, bs_cost, max_iterations=1000)\n        \n        if ls_cost < best_cost:\n            best_cost = ls_cost\n            best_seq = ls_seq\n    \n    # Phase 2: Focused local search on best found solution\n    remaining_time = time_limit - (time.time() - start_time)\n    if remaining_time > 2.0:\n        iterations = min(3000, int(remaining_time * 100))\n        final_cost, final_seq = local_search(best_seq, best_cost, max_iterations=iterations)\n        \n        if final_cost < best_cost:\n            best_cost = final_cost\n            best_seq = final_seq\n    \n    return best_cost, best_seq",
+      "scores": {
+        "score": 52.9531568228106,
+        "makespan": 303
+      },
+      "primary_score": 52.9531568228106,
+      "behavior": {
+        "loop_nesting_max": 1.0,
+        "comparison_count": 0.7,
+        "call_count": 1.0,
+        "branch_count": 0.96
+      },
+      "metadata": {},
+      "parents": [],
+      "created_at": "2026-01-24T19:49:52.104959"
+    },
+    {
+      "cell_index": 8,
+      "program_id": "dad2363e-1d29-487d-836b-56557010cdd8",
+      "code": "import random\nimport heapq\nfrom collections import defaultdict\n\ndef get_best_schedule(workload):\n    \"\"\"Optimize schedule using greedy algorithm with priority queue and conflict-aware selection.\"\"\"\n    random.seed(42)\n    \n    # Start with a random transaction\n    start_txn = random.randint(0, workload.num_txns - 1)\n    txn_seq = [start_txn]\n    remaining_txns = set(range(workload.num_txns))\n    remaining_txns.remove(start_txn)\n    \n    # Precompute transaction read/write sets for faster conflict checking\n    txn_read_keys = {}\n    txn_write_keys = {}\n    for i in range(workload.num_txns):\n        read_set = set()\n        write_set = set()\n        for op_type, key, pos, txn_len in workload.txns[i]:\n            if op_type == 'r':\n                read_set.add(key)\n            else:  # op_type == 'w'\n                write_set.add(key)\n        txn_read_keys[i] = read_set\n        txn_write_keys[i] = write_set\n    \n    # Use priority queue to prioritize transactions with fewer conflicts\n    # Each entry: (-priority, txn_id) where higher priority means better\n    # Priority is based on number of conflicts with already scheduled transactions\n    while remaining_txns:\n        best_txn = None\n        best_score = float('inf')\n        \n        # Try multiple candidates to avoid local minima\n        num_samples = min(10, len(remaining_txns))\n        candidates = random.sample(list(remaining_txns), num_samples)\n        \n        for txn in candidates:\n            # Simulate adding this transaction and calculate cost\n            test_seq = txn_seq + [txn]\n            cost = workload.get_opt_seq_cost(test_seq)\n            \n            # Use cost as score: lower is better\n            if cost < best_score:\n                best_score = cost\n                best_txn = txn\n        \n        # Add the best transaction found\n        if best_txn is not None:\n            txn_seq.append(best_txn)\n            remaining_txns.remove(best_txn)\n        else:\n            # Fallback: pick any remaining transaction\n            txn = remaining_txns.pop()\n            txn_seq.append(txn)\n    \n    # Final cost calculation\n    final_cost = workload.get_opt_seq_cost(txn_seq)\n    return final_cost, txn_seq",
+      "scores": {
+        "score": 43.90133514369767,
+        "makespan": 343
+      },
+      "primary_score": 43.90133514369767,
+      "behavior": {
+        "loop_nesting_max": 0.4,
+        "comparison_count": 0.075,
+        "call_count": 0.7,
+        "branch_count": 0.12
+      },
+      "metadata": {},
+      "parents": [],
+      "created_at": "2026-01-24T19:34:55.639046"
+    },
+    {
+      "cell_index": 35,
+      "program_id": "f78a22c2-29da-42c8-b928-8d67071081c7",
+      "code": "import random\n\ndef get_best_schedule(workload):\n    \"\"\"Get optimal schedule using greedy cost sampling strategy.\"\"\"\n    random.seed(42)\n\n    start_txn = random.randint(0, workload.num_txns - 1)\n    txn_seq = [start_txn]\n    remaining_txns = list(range(workload.num_txns))\n    remaining_txns.remove(start_txn)\n\n    for _ in range(workload.num_txns - 1):\n        min_cost = float('inf')\n        min_txn = -1\n        holdout_txns = []\n\n        num_samples = min(10, len(remaining_txns))\n        for _ in range(num_samples):\n            if not remaining_txns:\n                break\n            idx = random.randint(0, len(remaining_txns) - 1)\n            t = remaining_txns[idx]\n            holdout_txns.append(remaining_txns.pop(idx))\n\n            test_seq = txn_seq + [t]\n            cost = workload.get_opt_seq_cost(test_seq)\n            if cost < min_cost:\n                min_cost = cost\n                min_txn = t\n\n        if min_txn != -1:\n            txn_seq.append(min_txn)\n            holdout_txns.remove(min_txn)\n        remaining_txns.extend(holdout_txns)\n\n    return workload.get_opt_seq_cost(txn_seq), txn_seq\n",
+      "scores": {
+        "score": 41.86467526589727,
+        "makespan": 352
+      },
+      "primary_score": 41.86467526589727,
+      "behavior": {
+        "loop_nesting_max": 0.4,
+        "comparison_count": 0.05,
+        "call_count": 0.6333333333333333,
+        "branch_count": 0.12
+      },
+      "metadata": {},
+      "parents": [],
+      "created_at": "2026-01-24T19:34:41.589104"
+    }
+  ],
+  "sampler_stats": {
+    "ucb": {
+      "n_cells": 0,
+      "cell_stats": {}
+    },
+    "softmax": {
+      "n_cells": 0,
+      "cell_stats": {}
+    },
+    "uniform": {
+      "n_cells": 0,
+      "cell_stats": {}
+    },
+    "cyclic_annealing": {
+      "n_cells": 0,
+      "last_temperature": 1.2,
+      "t_max": 1.2,
+      "t_min": 0.15,
+      "n_cycles": 4,
+      "cell_stats": {}
+    },
+    "softmax_T0.3": {
+      "n_cells": 7,
+      "total_samples": 31,
+      "mean_success_rate": 0.18626373626373627,
+      "cell_stats": {
+        "35": {
+          "n_samples": 2,
+          "n_successes": 1,
+          "success_rate": 0.5
+        },
+        "8": {
+          "n_samples": 4,
+          "n_successes": 0,
+          "success_rate": 0.0
+        },
+        "26": {
+          "n_samples": 13,
+          "n_successes": 2,
+          "success_rate": 0.15384615384615385
+        },
+        "27": {
+          "n_samples": 4,
+          "n_successes": 1,
+          "success_rate": 0.25
+        },
+        "43": {
+          "n_samples": 5,
+          "n_successes": 2,
+          "success_rate": 0.4
+        },
+        "47": {
+          "n_samples": 2,
+          "n_successes": 0,
+          "success_rate": 0.0
+        },
+        "28": {
+          "n_samples": 1,
+          "n_successes": 0,
+          "success_rate": 0.0
+        }
+      }
+    },
+    "softmax_T0.7": {
+      "n_cells": 7,
+      "total_samples": 36,
+      "mean_success_rate": 0.09166666666666666,
+      "cell_stats": {
+        "35": {
+          "n_samples": 6,
+          "n_successes": 1,
+          "success_rate": 0.16666666666666666
+        },
+        "43": {
+          "n_samples": 8,
+          "n_successes": 3,
+          "success_rate": 0.375
+        },
+        "26": {
+          "n_samples": 10,
+          "n_successes": 1,
+          "success_rate": 0.1
+        },
+        "27": {
+          "n_samples": 7,
+          "n_successes": 0,
+          "success_rate": 0.0
+        },
+        "8": {
+          "n_samples": 3,
+          "n_successes": 0,
+          "success_rate": 0.0
+        },
+        "28": {
+          "n_samples": 1,
+          "n_successes": 0,
+          "success_rate": 0.0
+        },
+        "47": {
+          "n_samples": 1,
+          "n_successes": 0,
+          "success_rate": 0.0
+        }
+      }
+    },
+    "softmax_T1.0": {
+      "n_cells": 7,
+      "total_samples": 20,
+      "mean_success_rate": 0.08571428571428573,
+      "cell_stats": {
+        "35": {
+          "n_samples": 3,
+          "n_successes": 0,
+          "success_rate": 0.0
+        },
+        "26": {
+          "n_samples": 3,
+          "n_successes": 0,
+          "success_rate": 0.0
+        },
+        "43": {
+          "n_samples": 5,
+          "n_successes": 2,
+          "success_rate": 0.4
+        },
+        "8": {
+          "n_samples": 2,
+          "n_successes": 0,
+          "success_rate": 0.0
+        },
+        "27": {
+          "n_samples": 5,
+          "n_successes": 1,
+          "success_rate": 0.2
+        },
+        "28": {
+          "n_samples": 1,
+          "n_successes": 0,
+          "success_rate": 0.0
+        },
+        "47": {
+          "n_samples": 1,
+          "n_successes": 0,
+          "success_rate": 0.0
+        }
+      }
+    },
+    "softmax_T1.2": {
+      "n_cells": 7,
+      "total_samples": 33,
+      "mean_success_rate": 0.13945578231292516,
+      "cell_stats": {
+        "35": {
+          "n_samples": 6,
+          "n_successes": 2,
+          "success_rate": 0.3333333333333333
+        },
+        "43": {
+          "n_samples": 7,
+          "n_successes": 1,
+          "success_rate": 0.14285714285714285
+        },
+        "8": {
+          "n_samples": 4,
+          "n_successes": 2,
+          "success_rate": 0.5
+        },
+        "26": {
+          "n_samples": 9,
+          "n_successes": 0,
+          "success_rate": 0.0
+        },
+        "28": {
+          "n_samples": 1,
+          "n_successes": 0,
+          "success_rate": 0.0
+        },
+        "27": {
+          "n_samples": 4,
+          "n_successes": 0,
+          "success_rate": 0.0
+        },
+        "47": {
+          "n_samples": 2,
+          "n_successes": 0,
+          "success_rate": 0.0
+        }
+      }
+    }
+  },
+  "run_state": {
+    "timestamp": "2026-01-24T19:57:45.445684",
+    "elapsed_seconds": 1383.8549978733063,
+    "total_cost": 0.3339007200000002,
+    "eval_count": 120,
+    "accept_count": 19,
+    "error_count": 42,
+    "best_score": 67.43607150939127
+  },
+  "score_history": [
+    {
+      "eval_number": 1,
+      "score": 43.90133514369767,
+      "best_score": 43.90133514369767,
+      "timestamp": 14.050501823425293,
+      "accepted": true,
+      "sampler": "softmax_T0.7",
+      "archive_size": 2,
+      "cell_index": 8,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 4,
+      "score": 46.39058610545372,
+      "best_score": 46.39058610545372,
+      "timestamp": 50.437076568603516,
+      "accepted": true,
+      "sampler": "softmax_T0.3",
+      "archive_size": 3,
+      "cell_index": 43,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 5,
+      "score": 13.351436976691561,
+      "best_score": 46.39058610545372,
+      "timestamp": 51.64038157463074,
+      "accepted": false,
+      "sampler": "softmax_T1.2",
+      "archive_size": 3,
+      "cell_index": 43,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 6,
+      "score": 26.02398732744965,
+      "best_score": 46.39058610545372,
+      "timestamp": 98.26285219192505,
+      "accepted": false,
+      "sampler": "softmax_T1.0",
+      "archive_size": 4,
+      "cell_index": 26,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 7,
+      "score": 37.3387644263408,
+      "best_score": 46.39058610545372,
+      "timestamp": 120.75592255592346,
+      "accepted": false,
+      "sampler": "softmax_T0.3",
+      "archive_size": 4,
+      "cell_index": 43,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 9,
+      "score": 44.806517311608964,
+      "best_score": 46.39058610545372,
+      "timestamp": 133.14091682434082,
+      "accepted": false,
+      "sampler": "softmax_T1.2",
+      "archive_size": 4,
+      "cell_index": 43,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 11,
+      "score": 49.55872369314325,
+      "best_score": 49.55872369314325,
+      "timestamp": 149.65816068649292,
+      "accepted": false,
+      "sampler": "softmax_T1.0",
+      "archive_size": 4,
+      "cell_index": 26,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 12,
+      "score": 16.293279022403258,
+      "best_score": 49.55872369314325,
+      "timestamp": 210.5963749885559,
+      "accepted": false,
+      "sampler": "softmax_T1.0",
+      "archive_size": 4,
+      "cell_index": 26,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 13,
+      "score": 0.0,
+      "best_score": 49.55872369314325,
+      "timestamp": 217.28160738945007,
+      "accepted": false,
+      "sampler": "softmax_T0.7",
+      "archive_size": 4,
+      "cell_index": 43,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 14,
+      "score": 49.55872369314325,
+      "best_score": 49.55872369314325,
+      "timestamp": 229.05275321006775,
+      "accepted": false,
+      "sampler": "softmax_T1.0",
+      "archive_size": 4,
+      "cell_index": 26,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 15,
+      "score": 63.13645621181263,
+      "best_score": 63.13645621181263,
+      "timestamp": 237.9871003627777,
+      "accepted": true,
+      "sampler": "softmax_T0.3",
+      "archive_size": 5,
+      "cell_index": 27,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 16,
+      "score": 50.01131477709889,
+      "best_score": 63.13645621181263,
+      "timestamp": 241.9105041027069,
+      "accepted": true,
+      "sampler": "softmax_T1.2",
+      "archive_size": 5,
+      "cell_index": 26,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 17,
+      "score": 52.500565738854945,
+      "best_score": 63.13645621181263,
+      "timestamp": 245.54664611816406,
+      "accepted": true,
+      "sampler": "softmax_T1.2",
+      "archive_size": 5,
+      "cell_index": 26,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 18,
+      "score": 49.78501923512107,
+      "best_score": 63.13645621181263,
+      "timestamp": 249.45940494537354,
+      "accepted": false,
+      "sampler": "softmax_T1.2",
+      "archive_size": 5,
+      "cell_index": 26,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 19,
+      "score": 49.55872369314325,
+      "best_score": 63.13645621181263,
+      "timestamp": 249.7659878730774,
+      "accepted": false,
+      "sampler": "softmax_T0.3",
+      "archive_size": 5,
+      "cell_index": 26,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 20,
+      "score": 44.806517311608964,
+      "best_score": 63.13645621181263,
+      "timestamp": 258.02324628829956,
+      "accepted": false,
+      "sampler": "softmax_T0.7",
+      "archive_size": 5,
+      "cell_index": 26,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 21,
+      "score": 47.069472731387194,
+      "best_score": 63.13645621181263,
+      "timestamp": 267.587039232254,
+      "accepted": true,
+      "sampler": "softmax_T0.7",
+      "archive_size": 6,
+      "cell_index": 28,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 22,
+      "score": 59.51572754016746,
+      "best_score": 63.13645621181263,
+      "timestamp": 281.3559465408325,
+      "accepted": true,
+      "sampler": "softmax_T1.2",
+      "archive_size": 6,
+      "cell_index": 26,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 23,
+      "score": 49.55872369314325,
+      "best_score": 63.13645621181263,
+      "timestamp": 293.33578991889954,
+      "accepted": false,
+      "sampler": "softmax_T1.2",
+      "archive_size": 6,
+      "cell_index": 26,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 24,
+      "score": 55.66870332654447,
+      "best_score": 63.13645621181263,
+      "timestamp": 299.87977147102356,
+      "accepted": false,
+      "sampler": "softmax_T1.0",
+      "archive_size": 6,
+      "cell_index": 26,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 25,
+      "score": 54.0846345326997,
+      "best_score": 63.13645621181263,
+      "timestamp": 312.56142807006836,
+      "accepted": false,
+      "sampler": "softmax_T1.0",
+      "archive_size": 6,
+      "cell_index": 26,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 30,
+      "score": 40.95949309798597,
+      "best_score": 63.13645621181263,
+      "timestamp": 346.36170172691345,
+      "accepted": false,
+      "sampler": "softmax_T0.7",
+      "archive_size": 6,
+      "cell_index": 26,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 31,
+      "score": 0.0,
+      "best_score": 63.13645621181263,
+      "timestamp": 354.31840467453003,
+      "accepted": false,
+      "sampler": "softmax_T1.2",
+      "archive_size": 6,
+      "cell_index": 43,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 33,
+      "score": 38.243946594252094,
+      "best_score": 63.13645621181263,
+      "timestamp": 373.7497978210449,
+      "accepted": false,
+      "sampler": "softmax_T0.7",
+      "archive_size": 6,
+      "cell_index": 43,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 34,
+      "score": 50.91649694501018,
+      "best_score": 63.13645621181263,
+      "timestamp": 380.59850668907166,
+      "accepted": true,
+      "sampler": "softmax_T0.7",
+      "archive_size": 6,
+      "cell_index": 28,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 35,
+      "score": 45.03281285358678,
+      "best_score": 63.13645621181263,
+      "timestamp": 382.1048831939697,
+      "accepted": false,
+      "sampler": "softmax_T0.3",
+      "archive_size": 6,
+      "cell_index": 43,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 40,
+      "score": 65.8520027155465,
+      "best_score": 65.8520027155465,
+      "timestamp": 428.5945689678192,
+      "accepted": true,
+      "sampler": "softmax_T0.7",
+      "archive_size": 6,
+      "cell_index": 26,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 41,
+      "score": 57.25277212038923,
+      "best_score": 65.8520027155465,
+      "timestamp": 436.9880738258362,
+      "accepted": false,
+      "sampler": "softmax_T1.2",
+      "archive_size": 6,
+      "cell_index": 26,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 44,
+      "score": 59.96831862412311,
+      "best_score": 65.8520027155465,
+      "timestamp": 453.39085602760315,
+      "accepted": true,
+      "sampler": "softmax_T0.3",
+      "archive_size": 6,
+      "cell_index": 43,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 45,
+      "score": 47.069472731387194,
+      "best_score": 65.8520027155465,
+      "timestamp": 455.8163070678711,
+      "accepted": false,
+      "sampler": "softmax_T1.0",
+      "archive_size": 6,
+      "cell_index": 28,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 46,
+      "score": 52.0479746548993,
+      "best_score": 65.8520027155465,
+      "timestamp": 477.7354793548584,
+      "accepted": false,
+      "sampler": "softmax_T1.2",
+      "archive_size": 6,
+      "cell_index": 26,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 47,
+      "score": 47.29576827336502,
+      "best_score": 65.8520027155465,
+      "timestamp": 496.14987325668335,
+      "accepted": false,
+      "sampler": "softmax_T0.3",
+      "archive_size": 6,
+      "cell_index": 26,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 49,
+      "score": 56.34758995247794,
+      "best_score": 65.8520027155465,
+      "timestamp": 516.9741876125336,
+      "accepted": true,
+      "sampler": "softmax_T1.2",
+      "archive_size": 7,
+      "cell_index": 25,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 50,
+      "score": 19.23512106811496,
+      "best_score": 65.8520027155465,
+      "timestamp": 526.9365928173065,
+      "accepted": false,
+      "sampler": "softmax_T1.2",
+      "archive_size": 7,
+      "cell_index": 27,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 51,
+      "score": 49.33242815116542,
+      "best_score": 65.8520027155465,
+      "timestamp": 544.9546537399292,
+      "accepted": true,
+      "sampler": "softmax_T0.3",
+      "archive_size": 8,
+      "cell_index": 47,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 52,
+      "score": 32.81285358678434,
+      "best_score": 65.8520027155465,
+      "timestamp": 576.4658422470093,
+      "accepted": false,
+      "sampler": "softmax_T0.7",
+      "archive_size": 8,
+      "cell_index": 27,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 54,
+      "score": 57.47906766236706,
+      "best_score": 65.8520027155465,
+      "timestamp": 587.4521977901459,
+      "accepted": false,
+      "sampler": "softmax_T1.0",
+      "archive_size": 8,
+      "cell_index": 27,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 55,
+      "score": 24.43991853360489,
+      "best_score": 65.8520027155465,
+      "timestamp": 597.3275730609894,
+      "accepted": false,
+      "sampler": "softmax_T0.3",
+      "archive_size": 8,
+      "cell_index": 27,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 57,
+      "score": 63.13645621181263,
+      "best_score": 65.8520027155465,
+      "timestamp": 604.8836255073547,
+      "accepted": false,
+      "sampler": "softmax_T1.2",
+      "archive_size": 8,
+      "cell_index": 27,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 58,
+      "score": 63.13645621181263,
+      "best_score": 65.8520027155465,
+      "timestamp": 614.7547552585602,
+      "accepted": false,
+      "sampler": "softmax_T0.3",
+      "archive_size": 8,
+      "cell_index": 27,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 59,
+      "score": 44.806517311608964,
+      "best_score": 65.8520027155465,
+      "timestamp": 617.279504776001,
+      "accepted": false,
+      "sampler": "softmax_T1.2",
+      "archive_size": 8,
+      "cell_index": 27,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 61,
+      "score": 39.149128762163386,
+      "best_score": 65.8520027155465,
+      "timestamp": 686.6390080451965,
+      "accepted": false,
+      "sampler": "softmax_T1.2",
+      "archive_size": 8,
+      "cell_index": 27,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 63,
+      "score": 59.063136456211815,
+      "best_score": 65.8520027155465,
+      "timestamp": 700.1399612426758,
+      "accepted": false,
+      "sampler": "softmax_T0.7",
+      "archive_size": 8,
+      "cell_index": 27,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 64,
+      "score": 65.17311608961303,
+      "best_score": 65.8520027155465,
+      "timestamp": 700.5386066436768,
+      "accepted": true,
+      "sampler": "softmax_T1.0",
+      "archive_size": 8,
+      "cell_index": 43,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 66,
+      "score": 65.8520027155465,
+      "best_score": 65.8520027155465,
+      "timestamp": 705.3759381771088,
+      "accepted": false,
+      "sampler": "softmax_T0.7",
+      "archive_size": 8,
+      "cell_index": 26,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 74,
+      "score": 41.63837972391944,
+      "best_score": 65.8520027155465,
+      "timestamp": 782.6864886283875,
+      "accepted": false,
+      "sampler": "softmax_T0.7",
+      "archive_size": 8,
+      "cell_index": 43,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 75,
+      "score": 16.745870106358907,
+      "best_score": 65.8520027155465,
+      "timestamp": 796.2780086994171,
+      "accepted": false,
+      "sampler": "softmax_T0.3",
+      "archive_size": 8,
+      "cell_index": 27,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 76,
+      "score": 52.274270196877126,
+      "best_score": 65.8520027155465,
+      "timestamp": 799.8081676959991,
+      "accepted": true,
+      "sampler": "softmax_T1.0",
+      "archive_size": 8,
+      "cell_index": 28,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 77,
+      "score": 60.64720525005658,
+      "best_score": 65.8520027155465,
+      "timestamp": 813.503723859787,
+      "accepted": true,
+      "sampler": "softmax_T1.0",
+      "archive_size": 8,
+      "cell_index": 47,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 78,
+      "score": 53.17945236478842,
+      "best_score": 65.8520027155465,
+      "timestamp": 813.7696168422699,
+      "accepted": false,
+      "sampler": "softmax_T0.7",
+      "archive_size": 8,
+      "cell_index": 27,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 79,
+      "score": 54.763521158633175,
+      "best_score": 65.8520027155465,
+      "timestamp": 818.4374692440033,
+      "accepted": false,
+      "sampler": "softmax_T0.3",
+      "archive_size": 8,
+      "cell_index": 27,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 83,
+      "score": 58.610545372256176,
+      "best_score": 65.8520027155465,
+      "timestamp": 850.3583676815033,
+      "accepted": false,
+      "sampler": "softmax_T0.3",
+      "archive_size": 8,
+      "cell_index": 27,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 85,
+      "score": 26.929169495360945,
+      "best_score": 65.8520027155465,
+      "timestamp": 881.471440076828,
+      "accepted": false,
+      "sampler": "softmax_T0.3",
+      "archive_size": 8,
+      "cell_index": 27,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 86,
+      "score": 59.063136456211815,
+      "best_score": 65.8520027155465,
+      "timestamp": 882.3874361515045,
+      "accepted": false,
+      "sampler": "softmax_T0.3",
+      "archive_size": 8,
+      "cell_index": 47,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 87,
+      "score": 65.62570717356868,
+      "best_score": 65.8520027155465,
+      "timestamp": 884.9579384326935,
+      "accepted": true,
+      "sampler": "softmax_T1.2",
+      "archive_size": 8,
+      "cell_index": 43,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 89,
+      "score": 41.185788639963796,
+      "best_score": 65.8520027155465,
+      "timestamp": 893.4871168136597,
+      "accepted": false,
+      "sampler": "softmax_T0.7",
+      "archive_size": 8,
+      "cell_index": 27,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 90,
+      "score": 52.9531568228106,
+      "best_score": 65.8520027155465,
+      "timestamp": 910.5223603248596,
+      "accepted": true,
+      "sampler": "softmax_T0.3",
+      "archive_size": 8,
+      "cell_index": 28,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 92,
+      "score": 45.93799502149808,
+      "best_score": 65.8520027155465,
+      "timestamp": 955.5467820167542,
+      "accepted": false,
+      "sampler": "softmax_T0.7",
+      "archive_size": 8,
+      "cell_index": 28,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 93,
+      "score": 65.8520027155465,
+      "best_score": 65.8520027155465,
+      "timestamp": 958.666517496109,
+      "accepted": true,
+      "sampler": "softmax_T0.3",
+      "archive_size": 8,
+      "cell_index": 27,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 95,
+      "score": 55.89499886852229,
+      "best_score": 65.8520027155465,
+      "timestamp": 974.7832067012787,
+      "accepted": false,
+      "sampler": "softmax_T0.7",
+      "archive_size": 8,
+      "cell_index": 43,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 96,
+      "score": 62.231274043901344,
+      "best_score": 65.8520027155465,
+      "timestamp": 995.5149073600769,
+      "accepted": false,
+      "sampler": "softmax_T1.0",
+      "archive_size": 8,
+      "cell_index": 27,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 97,
+      "score": 67.43607150939127,
+      "best_score": 67.43607150939127,
+      "timestamp": 1000.7680699825287,
+      "accepted": true,
+      "sampler": "softmax_T0.7",
+      "archive_size": 8,
+      "cell_index": 43,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 98,
+      "score": 63.8153428377461,
+      "best_score": 67.43607150939127,
+      "timestamp": 1037.3219499588013,
+      "accepted": false,
+      "sampler": "softmax_T0.3",
+      "archive_size": 8,
+      "cell_index": 27,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 101,
+      "score": 34.17062683865128,
+      "best_score": 67.43607150939127,
+      "timestamp": 1062.0007269382477,
+      "accepted": false,
+      "sampler": "softmax_T1.2",
+      "archive_size": 8,
+      "cell_index": 47,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 102,
+      "score": 54.763521158633175,
+      "best_score": 67.43607150939127,
+      "timestamp": 1075.7917487621307,
+      "accepted": false,
+      "sampler": "softmax_T0.7",
+      "archive_size": 8,
+      "cell_index": 25,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 103,
+      "score": 3.620728671645169,
+      "best_score": 67.43607150939127,
+      "timestamp": 1091.4137508869171,
+      "accepted": false,
+      "sampler": "softmax_T0.7",
+      "archive_size": 8,
+      "cell_index": 27,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 104,
+      "score": 40.95949309798597,
+      "best_score": 67.43607150939127,
+      "timestamp": 1152.0738365650177,
+      "accepted": false,
+      "sampler": "softmax_T1.2",
+      "archive_size": 8,
+      "cell_index": 27,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 106,
+      "score": 65.8520027155465,
+      "best_score": 67.43607150939127,
+      "timestamp": 1162.8378925323486,
+      "accepted": false,
+      "sampler": "softmax_T0.3",
+      "archive_size": 8,
+      "cell_index": 26,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 107,
+      "score": 65.17311608961303,
+      "best_score": 67.43607150939127,
+      "timestamp": 1173.1014442443848,
+      "accepted": false,
+      "sampler": "softmax_T0.7",
+      "archive_size": 8,
+      "cell_index": 43,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 108,
+      "score": 30.549898167006113,
+      "best_score": 67.43607150939127,
+      "timestamp": 1186.1968123912811,
+      "accepted": false,
+      "sampler": "softmax_T0.3",
+      "archive_size": 8,
+      "cell_index": 43,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 110,
+      "score": 65.8520027155465,
+      "best_score": 67.43607150939127,
+      "timestamp": 1246.2992107868195,
+      "accepted": false,
+      "sampler": "softmax_T1.2",
+      "archive_size": 8,
+      "cell_index": 26,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 111,
+      "score": 65.17311608961303,
+      "best_score": 67.43607150939127,
+      "timestamp": 1250.9393556118011,
+      "accepted": false,
+      "sampler": "softmax_T0.7",
+      "archive_size": 8,
+      "cell_index": 43,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 112,
+      "score": 54.53722561665535,
+      "best_score": 67.43607150939127,
+      "timestamp": 1262.026201725006,
+      "accepted": false,
+      "sampler": "softmax_T0.3",
+      "archive_size": 8,
+      "cell_index": 27,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 115,
+      "score": 65.17311608961303,
+      "best_score": 67.43607150939127,
+      "timestamp": 1295.9623126983643,
+      "accepted": false,
+      "sampler": "softmax_T0.7",
+      "archive_size": 8,
+      "cell_index": 43,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 116,
+      "score": 14.482914686580676,
+      "best_score": 67.43607150939127,
+      "timestamp": 1304.4299502372742,
+      "accepted": false,
+      "sampler": "softmax_T1.2",
+      "archive_size": 8,
+      "cell_index": 27,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 117,
+      "score": 65.62570717356868,
+      "best_score": 67.43607150939127,
+      "timestamp": 1305.835887670517,
+      "accepted": false,
+      "sampler": "softmax_T0.7",
+      "archive_size": 8,
+      "cell_index": 43,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 119,
+      "score": 65.8520027155465,
+      "best_score": 67.43607150939127,
+      "timestamp": 1382.0319147109985,
+      "accepted": false,
+      "sampler": "softmax_T0.3",
+      "archive_size": 8,
+      "cell_index": 26,
+      "is_punctuated_equilibrium": false
+    },
+    {
+      "eval_number": 120,
+      "score": 63.13645621181263,
+      "best_score": 67.43607150939127,
+      "timestamp": 1383.854728460312,
+      "accepted": false,
+      "sampler": "softmax_T1.2",
+      "archive_size": 8,
+      "cell_index": 27,
+      "is_punctuated_equilibrium": false
+    }
+  ]
+}

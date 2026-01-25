@@ -1,0 +1,7 @@
+{
+  "name": "algoforge-analysis",
+  "description": "AlgoForge analysis tools for examining algorithmic diversity, behavioral clusters, and evolutionary search quality",
+  "author": {
+    "name": "AlgoForge Team"
+  }
+}
