@@ -189,6 +189,11 @@ class MultiIslandPERunner:
         self.code_queue = asyncio.Queue()
         self.stop_event = asyncio.Event()
 
+        # Output directory for snapshots
+        self.output_dir = Path(config.output_dir) if config.output_dir else None
+        if self.output_dir:
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+
     def _load_centroids(self) -> dict:
         """Load centroids from JSON file."""
         with open(self.centroids_file) as f:
@@ -441,13 +446,6 @@ class MultiIslandPERunner:
             logger.warning("[PE] Failed to extract paradigm shift code")
             return stats
 
-        # Print paradigm shift code
-        print("\n" + "="*60)
-        print("[PE] CROSS-ISLAND PARADIGM SHIFT CODE:")
-        print("="*60)
-        print(paradigm_code)
-        print("="*60 + "\n")
-
         # Evaluate
         try:
             result = await executor.run(
@@ -651,6 +649,79 @@ class MultiIslandPERunner:
                 logger.info(f"\n[MultiIslandPE] === Cross-Island PE Event @ eval {self.state.eval_count} ===")
                 await self.trigger_cross_island_pe(executor)
 
+    def _save_snapshot(self, final: bool = False) -> None:
+        """Save snapshot of all islands."""
+        if not self.output_dir:
+            return
+
+        island_data = []
+        for i, pool in enumerate(self.islands):
+            elites = []
+            for cell_idx, elite in pool.get_elites().items():
+                elites.append({
+                    "cell_index": int(cell_idx),
+                    "score": float(elite.result.primary_score),
+                    "code": elite.program.code,
+                })
+            elites.sort(key=lambda x: x["score"], reverse=True)
+            island_data.append({
+                "index": i,
+                "archive_size": pool.size(),
+                "best_score": pool._best_score,
+                "top_elites": elites[:5],
+            })
+
+        # Find global best
+        best_code = ""
+        best_score = float('-inf')
+        for pool in self.islands:
+            if pool.size() > 0 and pool._best_score > best_score:
+                best_score = pool._best_score
+                best_code = pool.best().code
+
+        snapshot = {
+            "timestamp": datetime.now().isoformat(),
+            "run_state": {
+                "elapsed_seconds": self.state.elapsed_seconds,
+                "total_cost": self.state.total_cost,
+                "eval_count": self.state.eval_count,
+                "accept_count": self.state.accept_count,
+                "error_count": self.state.error_count,
+                "best_score": self.state.best_score_so_far,
+            },
+            "n_islands": self.n_islands,
+            "pe_interval": self.pe_interval,
+            "pe_events": len(self.pe_events),
+            "islands": island_data,
+            "global_best": {
+                "score": best_score if best_score > float('-inf') else None,
+                "code": best_code if best_code else None,
+            },
+        }
+
+        filepath = self.output_dir / "snapshot.json"
+        with open(filepath, 'w') as f:
+            json.dump(snapshot, f, indent=2, default=str)
+
+        if final:
+            logger.info(f"[Snapshot] Saved final snapshot to {filepath}")
+
+    async def _status_monitor(self) -> None:
+        """Periodically log status and save snapshots."""
+        while not self.stop_event.is_set():
+            await asyncio.sleep(30.0)
+            try:
+                total_archive = sum(p.size() for p in self.islands)
+                logger.info(
+                    f"[Status] Cost: ${self.state.total_cost:.3f} | "
+                    f"Evals: {self.state.eval_count} | "
+                    f"Archive: {total_archive} | "
+                    f"Best: {self.state.best_score_so_far:.1f}"
+                )
+                self._save_snapshot()
+            except Exception as e:
+                logger.warning(f"[Status] Error: {e}")
+
     async def run_async(self) -> AlgoforgeResult:
         """
         Main evolution loop.
@@ -709,6 +780,9 @@ class MultiIslandPERunner:
                 for i in range(self.config.pipeline.n_eval_processes)
             ]
 
+            # Spawn status monitor
+            status_task = asyncio.create_task(self._status_monitor())
+
             # Wait for budget exhaustion
             while not self.state.budget_exhausted:
                 await asyncio.sleep(1.0)
@@ -727,6 +801,15 @@ class MultiIslandPERunner:
             for task in consumers:
                 task.cancel()
             await asyncio.gather(*consumers, return_exceptions=True)
+
+            status_task.cancel()
+            try:
+                await status_task
+            except asyncio.CancelledError:
+                pass
+
+            # Save final snapshot
+            self._save_snapshot(final=True)
 
             logger.info(f"[MultiIslandPE] Budget exhausted: ${self.state.total_cost:.3f}")
 
