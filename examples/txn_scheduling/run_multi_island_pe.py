@@ -147,7 +147,7 @@ def build_config() -> AlgoforgeConfig:
         ),
         init=InitConfig(
             enabled=True,
-            n_diverse_seeds=4,  # One per island
+            n_diverse_seeds=3,  # One per island
             n_variants_per_seed=0,  # No variants
             diversity_model=PARADIGM_SHIFT_MODEL,
             variant_models=LIGHT_MODELS,
@@ -192,7 +192,7 @@ if __name__ == "__main__":
     print("Multi-Island Punctuated Equilibrium - TXN Scheduling")
     print("="*60)
     print(f"Budget: ${BUDGET:.2f}")
-    print(f"Islands: 4")
+    print(f"Islands: 3")
     print(f"PE interval: 5 evals")
     print(f"Centroids: {CENTROIDS_FILE}")
     print()
@@ -204,7 +204,7 @@ if __name__ == "__main__":
     result = run_multi_island_pe(
         config=config,
         centroids_file=str(CENTROIDS_FILE),
-        n_islands=4,
+        n_islands=3,
         pe_interval=5,
     )
 
