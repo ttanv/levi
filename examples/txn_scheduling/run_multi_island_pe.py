@@ -113,7 +113,7 @@ def build_config() -> AlgoforgeConfig:
             temperature=0.8,
         ),
         pipeline=PipelineConfig(
-            n_llm_workers=4,
+            n_llm_workers=8,
             n_eval_processes=8,
             n_inspirations=1,
             output_mode="full",
