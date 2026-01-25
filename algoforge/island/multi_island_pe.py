@@ -24,7 +24,8 @@ from ..config import AlgoforgeConfig, AlgoforgeResult
 from ..core import Program, EvaluationResult
 from ..pool import CVTMAPElitesPool
 from ..behavior import BehaviorExtractor, FeatureVector
-from ..llm import PromptBuilder, ProgramWithScore, OutputMode, get_llm_client
+from ..llm import PromptBuilder, ProgramWithScore, OutputMode, get_llm_client, set_llm_client, clear_llm_client
+from ..llm.unified_client import UnifiedLLMClient, UnifiedLLMClientConfig
 from ..utils import ResilientProcessPool, extract_code, extract_fn_name
 from ..pipeline.state import PipelineState
 
@@ -589,6 +590,21 @@ class MultiIslandPERunner:
         2. Round-robin evolution across islands
         3. Trigger cross-island PE every pe_interval evals
         """
+        # Initialize unified LLM client
+        llm_config = UnifiedLLMClientConfig(
+            local_endpoints=self.config.llm.local_endpoints,
+            model_info=self.config.llm.model_info,
+            max_retries=self.config.llm.max_retries,
+            retry_delay=self.config.llm.retry_delay,
+            retry_backoff=self.config.llm.retry_backoff,
+            default_temperature=self.config.pipeline.temperature,
+            default_max_tokens=self.config.pipeline.max_tokens,
+            batch_size=self.config.llm.batch_size,
+            batch_max_wait_ms=self.config.llm.batch_max_wait_ms,
+        )
+        llm_client = UnifiedLLMClient(llm_config)
+        set_llm_client(llm_client)
+
         executor = ResilientProcessPool(max_workers=self.config.pipeline.n_eval_processes)
 
         try:
@@ -655,6 +671,7 @@ class MultiIslandPERunner:
 
         finally:
             executor.shutdown()
+            clear_llm_client()
 
     def run(self, max_evals: int = 100) -> AlgoforgeResult:
         """Synchronous wrapper for run_async."""
