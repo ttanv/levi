@@ -152,7 +152,7 @@ class MultiIslandPERunner:
         config: AlgoforgeConfig,
         centroids_file: str,
         n_islands: int = 4,
-        pe_interval: int = 5,
+        pe_interval: int = 15,
     ):
         self.config = config
         self.centroids_file = Path(centroids_file)
@@ -183,6 +183,7 @@ class MultiIslandPERunner:
         self.state = PipelineState(config.budget)
         self.pe_events = []
         self.last_pe_eval = 0  # Track last PE event
+        self.culling_milestones_triggered: set[int] = set()  # Track 50%, 75%, 88% culling
 
         # Concurrency primitives
         self.archive_lock = asyncio.Lock()
@@ -359,6 +360,57 @@ class MultiIslandPERunner:
                 results.append((i, float('-inf'), ""))
         return results
 
+    def cull_weakest_island(self) -> dict:
+        """
+        Kill the weakest island and re-seed it with the strongest program.
+
+        Returns stats about the culling event.
+        """
+        island_bests = self.get_island_best_elites()
+
+        # Find strongest and weakest
+        sorted_islands = sorted(island_bests, key=lambda x: x[1])
+        weakest_idx, weakest_score, _ = sorted_islands[0]
+        strongest_idx, strongest_score, strongest_code = sorted_islands[-1]
+
+        # Don't cull if only one island or same island
+        if weakest_idx == strongest_idx or len(self.islands) <= 1:
+            return {"culled": False, "reason": "no_distinct_islands"}
+
+        stats = {
+            "culled": True,
+            "weakest_island": weakest_idx,
+            "weakest_score": weakest_score,
+            "strongest_island": strongest_idx,
+            "strongest_score": strongest_score,
+        }
+
+        logger.info(
+            f"\n[CULL] === Culling Weakest Island ===\n"
+            f"[CULL] Killing island {weakest_idx} (score={weakest_score:.1f})\n"
+            f"[CULL] Re-seeding with best from island {strongest_idx} (score={strongest_score:.1f})"
+        )
+
+        # Clear the weakest island
+        old_size = self.islands[weakest_idx].size()
+        self.islands[weakest_idx].clear()
+        stats["cleared_elites"] = old_size
+
+        # Re-seed with strongest program
+        program = Program(code=strongest_code, metadata={
+            "source": "cull_reseed",
+            "from_island": strongest_idx,
+        })
+        eval_result = EvaluationResult(
+            scores={"score": strongest_score},
+            is_valid=True,
+        )
+        accepted, cell_idx = self.islands[weakest_idx].add(program, eval_result)
+
+        logger.info(f"[CULL] Island {weakest_idx} re-seeded: cell={cell_idx}, accepted={accepted}")
+
+        return stats
+
     async def trigger_cross_island_pe(self, executor: ResilientProcessPool) -> dict:
         """
         Cross-island paradigm shift event.
@@ -376,6 +428,11 @@ class MultiIslandPERunner:
             "target_island": None,
             "island_scores": {},
         }
+
+        # Early exit if budget exhausted
+        if self.state.budget_exhausted:
+            stats["triggered"] = False
+            return stats
 
         # Get best from each island
         island_bests = self.get_island_best_elites()
@@ -404,16 +461,7 @@ class MultiIslandPERunner:
             stats["triggered"] = False
             return stats
 
-        # Check for optimized paradigm_shift prompt
-        optimized_instruction = None
-        if hasattr(self.config, 'prompt_overrides') and self.config.prompt_overrides:
-            optimized_instruction = self.config.prompt_overrides.get("paradigm_shift")
-
-        if optimized_instruction:
-            # Use optimized prompt structure (matching equilibrium.py format)
-            prompt = f"""# Algorithmic Paradigm Shift Challenge
-
-## Problem
+        prompt = f"""## Problem
 {self.config.problem_description}
 
 ## Function Signature
@@ -421,23 +469,29 @@ class MultiIslandPERunner:
 {self.config.function_signature}
 ```
 
-## Current Best Solutions ({self.n_islands} regions, {self.state.eval_count} evaluations)
-
+## Current Solutions from Different Behavioral Regions
 {chr(10).join(island_solutions)}
 
 ## Your Task
-{optimized_instruction}
+Generate a high-scoring algorithmic solution using a fundamentally new approach.
 
-Output ONLY complete, runnable Python code in a ```python block.
+First, carefully analyze each existing solution to understand:
+1. What algorithmic strategy it uses
+2. Why it achieves its current score
+3. Where it falls short or what limitations it has
+
+Then, synthesize these insights to propose a NEW solution that:
+- Learns from the strengths of existing approaches
+- Addresses the weaknesses and limitations you identified
+- Uses a fundamentally different algorithmic paradigm
+- Achieves a higher score by combining insights in a novel way
+
+Do not simply tweak or combine existing solutions. Propose a genuinely new
+approach that transcends the limitations of current solutions while
+incorporating the lessons learned from analyzing them.
+
+Output ONLY complete Python code in a ```python block.
 """
-        else:
-            # Use default prompt
-            prompt = CROSS_ISLAND_PE_PROMPT.format(
-                problem_description=self.config.problem_description,
-                function_signature=self.config.function_signature,
-                n_islands=self.n_islands,
-                island_solutions="\n\n".join(island_solutions),
-            )
 
         # Generate paradigm shift
         heavy_model = self.config.punctuated_equilibrium.heavy_model
@@ -550,18 +604,30 @@ Output ONLY complete, runnable Python code in a ```python block.
                 builder.add_section("Problem", self.config.problem_description, priority=10)
                 builder.add_section("Signature", f"```python\n{self.config.function_signature}\n```", priority=20)
                 builder.add_parents([ProgramWithScore(p, None) for p in parents], priority=30)
-                builder.set_output_mode(OutputMode.FULL)
+
+                # Check for optimized mutation instructions for this model
+                mutation_overrides = self.config.prompt_overrides.get("mutation", {})
+                if model in mutation_overrides:
+                    builder.set_custom_output(mutation_overrides[model])
+                else:
+                    builder.set_output_mode(OutputMode.FULL)
+
                 prompt = builder.build()
 
                 self.state.llm_in_flight += 1
                 try:
                     llm = get_llm_client()
+                    # Disable reasoning for Gemini models
+                    extras = {}
+                    if "gemini" in model.lower():
+                        extras["extra_body"] = {"reasoning": {"enabled": False}}
                     response = await llm.acompletion(
                         model=model,
                         messages=[{"role": "user", "content": prompt}],
                         temperature=self.config.pipeline.temperature,
                         max_tokens=self.config.pipeline.max_tokens,
                         timeout=300,
+                        **extras,
                     )
                     content = response.content
                     cost = response.cost
@@ -669,13 +735,24 @@ Output ONLY complete, runnable Python code in a ```python block.
                     self.state.record_error(result["error"])
                     logger.debug(f"[Eval] Island {island_idx} ERROR: {result['error'][:50]}")
 
-            # Check for PE trigger
+            # Check for PE trigger (skip if budget exhausted or past 60%)
             if (self.state.eval_count > 0 and
                 self.state.eval_count % self.pe_interval == 0 and
-                self.state.eval_count > self.last_pe_eval):
+                self.state.eval_count > self.last_pe_eval and
+                self.state.budget_progress < 0.60 and
+                not self.state.budget_exhausted):
                 self.last_pe_eval = self.state.eval_count
                 logger.info(f"\n[MultiIslandPE] === Cross-Island PE Event @ eval {self.state.eval_count} ===")
                 await self.trigger_cross_island_pe(executor)
+
+            # Check for culling milestones (25%, 50%, 75% of budget)
+            budget_pct = int(self.state.budget_progress * 100)
+            for milestone in [50, 75, 88]:
+                if budget_pct >= milestone and milestone not in self.culling_milestones_triggered:
+                    self.culling_milestones_triggered.add(milestone)
+                    logger.info(f"\n[MultiIslandPE] === {milestone}% Budget Milestone ===")
+                    async with self.archive_lock:
+                        self.cull_weakest_island()
 
     def _save_snapshot(self, final: bool = False) -> None:
         """Save snapshot of all islands."""
@@ -887,7 +964,7 @@ async def run_multi_island_pe_async(
     config: AlgoforgeConfig,
     centroids_file: str,
     n_islands: int = 4,
-    pe_interval: int = 5,
+    pe_interval: int = 15,
 ) -> AlgoforgeResult:
     """
     Run multi-island PE evolution.
@@ -896,7 +973,7 @@ async def run_multi_island_pe_async(
         config: AlgoForge configuration (budget from config.budget.dollars)
         centroids_file: Path to centroids.json with shared behavior space
         n_islands: Number of islands (default 4)
-        pe_interval: Evals between cross-island PE events (default 5)
+        pe_interval: Evals between cross-island PE events (default 15)
 
     Returns:
         AlgoforgeResult with best program found
@@ -917,7 +994,7 @@ def run_multi_island_pe(
     config: AlgoforgeConfig,
     centroids_file: str,
     n_islands: int = 4,
-    pe_interval: int = 5,
+    pe_interval: int = 15,
 ) -> AlgoforgeResult:
     """
     Run multi-island PE evolution (synchronous).
@@ -926,7 +1003,7 @@ def run_multi_island_pe(
         config: AlgoForge configuration (budget from config.budget.dollars)
         centroids_file: Path to centroids.json with shared behavior space
         n_islands: Number of islands (default 4)
-        pe_interval: Evals between cross-island PE events (default 5)
+        pe_interval: Evals between cross-island PE events (default 15)
 
     Returns:
         AlgoforgeResult with best program found

@@ -29,7 +29,7 @@ from algoforge.config.models import PunctuatedEquilibriumConfig, LLMProviderConf
 # --- Constants ---
 OPTIMIZED_PROMPTS_FILE = Path(__file__).parent / "optimized_prompts.json"
 OPTIMIZATION_BUDGET = 0.60
-MAIN_BUDGET = 4.40
+MAIN_BUDGET = 4.50
 
 # Behavioral dimensions
 TXN_AST_FEATURES = ['loop_nesting_max', 'comparison_count', 'call_count', 'branch_count']
@@ -38,7 +38,7 @@ TXN_SCORE_KEYS = []
 # Models
 LIGHT_MODELS = [
     "openrouter/xiaomi/mimo-v2-flash",
-    "openrouter/deepseek/deepseek-v3.2",
+    "openrouter/minimax/minimax-m2.1",
     "Qwen/Qwen3-30B-A3B-Instruct-2507",
 ]
 PARADIGM_SHIFT_MODEL = "openrouter/google/gemini-3-flash-preview"
@@ -55,12 +55,12 @@ MODEL_INFO = {
         "input_cost_per_token": 0.00000009,
         "output_cost_per_token": 0.00000029,
     },
-    "deepseek/deepseek-v3.2": {
+    "minimax/minimax-m2.1": {
         "max_tokens": 16384,
-        "max_input_tokens": 163840,
+        "max_input_tokens": 196608,
         "max_output_tokens": 16384,
-        "input_cost_per_token": 0.00000025,
-        "output_cost_per_token": 0.00000038,
+        "input_cost_per_token": 0.00000027,
+        "output_cost_per_token": 0.0000011,
     },
     "Qwen/Qwen3-30B-A3B-Instruct-2507": {
         "input_cost_per_token": 0.0000001,
@@ -85,7 +85,7 @@ MODEL_INFO = {
 # Model key mapping for prompt overrides
 MODEL_KEY_MAP = {
     "openrouter/xiaomi/mimo-v2-flash": "mimo",
-    "openrouter/deepseek/deepseek-v3.2": "deepseek",
+    "openrouter/minimax/minimax-m2.1": "minimax",
     "Qwen/Qwen3-30B-A3B-Instruct-2507": "qwen",
 }
 
@@ -157,7 +157,7 @@ def build_config_with_optimized_prompts(optimized: dict) -> AlgoforgeConfig:
             SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[0], weight=1.0, temperature=0.7),
             SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[0], weight=1.0, temperature=1.0),
             SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[0], weight=1.0, temperature=1.2),
-            # DeepSeek (OpenRouter)
+            # MiniMax M2.1 (OpenRouter)
             SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[1], weight=1.0, temperature=0.3),
             SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[1], weight=1.0, temperature=0.7),
             SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[1], weight=1.0, temperature=1.0),
@@ -167,6 +167,8 @@ def build_config_with_optimized_prompts(optimized: dict) -> AlgoforgeConfig:
             SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[2], weight=1.0, temperature=0.7),
             SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[2], weight=1.0, temperature=1.0),
             SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[2], weight=1.0, temperature=1.2),
+            # Gemini Flash (OpenRouter)
+            SamplerModelPair(sampler="softmax", model=PARADIGM_SHIFT_MODEL, weight=1.0, temperature=0.3),
         ],
         cvt=CVTConfig(
             n_centroids=40,
@@ -181,11 +183,11 @@ def build_config_with_optimized_prompts(optimized: dict) -> AlgoforgeConfig:
             temperature=0.8,
         ),
         meta_advice=MetaAdviceConfig(enabled=True, interval=50, model=PARADIGM_SHIFT_MODEL),
-        pipeline=PipelineConfig(n_llm_workers=8, n_eval_processes=8, n_inspirations=1, output_mode="full", eval_timeout=300),
+        pipeline=PipelineConfig(n_llm_workers=12, n_eval_processes=50, n_inspirations=1, output_mode="full", eval_timeout=300),
         behavior=BehaviorConfig(ast_features=TXN_AST_FEATURES, score_keys=TXN_SCORE_KEYS, init_noise=0.0),
         punctuated_equilibrium=PunctuatedEquilibriumConfig(
             enabled=True,
-            interval=5,
+            interval=10,
             n_clusters=3,
             n_variants=3,
             heavy_model=PARADIGM_SHIFT_MODEL,

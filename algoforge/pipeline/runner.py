@@ -140,42 +140,57 @@ class PipelineRunner:
 
     async def _status_monitor(self) -> None:
         while not self.stop_event.is_set():
-            await asyncio.sleep(30.0)
-            best_score = self.pool.get_stats().get("best_score", 0.0)
-            logger.info(
-                f"[Status] Cost: ${self.state.total_cost:.3f} | "
-                f"Evals: {self.state.eval_count} | "
-                f"LLM in-flight: {self.state.llm_in_flight} | "
-                f"Eval in-flight: {self.state.eval_in_flight} | "
-                f"Archive: {self.pool.size()} | "
-                f"Best: {best_score:.1f}"
-            )
+            try:
+                await asyncio.sleep(30.0)
+                best_score = self.pool.get_stats().get("best_score", 0.0)
+                logger.info(
+                    f"[Status] Cost: ${self.state.total_cost:.3f} | "
+                    f"Evals: {self.state.eval_count} | "
+                    f"LLM in-flight: {self.state.llm_in_flight} | "
+                    f"Eval in-flight: {self.state.eval_in_flight} | "
+                    f"Archive: {self.pool.size()} | "
+                    f"Best: {best_score:.1f}"
+                )
+            except asyncio.CancelledError:
+                raise  # Let cancellation propagate
+            except Exception as e:
+                logger.error(f"[Status] Monitor error (will retry): {e}")
+                await asyncio.sleep(5.0)  # Brief pause before retry
 
     async def _pe_monitor(self) -> None:
         """Monitor for punctuated equilibrium trigger conditions."""
         pe_config = self.config.punctuated_equilibrium
 
         while not self.stop_event.is_set():
-            await asyncio.sleep(2.0)  # Check every 2 seconds
+            try:
+                await asyncio.sleep(2.0)  # Check every 2 seconds
 
-            if self.state.budget_exhausted:
-                break
+                if self.state.budget_exhausted:
+                    break
 
-            # Check if we should trigger PE
-            if (self.state.eval_count > 0 and
-                self.state.eval_count % pe_config.interval == 0 and
-                self.state.eval_count != self.state.last_pe_eval_count):
+                # Check if we should trigger PE
+                if (self.state.eval_count > 0 and
+                    self.state.eval_count % pe_config.interval == 0 and
+                    self.state.eval_count != self.state.last_pe_eval_count):
 
-                self.state.last_pe_eval_count = self.state.eval_count
-                self.state.pe_trigger_count += 1
+                    self.state.last_pe_eval_count = self.state.eval_count
+                    self.state.pe_trigger_count += 1
 
-                logger.info(f"[PE] Triggering punctuated equilibrium #{self.state.pe_trigger_count} "
-                           f"at eval {self.state.eval_count}")
+                    logger.info(f"[PE] Triggering punctuated equilibrium #{self.state.pe_trigger_count} "
+                               f"at eval {self.state.eval_count}")
 
-                stats = await self.pe.trigger(self.state.eval_count)
+                    try:
+                        stats = await self.pe.trigger(self.state.eval_count, self.state.budget_progress)
+                        # Add PE cost to total
+                        self.state.add_cost(stats["total_cost"])
+                    except Exception as e:
+                        logger.error(f"[PE] Trigger failed (will continue): {e}")
 
-                # Add PE cost to total
-                self.state.add_cost(stats["total_cost"])
+            except asyncio.CancelledError:
+                raise  # Let cancellation propagate
+            except Exception as e:
+                logger.error(f"[PE] Monitor error (will retry): {e}")
+                await asyncio.sleep(5.0)  # Brief pause before retry
 
     def save_snapshot(self, final: bool = False) -> None:
         """Save current archive state to JSON file (overwrites previous)."""

@@ -20,7 +20,7 @@ from ..pool import CVTMAPElitesPool
 from ..pool.cvt_map_elites import Elite
 from ..llm import get_llm_client
 from ..utils import ResilientProcessPool, extract_code, extract_fn_name
-from .prompts import PARADIGM_SHIFT_PROMPT, VARIANT_GENERATION_PROMPT
+from .prompts import PARADIGM_SHIFT_PROMPT, PARADIGM_SHIFT_PROMPTS, VARIANT_GENERATION_PROMPT, get_budget_stage
 
 logger = logging.getLogger(__name__)
 
@@ -143,8 +143,19 @@ class PunctuatedEquilibrium:
         self,
         representatives: list[tuple[int, Elite]],
         n_evaluations: int,
+        budget_progress: float = 0.0,
     ) -> str:
-        """Build prompt for paradigm shift generation."""
+        """Build prompt for paradigm shift generation.
+
+        Args:
+            representatives: Cluster representatives (cluster_id, elite) pairs.
+            n_evaluations: Current evaluation count.
+            budget_progress: Fraction of budget consumed (0-1). Controls prompt
+                aggressiveness: early budget = radical shifts, late = refinement.
+        """
+        stage = get_budget_stage(budget_progress)
+        logger.info(f"[PE] Budget progress: {budget_progress:.1%} -> stage={stage}")
+
         rep_text_parts = []
         for i, (cluster_id, elite) in enumerate(representatives):
             score = elite.result.primary_score
@@ -180,7 +191,9 @@ class PunctuatedEquilibrium:
 Output ONLY complete, runnable Python code in a ```python block.
 """
 
-        return PARADIGM_SHIFT_PROMPT.format(
+        # Use stage-appropriate prompt template
+        template = PARADIGM_SHIFT_PROMPTS[stage]
+        return template.format(
             problem_description=self.config.problem_description,
             function_signature=self.config.function_signature,
             n_evaluations=n_evaluations,
@@ -208,12 +221,13 @@ Output ONLY complete, runnable Python code in a ```python block.
             timeout=self.config.pipeline.eval_timeout
         )
 
-    async def trigger(self, n_evaluations: int) -> dict:
+    async def trigger(self, n_evaluations: int, budget_progress: float = 0.0) -> dict:
         """
         Trigger a punctuated equilibrium event.
 
         Args:
             n_evaluations: Current evaluation count (for prompt context)
+            budget_progress: Fraction of budget consumed (0-1)
 
         Returns:
             Dict with statistics about the PE event:
@@ -263,7 +277,7 @@ Output ONLY complete, runnable Python code in a ```python block.
             # Default to first sampler model
             heavy_model = self.config.sampler_model_pairs[0].model
 
-        prompt = self._build_paradigm_shift_prompt(representatives, n_evaluations)
+        prompt = self._build_paradigm_shift_prompt(representatives, n_evaluations, budget_progress)
 
         try:
             # Build call kwargs

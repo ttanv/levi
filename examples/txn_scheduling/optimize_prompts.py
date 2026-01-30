@@ -21,6 +21,19 @@ import ast
 
 import dspy
 
+# Modify DSPy TIPS to encourage brevity and discourage prescriptiveness
+try:
+    from dspy.propose.grounded_proposer import TIPS
+    TIPS["brevity"] = "Keep the instruction concise (under 100 words). Brevity encourages creativity and exploration."
+    TIPS["open_ended"] = "Keep instructions general and goal-focused. Describe WHAT to achieve, not HOW to achieve it. Avoid prescribing specific algorithms, techniques, or data structures."
+    # Remove tips that lead to verbose/prescriptive prompts
+    if "description" in TIPS:
+        del TIPS["description"]
+    if "high_stakes" in TIPS:
+        del TIPS["high_stakes"]
+except ImportError:
+    pass  # DSPy version may differ
+
 # Add algoforge to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
@@ -37,6 +50,7 @@ LIGHT_MODELS = {
     "mimo": "openrouter/xiaomi/mimo-v2-flash",
     "deepseek": "openrouter/deepseek/deepseek-v3.2",
     "qwen": "Qwen/Qwen3-30B-A3B-Instruct-2507",
+    "minimax": "openrouter/minimax/minimax-m2.1",
 }
 
 LOCAL_ENDPOINTS = {
@@ -192,6 +206,24 @@ def compute_diversity(features1: dict, features2: dict) -> float:
 
 
 # --- DSPy Signatures ---
+class PromptQualitySignature(dspy.Signature):
+    """Evaluate if an instruction prompt is too prescriptive or appropriately open-ended.
+
+    PRESCRIPTIVE (bad): Tells HOW to solve - specific algorithms, techniques,
+    data structures, or step-by-step approaches.
+    Examples: "Use dynamic buffers", "Implement a greedy algorithm",
+    "Calculate slack time and compare to threshold", "Use a state machine"
+
+    OPEN-ENDED (good): Tells WHAT to achieve - goals, constraints, quality
+    criteria, without dictating implementation details.
+    Examples: "Improve the score", "Generate better code",
+    "Optimize while maintaining correctness", "Find a novel approach"
+    """
+
+    instruction: str = dspy.InputField(desc="The instruction prompt to evaluate")
+    prescriptiveness: float = dspy.OutputField(desc="0.0 = fully open-ended, 1.0 = highly prescriptive")
+
+
 class MutationSignature(dspy.Signature):
     """Generate an improved version of code.
 
@@ -214,20 +246,8 @@ class ParadigmShiftSignature(dspy.Signature):
     """Generate a high-scoring algorithmic solution using a fundamentally new approach.
 
     You are given representative solutions from different behavioral regions.
-    First, carefully analyze each existing solution to understand:
-    1. What algorithmic strategy it uses
-    2. Why it achieves its current score
-    3. Where it falls short or what limitations it has
-
-    Then, synthesize these insights to propose a NEW solution that:
-    - Learns from the strengths of existing approaches
-    - Addresses the weaknesses and limitations you identified
-    - Uses a fundamentally different algorithmic paradigm
-    - Achieves a higher score by combining insights in a novel way
-
-    Do not simply tweak or combine existing solutions. Propose a genuinely new
-    approach that transcends the limitations of current solutions while
-    incorporating the lessons learned from analyzing them.
+    Analyze them, then propose a NEW solution using a different algorithmic paradigm.
+    Do not simply tweak or combine existing solutions.
     """
 
     problem_description: str = dspy.InputField(desc="The optimization problem description")
@@ -276,6 +296,31 @@ class ParadigmShiftModule(dspy.Module):
         )
 
 
+# --- Prompt Quality Helpers ---
+def compute_length_penalty(prompt: str, threshold: int = 300, max_penalty: float = 0.15) -> float:
+    """Penalize prompts that are too long. Shorter prompts tend to be less prescriptive."""
+    if len(prompt) <= threshold:
+        return 0.0
+    # Linear scale from threshold to threshold + 1000
+    penalty = ((len(prompt) - threshold) / 1000) * max_penalty
+    return min(max_penalty, penalty)
+
+
+def compute_prescriptiveness_penalty(prompt: str, max_penalty: float = 0.15) -> float:
+    """Use LLM-as-judge to evaluate if prompt is too prescriptive."""
+    try:
+        judge = dspy.Predict(PromptQualitySignature)
+        result = judge(instruction=prompt)
+        prescriptiveness = float(result.prescriptiveness)
+        # Clamp to [0, 1]
+        prescriptiveness = max(0.0, min(1.0, prescriptiveness))
+        return prescriptiveness * max_penalty
+    except Exception as e:
+        # If judge fails, assume moderate prescriptiveness
+        print(f"  [JUDGE] Error: {e}")
+        return max_penalty * 0.5
+
+
 # --- Metrics ---
 def mutation_metric(
     example: dspy.Example,
@@ -283,14 +328,17 @@ def mutation_metric(
     inputs: list,
     trace: Optional[Any] = None,
     debug: bool = False,
+    current_instruction: Optional[str] = None,
 ) -> float:
     """
     Evaluate a mutation with partial credit at each stage:
     - Has code block: 0.10
-    - Code extracted: +0.15
-    - Code compiles: +0.15
-    - Code runs without error: +0.30 (HEAVY WEIGHT)
-    - Score maintained/improved: +0.30
+    - Code extracted: +0.10
+    - Code compiles: +0.10
+    - Code runs without error: +0.25
+    - Score maintained/improved: +0.25
+    - Length penalty: up to -0.15 (prompts > 300 chars)
+    - Prescriptiveness penalty: up to -0.15 (LLM judge)
     """
     output = prediction.code
     score = 0.0
@@ -314,7 +362,7 @@ def mutation_metric(
                 print(f"  [METRIC] Failed to extract code")
             return score
 
-    score += 0.15
+    score += 0.10
     if debug:
         print(f"  [METRIC] Code extracted")
 
@@ -325,7 +373,7 @@ def mutation_metric(
             print(f"  [METRIC] Code doesn't compile: {error}")
         return score
 
-    score += 0.15
+    score += 0.10
     if debug:
         print(f"  [METRIC] Code compiles")
 
@@ -336,30 +384,44 @@ def mutation_metric(
             print(f"  [METRIC] Execution error: {result['error'][:100]}")
         return score
 
-    score += 0.30  # Runs without error (HEAVY WEIGHT)
+    score += 0.25  # Runs without error
     child_score = result.get("score", 0.0)
     parent_score = example.parent_score
 
     if debug:
         print(f"  [METRIC] Runs OK. Parent: {parent_score:.2f}, Child: {child_score:.2f}")
 
-    # Score improvement/maintenance component (up to 0.30)
+    # Score improvement/maintenance component (up to 0.25)
     if child_score > parent_score:
         improvement = (child_score - parent_score) / max(parent_score, 1.0)
-        improvement_score = min(improvement * 2, 1.0) * 0.30
+        improvement_score = min(improvement * 2, 1.0) * 0.25
         score += improvement_score
         if debug:
             print(f"  [METRIC] Score improved! +{improvement_score:.2f}")
     elif child_score >= parent_score * 0.95:
-        score += 0.15
+        score += 0.12
         if debug:
-            print(f"  [METRIC] Score maintained +0.15")
+            print(f"  [METRIC] Score maintained +0.12")
     elif child_score >= parent_score * 0.8:
         score += 0.05
         if debug:
             print(f"  [METRIC] Slight regression +0.05")
 
-    return score
+    # Apply prompt quality penalties if instruction is provided
+    if current_instruction:
+        # Length penalty
+        length_penalty = compute_length_penalty(current_instruction, threshold=300, max_penalty=0.15)
+        if length_penalty > 0 and debug:
+            print(f"  [METRIC] Length penalty: -{length_penalty:.3f} (len={len(current_instruction)})")
+        score -= length_penalty
+
+        # Prescriptiveness penalty (LLM judge)
+        prescriptive_penalty = compute_prescriptiveness_penalty(current_instruction, max_penalty=0.15)
+        if prescriptive_penalty > 0 and debug:
+            print(f"  [METRIC] Prescriptiveness penalty: -{prescriptive_penalty:.3f}")
+        score -= prescriptive_penalty
+
+    return max(0.0, score)  # Don't go negative
 
 
 def paradigm_shift_metric(
@@ -368,12 +430,15 @@ def paradigm_shift_metric(
     inputs: list,
     reference_solutions: list[str],
     trace: Optional[Any] = None,
+    current_instruction: Optional[str] = None,
 ) -> float:
     """
     Evaluate a paradigm shift:
     - Hard gate: Must compile AND run (else 0)
-    - Score: 80% (PRIMARY - maximize execution score)
-    - Diversity: 20% (secondary - some novelty bonus)
+    - Score: 60% (execution score)
+    - Diversity: 20% (AST feature distance)
+    - Length penalty: up to -0.10 (prompts > 400 chars)
+    - Prescriptiveness penalty: up to -0.10 (LLM judge)
     """
     code = extract_code(prediction.code) or prediction.code
 
@@ -389,9 +454,9 @@ def paradigm_shift_metric(
 
     exec_score = result.get("score", 0.0)
 
-    # Score component (80%) - normalize to 0-100 range
+    # Score component (60%) - normalize to 0-100 range
     normalized_score = min(exec_score / 100.0, 1.0)
-    score = normalized_score * 0.80
+    score = normalized_score * 0.60
 
     # Diversity component (20%)
     if reference_solutions:
@@ -407,7 +472,17 @@ def paradigm_shift_metric(
         diversity_score = min(min_diversity * 2, 1.0) * 0.20
         score += diversity_score
 
-    return score
+    # Apply prompt quality penalties if instruction is provided
+    if current_instruction:
+        # Length penalty (slightly higher threshold for paradigm shift)
+        length_penalty = compute_length_penalty(current_instruction, threshold=400, max_penalty=0.10)
+        score -= length_penalty
+
+        # Prescriptiveness penalty (LLM judge)
+        prescriptive_penalty = compute_prescriptiveness_penalty(current_instruction, max_penalty=0.10)
+        score -= prescriptive_penalty
+
+    return max(0.0, score)  # Don't go negative
 
 
 # --- Training Data Generation ---
@@ -560,8 +635,8 @@ def setup_model_lm(model: str) -> dspy.LM:
 def optimize_mutation_for_model(
     model_key: str,
     model: str,
-    n_trials: int = 10,
-    n_examples: int = 5,
+    n_trials: int = 12,
+    n_examples: int = 6,
 ) -> dict:
     """Optimize mutation prompt for a specific model."""
     print(f"\n{'='*60}")
@@ -582,9 +657,10 @@ def optimize_mutation_for_model(
     optimizer = MIPROv2(
         metric=metric,
         auto=None,
-        num_candidates=3,
+        num_candidates=4,  # Reduced
         verbose=True,
         num_threads=4,
+        init_temperature=1.2,  # Slightly higher for diversity
     )
 
     print(f"Running MIPROv2: {len(trainset)} examples, {n_trials} trials")
@@ -604,9 +680,20 @@ def optimize_mutation_for_model(
         if hasattr(predictor, "signature"):
             optimized_instructions[name] = str(predictor.signature.instructions)
 
-    # Test evaluation
+    # Final evaluation with prompt quality penalties
+    print("\nFinal evaluation with prompt quality metrics...")
     testset = generate_mutation_examples(3)
     scores = []
+    prompt_scores = []
+
+    for name, instr in optimized_instructions.items():
+        # Evaluate prompt quality
+        length_penalty = compute_length_penalty(instr, threshold=300, max_penalty=0.15)
+        prescriptive_penalty = compute_prescriptiveness_penalty(instr, max_penalty=0.15)
+        prompt_quality = 1.0 - length_penalty - prescriptive_penalty
+        prompt_scores.append(prompt_quality)
+        print(f"  {name}: len={len(instr)}, length_penalty={length_penalty:.3f}, prescriptive_penalty={prescriptive_penalty:.3f}")
+
     for example in testset:
         try:
             pred = optimized_module(**example.inputs())
@@ -617,21 +704,25 @@ def optimize_mutation_for_model(
             scores.append(0.0)
 
     avg_score = sum(scores) / len(scores) if scores else 0.0
+    avg_prompt_quality = sum(prompt_scores) / len(prompt_scores) if prompt_scores else 0.0
 
-    print(f"\n{model_key} optimization complete! Avg score: {avg_score:.3f}")
+    print(f"\n{model_key} optimization complete!")
+    print(f"  Avg execution score: {avg_score:.3f}")
+    print(f"  Avg prompt quality: {avg_prompt_quality:.3f}")
 
     return {
         "model_key": model_key,
         "model": model,
         "optimized_instructions": optimized_instructions,
         "avg_score": avg_score,
+        "avg_prompt_quality": avg_prompt_quality,
         "n_trials": n_trials,
     }
 
 
 def optimize_paradigm_shift(
-    n_trials: int = 8,
-    n_examples: int = 4,
+    n_trials: int = 10,
+    n_examples: int = 5,
 ) -> dict:
     """Optimize paradigm shift prompt for Gemini."""
     print(f"\n{'='*60}")
@@ -654,9 +745,10 @@ def optimize_paradigm_shift(
     optimizer = MIPROv2(
         metric=metric,
         auto=None,
-        num_candidates=3,
+        num_candidates=4,  # Reduced
         verbose=True,
         num_threads=2,
+        init_temperature=1.2,  # Slightly higher for diversity
     )
 
     print(f"Running MIPROv2: {len(trainset)} examples, {n_trials} trials")
@@ -676,9 +768,20 @@ def optimize_paradigm_shift(
         if hasattr(predictor, "signature"):
             optimized_instructions[name] = str(predictor.signature.instructions)
 
-    # Test evaluation
+    # Final evaluation with prompt quality penalties
+    print("\nFinal evaluation with prompt quality metrics...")
     testset = generate_paradigm_shift_examples(2)
     scores = []
+    prompt_scores = []
+
+    for name, instr in optimized_instructions.items():
+        # Evaluate prompt quality
+        length_penalty = compute_length_penalty(instr, threshold=400, max_penalty=0.10)
+        prescriptive_penalty = compute_prescriptiveness_penalty(instr, max_penalty=0.10)
+        prompt_quality = 1.0 - length_penalty - prescriptive_penalty
+        prompt_scores.append(prompt_quality)
+        print(f"  {name}: len={len(instr)}, length_penalty={length_penalty:.3f}, prescriptive_penalty={prescriptive_penalty:.3f}")
+
     for example in testset:
         try:
             pred = optimized_module(**example.inputs())
@@ -689,12 +792,16 @@ def optimize_paradigm_shift(
             scores.append(0.0)
 
     avg_score = sum(scores) / len(scores) if scores else 0.0
+    avg_prompt_quality = sum(prompt_scores) / len(prompt_scores) if prompt_scores else 0.0
 
-    print(f"\nParadigm shift optimization complete! Avg score: {avg_score:.3f}")
+    print(f"\nParadigm shift optimization complete!")
+    print(f"  Avg execution score: {avg_score:.3f}")
+    print(f"  Avg prompt quality: {avg_prompt_quality:.3f}")
 
     return {
         "optimized_instructions": optimized_instructions,
         "avg_score": avg_score,
+        "avg_prompt_quality": avg_prompt_quality,
         "n_trials": n_trials,
     }
 
@@ -717,25 +824,25 @@ def run_optimization(budget: float = 0.60) -> dict:
         "budget": budget,
     }
 
-    # Mutation: optimize for each model
+    # Mutation: optimize for each model (reduced trials for faster iteration)
     for model_key, model in LIGHT_MODELS.items():
         try:
             result = optimize_mutation_for_model(
                 model_key=model_key,
                 model=model,
-                n_trials=10,
-                n_examples=5,
+                n_trials=12,
+                n_examples=6,
             )
             results["mutation"][model_key] = result
         except Exception as e:
             print(f"Error optimizing mutation for {model_key}: {e}")
             results["mutation"][model_key] = {"error": str(e)}
 
-    # Paradigm shift
+    # Paradigm shift (reduced trials)
     try:
         results["paradigm_shift"] = optimize_paradigm_shift(
-            n_trials=8,
-            n_examples=4,
+            n_trials=10,
+            n_examples=5,
         )
     except Exception as e:
         print(f"Error optimizing paradigm shift: {e}")
@@ -785,6 +892,7 @@ if __name__ == "__main__":
     parser.add_argument("--output", type=str, default="optimized_prompts.json", help="Output file")
     parser.add_argument("--paradigm-only", action="store_true", help="Only optimize paradigm shift prompt")
     parser.add_argument("--mutation-only", action="store_true", help="Only optimize mutation prompts")
+    parser.add_argument("--model", type=str, default=None, help="Optimize only this specific model (e.g., minimax)")
     parser.add_argument("--trials", type=int, default=None, help="Override number of trials")
     parser.add_argument("--examples", type=int, default=None, help="Override number of examples")
     args = parser.parse_args()
@@ -794,8 +902,8 @@ if __name__ == "__main__":
         print("# DSPy Prompt Optimization - PARADIGM SHIFT ONLY")
         print("#"*60)
 
-        n_trials = args.trials or 20
-        n_examples = args.examples or 8
+        n_trials = args.trials or 10
+        n_examples = args.examples or 5
 
         result = optimize_paradigm_shift(n_trials=n_trials, n_examples=n_examples)
 
@@ -820,11 +928,28 @@ if __name__ == "__main__":
         print("# DSPy Prompt Optimization - MUTATION ONLY")
         print("#"*60)
 
-        n_trials = args.trials or 10
-        n_examples = args.examples or 5
+        n_trials = args.trials or 12
+        n_examples = args.examples or 6
+
+        # Load existing prompts if they exist (to merge new results)
+        output_path = Path(__file__).parent / args.output
+        existing_prompts = {}
+        if output_path.exists():
+            with open(output_path, "r") as f:
+                existing_prompts = json.load(f)
 
         results = {"mutation": {}, "paradigm_shift": None}
-        for model_key, model in LIGHT_MODELS.items():
+
+        # Determine which models to optimize
+        if args.model:
+            if args.model not in LIGHT_MODELS:
+                print(f"Error: Unknown model '{args.model}'. Available: {list(LIGHT_MODELS.keys())}")
+                sys.exit(1)
+            models_to_optimize = {args.model: LIGHT_MODELS[args.model]}
+        else:
+            models_to_optimize = LIGHT_MODELS
+
+        for model_key, model in models_to_optimize.items():
             try:
                 result = optimize_mutation_for_model(
                     model_key=model_key,
@@ -835,6 +960,16 @@ if __name__ == "__main__":
                 results["mutation"][model_key] = result
             except Exception as e:
                 print(f"Error optimizing {model_key}: {e}")
+
+        # Merge with existing prompts if only optimizing specific model(s)
+        if args.model and existing_prompts:
+            # Preserve existing mutation prompts
+            for key, value in existing_prompts.get("mutation", {}).items():
+                if key not in results["mutation"]:
+                    results["mutation"][key] = {"optimized_instructions": {"generate": value}}
+            # Preserve existing paradigm_shift
+            if existing_prompts.get("paradigm_shift"):
+                results["paradigm_shift"] = {"optimized_instructions": {"generate": existing_prompts["paradigm_shift"]}}
 
         save_optimized_prompts(results, args.output)
     else:

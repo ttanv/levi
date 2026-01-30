@@ -291,7 +291,9 @@ class Diversifier:
                 for j, (code, score, _) in enumerate(diverse_seeds)
             ])
 
-            prompt = DIVERSITY_SEED_PROMPT.format(
+            # Use custom prompt if provided, otherwise use default
+            prompt_template = self.config.init.diversity_prompt or DIVERSITY_SEED_PROMPT
+            prompt = prompt_template.format(
                 problem_title="Algorithm Optimization",
                 problem_description=self.config.problem_description,
                 function_signature=self.config.function_signature,
