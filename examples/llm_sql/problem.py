@@ -3,6 +3,11 @@ LLM SQL (CSV Column Reordering) Problem Definition.
 
 Based on ADRS-Leaderboard: https://ucbskyadrs.github.io/leaderboard
 Paper: Optimizing LLM Queries in Relational Workloads (arXiv:2403.05821)
+
+Matches ADRS-Leaderboard evaluator.py:
+- Same parameters passed to solve function
+- Same col_merge handling
+- Same scoring formula
 """
 
 from pathlib import Path
@@ -12,94 +17,131 @@ from utils import evaluate_df_prefix_hit_cnt
 # --- Prompts ---
 
 PROBLEM_DESCRIPTION = """
-# Column Reordering for Prefix Cache Optimization
+# LLM SQL Problem
 
-**Goal:** Reorder DataFrame columns to maximize prefix hit rate when rows are concatenated into strings.
+Optimize CSV column ordering to maximize prefix hit rate. Reorder columns so concatenated row values have maximum common prefix overlap between consecutive rows.
 
-## How It Works
-1. Each row becomes a string by concatenating column values (no spaces)
-2. Prefix hit = matching characters from start between consecutive rows
-3. Better column order = more prefix sharing = better KV-cache efficiency
+**Target**: Maximize prefix hit rate, minimize runtime (up to 10s threshold)
 
-## Scoring
-```
-score = 0.95 * normalized_hit_score + 0.05 * runtime_score
-```
+Evaluates on: movies.csv, beer.csv, BIRD.csv, PDMX.csv, products.csv
 
-## Function Signature
+## API (matches ADRS-Leaderboard parameters)
+
 ```python
-def reorder(df: pd.DataFrame) -> pd.DataFrame:
+def solve(
+    df: pd.DataFrame,
+    early_stop: int = 100000,
+    row_stop: int = 4,
+    col_stop: int = 2,
+    col_merge: list = None,
+    one_way_dep: list = None,
+    distinct_value_threshold: float = 0.7,
+    parallel: bool = True,
+) -> pd.DataFrame:
     '''
     Reorder DataFrame columns to maximize prefix hit rate.
 
     Args:
-        df: Input DataFrame (columns already preprocessed)
+        df: Input DataFrame (raw, columns NOT pre-merged)
+        early_stop: Early stopping threshold
+        row_stop: Row stopping threshold
+        col_stop: Column stopping threshold
+        col_merge: List of column groups to merge, e.g. [["col1", "col2"], ["col3", "col4"]]
+        one_way_dep: One-way dependencies (unused, for compatibility)
+        distinct_value_threshold: Threshold for distinct values
+        parallel: Whether to use parallel processing
 
     Returns:
-        DataFrame with reordered columns (same rows, same columns, different order)
+        DataFrame with merged columns, reordered columns and rows
     '''
 ```
 
-## RULES
-1. Return a DataFrame with the SAME rows (same count, can be reordered)
-2. Return a DataFrame with the SAME columns (no dropping, no renaming, no adding)
-3. Only change: column order and row order
-4. Don't use iterrows() or apply(axis=1) - too slow
+The solve() function must:
+1. Apply col_merge: merge specified column groups into single columns (concatenate values, drop originals)
+2. Reorder columns and rows to maximize prefix hit rate
+3. Return the merged + reordered DataFrame
 
-## Example
+## Column Merging
+
+For col_merge=[["col1", "col2"]], merge into "col1_col2" column:
 ```python
-def reorder(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.copy()
-    # Your column reordering logic here
-    # Example: sort columns by some score, then sort rows
-    cols = list(df.columns)
-    # ... reorder cols ...
-    df = df[cols]
-    df = df.sort_values(by=cols)
-    return df
+df["col1_col2"] = df[["col1", "col2"]].apply(lambda x: "".join([f"{val}" for val in x]), axis=1)
+df = df.drop(columns=["col1", "col2"])
+```
+
+## Scoring
+
+```
+baseline_hit_rate = Average prefix hit rate using original column order (after merging)
+avg_hit_rate = Your solution's average prefix hit rate
+avg_runtime = Average runtime per dataset (seconds)
+
+normalized_hit_score = ((avg_hit_rate - baseline_hit_rate) / (1.0 - baseline_hit_rate)) * 100
+normalized_hit_score = clamp(normalized_hit_score, 0, 100)
+
+runtime_component = (10.0 - min(10.0, avg_runtime)) / 10.0 * 100
+
+final_score = 0.95 * normalized_hit_score + 0.05 * runtime_component
 ```
 """
 
 FUNCTION_SIGNATURE = """
-def reorder(df: pd.DataFrame) -> pd.DataFrame:
+def solve(
+    df: pd.DataFrame,
+    early_stop: int = 100000,
+    row_stop: int = 4,
+    col_stop: int = 2,
+    col_merge: list = None,
+    one_way_dep: list = None,
+    distinct_value_threshold: float = 0.7,
+    parallel: bool = True,
+) -> pd.DataFrame:
     '''
     Reorder DataFrame columns to maximize prefix hit rate.
 
     Args:
-        df: Input DataFrame (up to 30K rows, 60 columns)
+        df: Input DataFrame (raw, columns NOT pre-merged)
+        early_stop: Early stopping threshold
+        row_stop: Row stopping threshold
+        col_stop: Column stopping threshold
+        col_merge: List of column groups to merge
+        one_way_dep: One-way dependencies (unused)
+        distinct_value_threshold: Threshold for distinct values
+        parallel: Whether to use parallel processing
 
     Returns:
-        DataFrame with reordered columns and rows (same data, different order)
+        DataFrame with merged columns, reordered columns and rows
     '''
     pass
 """
 
 SEED_PROGRAM = '''import pandas as pd
-import numpy as np
 
-
-def reorder(df: pd.DataFrame) -> pd.DataFrame:
+def solve(
+    df: pd.DataFrame,
+    early_stop: int = 100000,
+    row_stop: int = 4,
+    col_stop: int = 2,
+    col_merge: list = None,
+    one_way_dep: list = None,
+    distinct_value_threshold: float = 0.7,
+    parallel: bool = True,
+) -> pd.DataFrame:
     """Reorder columns to maximize prefix sharing."""
     df = df.copy()
-    num_rows = len(df)
 
-    # Score each column: prioritize low cardinality and long strings
-    col_scores = {}
-    for col in df.columns:
-        cardinality = df[col].nunique()
-        if cardinality == 0 or cardinality == num_rows:
-            col_scores[col] = 0
-        else:
-            avg_len = df[col].astype(str).str.len().mean()
-            col_scores[col] = (avg_len ** 2) * (num_rows / cardinality - 1)
+    # Apply column merging (required by evaluator)
+    if col_merge:
+        for cols_to_merge in col_merge:
+            if all(col in df.columns for col in cols_to_merge):
+                merged_name = "_".join(cols_to_merge)
+                df[merged_name] = df[cols_to_merge].apply(
+                    lambda x: "".join([f"{val}" for val in x]), axis=1
+                )
+                df = df.drop(columns=cols_to_merge)
 
-    # Reorder columns by score (high to low)
-    sorted_cols = sorted(df.columns, key=lambda c: col_scores.get(c, 0), reverse=True)
-    df = df[sorted_cols]
-
-    # Sort rows lexicographically
-    df = df.sort_values(by=sorted_cols)
-
+    # Baseline: sort rows by all columns
+    df = df.sort_values(by=list(df.columns))
     return df
 '''
 
@@ -110,16 +152,37 @@ DIVERSITY_SEED_PROMPT = """
 
 Reorder DataFrame columns so consecutive rows share long common prefixes when concatenated.
 
-## Function Signature
+## Function Signature (ADRS-Leaderboard compatible)
 ```python
-def reorder(df: pd.DataFrame) -> pd.DataFrame:
+def solve(
+    df: pd.DataFrame,
+    early_stop: int = 100000,
+    row_stop: int = 4,
+    col_stop: int = 2,
+    col_merge: list = None,
+    one_way_dep: list = None,
+    distinct_value_threshold: float = 0.7,
+    parallel: bool = True,
+) -> pd.DataFrame:
 ```
 
 ## RULES (violations = score 0)
-1. Return DataFrame with SAME rows (same count)
-2. Return DataFrame with SAME columns (no drop/rename/add)
-3. Only change column order and row order
-4. No iterrows() or apply(axis=1) - too slow
+1. MUST apply col_merge first: merge specified column groups into single columns
+2. Return DataFrame with SAME rows (same count)
+3. After merging, only change column order and row order
+4. No iterrows() or apply(axis=1) on large data - too slow
+
+## Column Merging (REQUIRED)
+```python
+if col_merge:
+    for cols_to_merge in col_merge:
+        if all(col in df.columns for col in cols_to_merge):
+            merged_name = "_".join(cols_to_merge)
+            df[merged_name] = df[cols_to_merge].apply(
+                lambda x: "".join([f"{val}" for val in x]), axis=1
+            )
+            df = df.drop(columns=cols_to_merge)
+```
 
 ## Your Task
 Design a DIFFERENT algorithm than the existing seeds.
@@ -141,6 +204,8 @@ META_ADVISOR_PROMPT = """Analyze failures and provide SPECIFIC fixes. Under 100 
 
 DATASETS_DIR = Path(__file__).parent / "datasets"
 
+# Dataset specs: (filename, col_merge, sample_size)
+# col_merge matches ADRS-Leaderboard evaluator.py exactly
 DATASET_SPECS = [
     ("movies.csv", [["movieinfo", "movietitle", "rottentomatoeslink"]], None),
     ("beer.csv", [["beer/beerId", "beer/name"]], None),
@@ -151,23 +216,27 @@ DATASET_SPECS = [
 
 
 def _merge_columns(df, col_merge):
-    """Apply column merging - done by evaluator, not LLM."""
+    """Apply column merging - matches ADRS-Leaderboard evaluator.py exactly."""
     df = df.copy()
     if col_merge:
-        for group in col_merge:
-            valid = [c for c in group if c in df.columns]
-            if len(valid) > 1:
-                merged_name = "_".join(valid)
-                df[merged_name] = df[valid].astype(str).agg("".join, axis=1)
-                df = df.drop(columns=valid)
+        for cols_to_merge in col_merge:
+            if all(col in df.columns for col in cols_to_merge):
+                merged_name = "_".join(cols_to_merge)
+                df[merged_name] = df[cols_to_merge].apply(
+                    lambda x: "".join([f"{val}" for val in x]), axis=1
+                )
+                df = df.drop(columns=cols_to_merge)
     return df
 
 
 def load_datasets(sample_size: int = None):
-    """Load all datasets with column merging pre-applied.
+    """Load all datasets WITHOUT column merging (raw DataFrames).
 
     Args:
         sample_size: If provided, sample each dataset to this many rows.
+
+    Returns:
+        List of (df, filename, col_merge) tuples - col_merge passed to solver
     """
     datasets = []
     for filename, col_merge, spec_sample_size in DATASET_SPECS:
@@ -179,9 +248,8 @@ def load_datasets(sample_size: int = None):
         effective_sample = sample_size or spec_sample_size
         if effective_sample and len(df) > effective_sample:
             df = df.sample(effective_sample, random_state=42)
-        # Pre-merge columns so LLM doesn't have to
-        df = _merge_columns(df, col_merge)
-        datasets.append((df, filename))
+        # Do NOT pre-merge columns - pass raw df + col_merge to solver
+        datasets.append((df, filename, col_merge))
     return datasets
 
 
@@ -197,9 +265,15 @@ INPUTS_SAMPLED = load_datasets(sample_size=1500)
 _BASELINE_HIT_RATE = None
 
 def _calculate_baseline_hit_rate(inputs):
+    """Calculate baseline using original column order after merging.
+
+    Matches ADRS-Leaderboard evaluator.py _process_baseline_dataset().
+    """
     baseline_hit_rates = []
-    for df, filename in inputs:
-        _, hit_rate = evaluate_df_prefix_hit_cnt(df)
+    for df, filename, col_merge in inputs:
+        # Apply column merges (same as evaluator does for baseline)
+        df_merged = _merge_columns(df, col_merge)
+        _, hit_rate = evaluate_df_prefix_hit_cnt(df_merged)
         baseline_hit_rates.append(hit_rate / 100.0)
     return sum(baseline_hit_rates) / len(baseline_hit_rates) if baseline_hit_rates else 0.0
 
@@ -211,9 +285,29 @@ def _get_baseline_hit_rate(inputs):
     return _BASELINE_HIT_RATE
 
 
+def _get_expected_columns_after_merge(df, col_merge):
+    """Get expected column set after applying col_merge."""
+    expected_cols = set(df.columns)
+    if col_merge:
+        for cols_to_merge in col_merge:
+            valid_cols = [c for c in cols_to_merge if c in df.columns]
+            if len(valid_cols) > 1:
+                # Remove original columns, add merged column
+                for c in valid_cols:
+                    expected_cols.discard(c)
+                expected_cols.add("_".join(valid_cols))
+    return expected_cols
+
+
 # --- Score Function ---
 
-def score_fn(reorder_fn, inputs):
+def score_fn(solve_fn, inputs):
+    """Score function matching ADRS-Leaderboard evaluator.py exactly.
+
+    Args:
+        solve_fn: Function with signature solve(df, early_stop, row_stop, col_stop, col_merge, ...)
+        inputs: List of (df, filename, col_merge) tuples
+    """
     import time
     import warnings
     warnings.filterwarnings("ignore")
@@ -222,13 +316,25 @@ def score_fn(reorder_fn, inputs):
         hit_rates = []
         runtimes = []
 
-        for df, filename in inputs:
+        for df, filename, col_merge in inputs:
             df_copy = df.copy()
             original_row_count = len(df_copy)
-            original_cols = set(df_copy.columns)
 
+            # Expected columns after merging
+            expected_cols = _get_expected_columns_after_merge(df_copy, col_merge)
+
+            # Call solve() with all parameters - matches ADRS-Leaderboard exactly
             start = time.time()
-            reordered = reorder_fn(df_copy)
+            reordered = solve_fn(
+                df_copy,
+                early_stop=100000,
+                row_stop=4,
+                col_stop=2,
+                col_merge=col_merge,
+                one_way_dep=[],
+                distinct_value_threshold=0.7,
+                parallel=True,
+            )
             runtime = time.time() - start
             runtimes.append(runtime)
 
@@ -240,13 +346,13 @@ def score_fn(reorder_fn, inputs):
             if len(reordered) != original_row_count:
                 return {"error": f"Row count mismatch: {len(reordered)} vs {original_row_count}"}
 
-            # Validate columns - must be exactly the same
+            # Validate columns - must match expected after merging
             result_cols = set(reordered.columns)
-            if result_cols != original_cols:
-                missing = original_cols - result_cols
-                extra = result_cols - original_cols
+            if result_cols != expected_cols:
+                missing = expected_cols - result_cols
+                extra = result_cols - expected_cols
                 if missing:
-                    return {"error": f"Missing columns: {missing}"}
+                    return {"error": f"Missing columns after merge: {missing}"}
                 if extra:
                     return {"error": f"Extra columns: {extra}"}
 

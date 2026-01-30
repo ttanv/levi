@@ -55,8 +55,9 @@ class InitConfig(BaseModel):
     n_diverse_seeds: int = 5
     n_variants_per_seed: int = 25
     diversity_model: Optional[str] = None
-    variant_models: Optional[list[str]] = None  
+    variant_models: Optional[list[str]] = None
     temperature: float = 0.8
+    diversity_prompt: Optional[str] = None  # Custom prompt for diverse seed generation
 
 
 class MetaAdviceConfig(BaseModel):

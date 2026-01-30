@@ -3,11 +3,12 @@
 Run Multi-Island Punctuated Equilibrium for Transaction Scheduling.
 
 This implements a quick-and-dirty multi-island approach where:
-- 4 islands share the same centroids.json behavior map
+- 3 islands share the same centroids.json behavior map
 - Each island seeded with 1 unique LLM-generated seed (no variants)
 - Evolution happens independently on all islands
-- Every 5 evals: cross-island PE compares best from each island,
+- Every 15 evals: cross-island PE compares best from each island,
   accepts only if it beats the weakest island's best
+- PE stops after 60% budget used
 """
 
 import json
@@ -140,6 +141,8 @@ def build_config() -> AlgoforgeConfig:
             SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[2], weight=1.0, temperature=0.7),
             SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[2], weight=1.0, temperature=1.0),
             SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[2], weight=1.0, temperature=1.2),
+            # Gemini Flash 3 (OpenRouter) - reasoning off handled via extra_body
+            SamplerModelPair(sampler="softmax", model=PARADIGM_SHIFT_MODEL, weight=1.0, temperature=0.3),
         ],
         cvt=CVTConfig(
             n_centroids=40,
@@ -154,8 +157,8 @@ def build_config() -> AlgoforgeConfig:
             temperature=0.8,
         ),
         pipeline=PipelineConfig(
-            n_llm_workers=8,
-            n_eval_processes=8,
+            n_llm_workers=12,
+            n_eval_processes=12,
             n_inspirations=1,
             output_mode="full",
             eval_timeout=300,
@@ -167,7 +170,7 @@ def build_config() -> AlgoforgeConfig:
         ),
         punctuated_equilibrium=PunctuatedEquilibriumConfig(
             enabled=True,
-            interval=5,  # Will be used as pe_interval
+            interval=15,  # Not used - pe_interval passed directly to function
             n_clusters=3,
             n_variants=0,  # No variants for cross-island PE
             heavy_model=PARADIGM_SHIFT_MODEL,
@@ -193,7 +196,7 @@ if __name__ == "__main__":
     print("="*60)
     print(f"Budget: ${BUDGET:.2f}")
     print(f"Islands: 3")
-    print(f"PE interval: 5 evals")
+    print(f"PE interval: 15 evals (stops at 60% budget)")
     print(f"Centroids: {CENTROIDS_FILE}")
     print()
 
@@ -205,7 +208,7 @@ if __name__ == "__main__":
         config=config,
         centroids_file=str(CENTROIDS_FILE),
         n_islands=3,
-        pe_interval=5,
+        pe_interval=15,
     )
 
     print()
