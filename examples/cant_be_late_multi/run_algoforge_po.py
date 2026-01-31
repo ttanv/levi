@@ -33,7 +33,7 @@ MAIN_BUDGET = 4.40
 
 # Behavioral dimensions for cant_be_late_multi
 CANT_BE_LATE_MULTI_AST_FEATURES = ['cyclomatic_complexity', 'comparison_count', 'math_operators', 'branch_count']
-CANT_BE_LATE_MULTI_SCORE_KEYS = []  # No sub-scores, single deadline
+CANT_BE_LATE_MULTI_SCORE_KEYS = ["few_regions_score", "many_regions_score"]
 
 # Models (same as cant_be_late)
 LIGHT_MODELS = [
@@ -163,7 +163,7 @@ def build_config_with_optimized_prompts(optimized: dict) -> AlgoforgeConfig:
         ),
         meta_advice=MetaAdviceConfig(enabled=True, interval=50, model=PARADIGM_SHIFT_MODEL),
         pipeline=PipelineConfig(n_llm_workers=12, n_eval_processes=12, n_inspirations=1, output_mode="full", eval_timeout=300),
-        behavior=BehaviorConfig(ast_features=CANT_BE_LATE_MULTI_AST_FEATURES, score_keys=CANT_BE_LATE_MULTI_SCORE_KEYS, init_noise=0.0),
+        behavior=BehaviorConfig(ast_features=CANT_BE_LATE_MULTI_AST_FEATURES, score_keys=CANT_BE_LATE_MULTI_SCORE_KEYS, init_noise=0.3),
         punctuated_equilibrium=PunctuatedEquilibriumConfig(
             enabled=True,
             interval=5,
@@ -171,7 +171,7 @@ def build_config_with_optimized_prompts(optimized: dict) -> AlgoforgeConfig:
             n_variants=3,
             heavy_model=PARADIGM_SHIFT_MODEL,
             variant_models=LIGHT_MODELS,
-            behavior_noise=0.0,
+            behavior_noise=0.3,
             temperature=0.7,
             reasoning_effort="low",
         ),

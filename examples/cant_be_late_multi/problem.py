@@ -625,27 +625,28 @@ def score_fn(strategy_step, inputs: List[MultiRegionSimulationConfig]):
         if not scenario_costs:
             return {"error": "No valid test cases"}
 
-        # Per-scenario average cost
-        scenario_averages = []
+        scenario_averages = {}
         for name, costs in scenario_costs.items():
-            scenario_averages.append(sum(costs) / len(costs))
+            scenario_averages[name] = sum(costs) / len(costs)
 
-        # Average of scenario averages (two-level averaging)
-        final_avg = sum(scenario_averages) / len(scenario_averages)
+        final_avg = sum(scenario_averages.values()) / len(scenario_averages)
 
-        # Compute anchors
-        task_hours = inputs[0].task_duration / 3600  # 48 hours
-        od_anchor = task_hours * ON_DEMAND_COST_PER_HOUR  # 146.88
-        spot_anchor = task_hours * SPOT_COST_PER_HOUR  # 46.7088
-
-        # Normalize and compute score
+        task_hours = inputs[0].task_duration / 3600
+        od_anchor = task_hours * ON_DEMAND_COST_PER_HOUR
+        spot_anchor = task_hours * SPOT_COST_PER_HOUR
         denom = od_anchor - spot_anchor
+
+        def _subscore(names):
+            avgs = [scenario_averages[n] for n in names if n in scenario_averages]
+            if not avgs or denom <= 1e-9:
+                return 0.0
+            sub_avg = sum(avgs) / len(avgs)
+            return max(0.0, min(1.0, (od_anchor - sub_avg) / denom)) * 100
+
         if denom <= 1e-9:
             score = 0.0
         else:
-            norm = (od_anchor - final_avg) / denom
-            norm = max(0.0, min(1.0, norm))
-            score = norm * 100
+            score = max(0.0, min(1.0, (od_anchor - final_avg) / denom)) * 100
 
         return {
             "score": score,
@@ -654,6 +655,8 @@ def score_fn(strategy_step, inputs: List[MultiRegionSimulationConfig]):
             "od_anchor": od_anchor,
             "spot_anchor": spot_anchor,
             "num_scenarios": len(scenario_costs),
+            "few_regions_score": _subscore(["2_zones_same_region", "2_regions_east_west"]),
+            "many_regions_score": _subscore(["5_regions_high_diversity", "all_9_regions"]),
         }
 
     except Exception as e:
