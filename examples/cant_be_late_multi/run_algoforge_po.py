@@ -10,11 +10,14 @@ Workflow:
 Total budget: $5.00
 """
 
+import ast
 import json
 import os
+import re
 import sys
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 # Add algoforge to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -25,15 +28,103 @@ from algoforge import (
     InitConfig, MetaAdviceConfig, PipelineConfig, CVTConfig, BehaviorConfig
 )
 from algoforge.config.models import PunctuatedEquilibriumConfig, LLMProviderConfig
+from algoforge.core import Program
 
 # --- Constants ---
 OPTIMIZED_PROMPTS_FILE = Path(__file__).parent / "optimized_prompts.json"
 OPTIMIZATION_BUDGET = 0.60
 MAIN_BUDGET = 4.40
 
-# Behavioral dimensions for cant_be_late_multi
-CANT_BE_LATE_MULTI_AST_FEATURES = ['cyclomatic_complexity', 'comparison_count', 'math_operators', 'branch_count']
-CANT_BE_LATE_MULTI_SCORE_KEYS = ["few_regions_score", "many_regions_score"]
+
+# --- Domain-specific behavioral feature extractors ---
+# These capture algorithmic *family* differences rather than code style/verbosity.
+
+_STATE_PATTERNS = [
+    re.compile(p, re.IGNORECASE) for p in [
+        r'hasattr\s*\(', r'getattr\s*\(', r'setattr\s*\(',
+        r'ctx\.\w+\s*=',
+        r'_state', r'_last_', r'_prev_',
+        r'cooldown', r'history', r'counter', r'_count',
+        r'staleness', r'last_check', r'last_region', r'_tracker',
+    ]
+]
+
+def _compute_state_tracking_level(program: Program, tree: Optional[ast.AST] = None) -> float:
+    """Count stateful patterns (hasattr/setattr, ctx mutation, cooldowns, history tracking).
+
+    Separates heavy-stateful strategies (region cooldown maps, preemption history)
+    from stateless reactive strategies. Orthogonal to all AST complexity metrics.
+    """
+    return float(sum(len(p.findall(program.code)) for p in _STATE_PATTERNS))
+
+
+_MATH_MODEL_PATTERNS = [
+    re.compile(p, re.IGNORECASE) for p in [
+        r'math\.exp', r'math\.log', r'math\.pow', r'math\.sqrt',
+        r'math\.ceil', r'math\.floor',
+        r'\*\*\s*[0-9]',
+        r'exp\s*\(', r'probability', r'risk_score', r'decay', r'sigmoid',
+    ]
+]
+
+def _compute_math_model_complexity(program: Program, tree: Optional[ast.AST] = None) -> float:
+    """Count probabilistic/statistical modeling constructs (exp, log, decay, probability).
+
+    Separates probabilistic strategies (stochastic aggression, temporal arbitrage)
+    from deterministic if/else strategies. Orthogonal to state_tracking_level (r=-0.13).
+    """
+    return float(sum(len(p.findall(program.code)) for p in _MATH_MODEL_PATTERNS))
+
+
+_THRESHOLD_PATTERN = re.compile(r'(?<![a-zA-Z_])0\.\d+')
+
+def _compute_threshold_count(program: Program, tree: Optional[ast.AST] = None) -> float:
+    """Count hardcoded float thresholds (0.xx patterns).
+
+    Separates parameter-tuned strategies (many hand-tuned cutoffs for different
+    scenarios) from clean analytical strategies. Orthogonal to both state_tracking
+    (r=-0.15) and math_model (r=0.17).
+    """
+    return float(len(_THRESHOLD_PATTERN.findall(program.code)))
+
+
+# All 5 behavioral dimensions: 3 domain-specific + 2 AST
+# Cross-correlation among these 5 features: max |r| = 0.36 (vs 0.96 for the old set)
+CANT_BE_LATE_MULTI_AST_FEATURES = [
+    # Domain-specific (registered as custom extractors below)
+    'state_tracking_level',     # stateful vs stateless (CV=2.28)
+    'math_model_complexity',    # probabilistic vs deterministic (CV=1.28)
+    'threshold_count',          # parameter-tuned vs analytical (CV=0.84)
+    # AST-based (built-in)
+    'loop_count',               # iterative vs non-iterative (CV=1.24)
+    'decision_branch_depth',    # flat vs deeply-nested decision trees (CV=0.30)
+]
+CANT_BE_LATE_MULTI_SCORE_KEYS = []
+
+CUSTOM_EXTRACTORS = {
+    'state_tracking_level': _compute_state_tracking_level,
+    'math_model_complexity': _compute_math_model_complexity,
+    'threshold_count': _compute_threshold_count,
+}
+
+
+# --- Built-in AST feature: decision_branch_depth ---
+# Not in algoforge's built-in set, so register it as a custom extractor too.
+
+def _compute_decision_branch_depth(program: Program, tree: ast.AST) -> float:
+    """Max nesting depth of if-statements. Captures decision tree structure."""
+    def _max_if_depth(node: ast.AST, depth: int = 0) -> int:
+        max_d = depth
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, ast.If):
+                max_d = max(max_d, _max_if_depth(child, depth + 1))
+            else:
+                max_d = max(max_d, _max_if_depth(child, depth))
+        return max_d
+    return float(_max_if_depth(tree))
+
+
+CUSTOM_EXTRACTORS['decision_branch_depth'] = _compute_decision_branch_depth
 
 # Models (same as cant_be_late)
 LIGHT_MODELS = [
@@ -163,7 +254,12 @@ def build_config_with_optimized_prompts(optimized: dict) -> AlgoforgeConfig:
         ),
         meta_advice=MetaAdviceConfig(enabled=True, interval=50, model=PARADIGM_SHIFT_MODEL),
         pipeline=PipelineConfig(n_llm_workers=12, n_eval_processes=12, n_inspirations=1, output_mode="full", eval_timeout=300),
-        behavior=BehaviorConfig(ast_features=CANT_BE_LATE_MULTI_AST_FEATURES, score_keys=CANT_BE_LATE_MULTI_SCORE_KEYS, init_noise=0.3),
+        behavior=BehaviorConfig(
+            ast_features=CANT_BE_LATE_MULTI_AST_FEATURES,
+            score_keys=CANT_BE_LATE_MULTI_SCORE_KEYS,
+            init_noise=0.3,
+            custom_extractors=CUSTOM_EXTRACTORS,
+        ),
         punctuated_equilibrium=PunctuatedEquilibriumConfig(
             enabled=True,
             interval=5,

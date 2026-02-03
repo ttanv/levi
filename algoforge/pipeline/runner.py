@@ -26,6 +26,8 @@ class PipelineRunner:
         executor: ResilientProcessPool,
         output_dir: Optional[str] = None,
         init_cost: float = 0.0,
+        init_score_history: Optional[list] = None,
+        start_time: Optional[float] = None,
     ):
         self.config = config
         self.pool = pool
@@ -33,8 +35,13 @@ class PipelineRunner:
         self.archive_lock = asyncio.Lock()
         self.code_queue = asyncio.Queue()
         self.state = PipelineState(config.budget)
+        if start_time is not None:
+            self.state.start_time = start_time
         self.state.total_cost = init_cost  # Include init phase cost
         self.state.best_score_so_far = pool.get_stats().get("best_score", float('-inf'))
+        if init_score_history:
+            self.state.score_history = list(init_score_history)
+            self.state.eval_count = len(init_score_history)
         self.stop_event = asyncio.Event()
 
         # Snapshot output directory

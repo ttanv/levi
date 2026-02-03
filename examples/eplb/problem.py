@@ -41,9 +41,8 @@ Optimize expert placement for MoE models. Map 64 logical experts to 288 physical
 - `logical_to_physical_map`: [layers, 64, X] - physical slots or -1
 - `expert_count`: [layers, 64] - replicas per expert, sum=288
 
-## Scoring
-- 90% balancedness: avg_gpu_load / max_gpu_load
-- 10% speed: faster is better
+## Objective
+Maximize GPU load balancedness while keeping computation fast.
 """
 
 FUNCTION_SIGNATURE = """
@@ -243,6 +242,95 @@ def rebalance_experts(
 '''
 
 SEED_INSPIRATIONS = []
+
+DIVERSITY_SEED_PROMPT = """
+# EPLB (Expert Parallelism Load Balancer) Optimization
+
+## Problem
+Optimize expert placement for MoE models. Map 64 logical experts to 288 physical GPU slots
+to maximize GPU load balancedness.
+
+## Key Concepts
+- 64 logical experts must be replicated to fill 288 physical slots across 32 GPUs
+- Higher-load experts should get more replicas
+- Physical placement across GPUs affects load balance
+- Hierarchical structure: 4 nodes, 8 groups, 32 GPUs
+
+## Input
+- `weight`: [layers, 64] - load per logical expert
+- `num_replicas`: 288 total physical slots
+- `num_gpus`: 32 GPUs (9 slots each)
+
+## Function Signature
+```python
+def rebalance_experts(
+    weight: torch.Tensor,
+    num_replicas: int,
+    num_groups: int,
+    num_nodes: int,
+    num_gpus: int,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    '''Returns (physical_to_logical_map, logical_to_physical_map, expert_count).'''
+    pass
+```
+
+## You can import torch and standard library modules.
+
+## Your Task: ALGORITHMIC DIVERSITY
+
+Design a solution using a **FUNDAMENTALLY DIFFERENT ALGORITHM** than the existing seeds.
+
+**DO NOT:**
+- Make minor variations or parameter tweaks
+- Use the same core algorithm with different constants
+
+**DO:**
+- Analyze what paradigm each existing seed uses
+- Design from first principles using a different strategy
+- Consider what information the existing seeds are NOT using
+
+## Existing Seeds:
+{existing_seeds}
+
+## Output
+Output ONLY the complete Python code in a ```python block.
+"""
+
+META_ADVISOR_PROMPT = """You are a lessons-learned advisor for an evolutionary code optimization system.
+
+## Your Role
+Analyze FAILURES from recent evaluations. Your lessons get injected into LLM prompts to help future solutions avoid the same mistakes.
+
+## What You're Given
+- **Failure count**: How many candidates failed (crashes, invalid code, timeouts, etc.)
+- **Error patterns**: Specific error messages encountered (including timeouts)
+- **Previous lessons**: What you warned about last time
+
+## Your Task: Write Concise Lessons (150-200 words max)
+
+### Focus ONLY on Failure Prevention
+You do NOT see successful solutions. Your job is purely defensive:
+1. **Identify error patterns** - What mistakes are being made repeatedly?
+2. **Explain root causes** - Why are these errors happening?
+3. **Give specific fixes** - Exactly how to avoid each error type
+
+### For Each Error Pattern:
+- Quote the error briefly
+- Explain what causes it
+- Give a specific fix
+
+## Output Format
+Keep it SHORT and DIRECT:
+
+**Avoid These Errors:**
+- [Error pattern]: [How to fix]
+- [Error pattern]: [How to fix]
+
+---
+
+{metrics_data}
+
+Provide your lessons (150-200 words max):"""
 
 # --- Workload Loading ---
 _WORKLOADS = None

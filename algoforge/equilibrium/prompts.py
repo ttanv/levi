@@ -146,13 +146,12 @@ LATE_THRESHOLD = 0.6
 
 
 def get_budget_stage(budget_progress: float) -> str:
-    """Map budget progress (0-1) to a stage name."""
-    if budget_progress < EARLY_THRESHOLD:
-        return "early"
-    elif budget_progress < LATE_THRESHOLD:
-        return "mid"
-    else:
-        return "late"
+    """Map budget progress (0-1) to a stage name.
+
+    Always returns 'early' to use the large paradigm shift prompt
+    (radical exploration) regardless of budget progress.
+    """
+    return "early"
 
 
 # Default prompt (backwards compat) — same as early stage

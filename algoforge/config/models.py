@@ -73,6 +73,9 @@ class BehaviorConfig(BaseModel):
     )
     score_keys: list[str] = Field(default_factory=list)
     init_noise: float = 0.15
+    custom_extractors: dict[str, Callable] = Field(default_factory=dict)
+
+    model_config = {"arbitrary_types_allowed": True}
 
 
 class CheckpointConfig(BaseModel):
