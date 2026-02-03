@@ -448,6 +448,7 @@ async def run_islands_async(
         ast_features=config.behavior.ast_features,
         score_keys=config.behavior.score_keys,
         init_noise=config.behavior.init_noise,
+        custom_extractors=config.behavior.custom_extractors or None,
     )
 
     coordinator_kwargs = {

@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import random
+import time
 import types
 from dataclasses import dataclass
 from typing import Optional
@@ -12,6 +13,7 @@ import numpy as np
 
 from ..config import AlgoforgeConfig
 from ..core import Program, EvaluationResult
+from ..pipeline.state import ScoreHistoryEntry
 from ..pool import CVTMAPElitesPool
 from ..behavior import BehaviorExtractor
 from ..llm import PromptBuilder, ProgramWithScore, OutputMode, get_llm_client
@@ -196,11 +198,31 @@ class Diversifier:
         self,
         config: AlgoforgeConfig,
         executor: ResilientProcessPool,
+        start_time: float = 0.0,
     ):
         self.config = config
         self.executor = executor
         self.total_cost = 0.0
         self.best_score = 0.0
+        self.score_history: list[ScoreHistoryEntry] = []
+        self._init_eval_count = 0
+        self._start_time = start_time or time.time()
+
+    def _record_score(self, score: float, sampler: str) -> None:
+        """Record a score from the init phase."""
+        self._init_eval_count += 1
+        if score > self.best_score:
+            self.best_score = score
+        self.score_history.append(ScoreHistoryEntry(
+            eval_number=self._init_eval_count,
+            score=score,
+            best_score=self.best_score,
+            timestamp=time.time() - self._start_time,
+            accepted=True,  # All valid init programs go into the archive
+            sampler=sampler,
+            archive_size=0,  # Not meaningful during init
+            cell_index=None,
+        ))
 
     async def _cascade_eval(self, code: str, fn_name: str) -> dict:
         """Evaluate with cascade: quick test first, full eval only if promising."""
@@ -231,8 +253,7 @@ class Diversifier:
         )
         if "error" not in result:
             score = result.get('score', 0)
-            if score > self.best_score:
-                self.best_score = score
+            self._record_score(score, sampler="init_variant")
         return result
 
     async def run(
@@ -241,15 +262,18 @@ class Diversifier:
         seed_program: str,
         seed_result: dict,
         extractor: BehaviorExtractor,
-    ) -> float:
+    ) -> tuple[float, list[ScoreHistoryEntry]]:
         """
         Run init phase: generate diverse seeds, expand with variants, build centroids.
 
-        Returns total cost incurred during init.
+        Returns (total_cost, score_history) from the init phase.
         """
         fn_name = extract_fn_name(self.config.function_signature)
         seed_score = seed_result.get('score', 0.0)
         self.best_score = seed_score
+
+        # Record the seed itself
+        self._record_score(seed_score, sampler="init_seed")
 
         # Phase 1: Generate diverse seeds
         diverse_seeds = await self._generate_diverse_seeds(
@@ -267,7 +291,7 @@ class Diversifier:
             seed_program, seed_result  # Always pass seed as fallback
         )
 
-        return self.total_cost
+        return self.total_cost, self.score_history
 
     async def _generate_diverse_seeds(
         self,
@@ -328,8 +352,7 @@ class Diversifier:
 
                 if "error" not in result:
                     new_score = result.get('score', 0.0)
-                    if new_score > self.best_score:
-                        self.best_score = new_score
+                    self._record_score(new_score, sampler="init_diversity")
                     diverse_seeds.append((new_code, new_score, result))
                     logger.info(f"  [Seed {i+1}] OK - score: {new_score:.1f}")
                 else:
@@ -556,10 +579,10 @@ class Diversifier:
                 cell_to_programs[cell] = []
             cell_to_programs[cell].append(prog)
 
-        # For each cell, add the best-scoring program directly (no re-extraction)
+        # For each cell, add a random program directly (no re-extraction)
         n_accepted = 0
         for cell_idx, progs in cell_to_programs.items():
-            best_prog = max(progs, key=lambda x: x["score"])
+            best_prog = random.choice(progs)
             program = Program(code=best_prog["code"], metadata={"primary_score": best_prog["score"]})
             eval_result = EvaluationResult(
                 scores=best_prog["result"],

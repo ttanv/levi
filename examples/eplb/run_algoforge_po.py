@@ -17,7 +17,7 @@ from pathlib import Path
 # Add algoforge to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from problem import PROBLEM_DESCRIPTION, FUNCTION_SIGNATURE, SEED_PROGRAM, get_lazy_inputs, score_fn
+from problem import PROBLEM_DESCRIPTION, FUNCTION_SIGNATURE, SEED_PROGRAM, get_lazy_inputs, score_fn, DIVERSITY_SEED_PROMPT
 from algoforge import (
     run, AlgoforgeConfig, BudgetConfig, SamplerModelPair,
     InitConfig, MetaAdviceConfig, PipelineConfig, CVTConfig, BehaviorConfig
@@ -27,7 +27,7 @@ from algoforge.config.models import PunctuatedEquilibriumConfig, LLMProviderConf
 # --- Constants ---
 OPTIMIZED_PROMPTS_FILE = Path(__file__).parent / "optimized_prompts.json"
 OPTIMIZATION_BUDGET = 0.60
-MAIN_BUDGET = 3.00
+MAIN_BUDGET = 4.50
 
 # Behavioral dimensions
 EPLB_AST_FEATURES = ['loop_nesting_max', 'cyclomatic_complexity', 'math_operators']
@@ -36,14 +36,11 @@ EPLB_SCORE_KEYS = ['execution_time', 'workload_main', 'workload_8', 'workload_9'
 # Models
 LIGHT_MODELS = [
     "openrouter/xiaomi/mimo-v2-flash",
-    "openrouter/deepseek/deepseek-v3.2",
-    "Qwen/Qwen3-30B-A3B-Instruct-2507",
+    "openrouter/qwen/qwen3-30b-a3b-instruct-2507",
 ]
 PARADIGM_SHIFT_MODEL = "openrouter/google/gemini-3-flash-preview"
 
-LOCAL_ENDPOINTS = {
-    "Qwen/Qwen3-30B-A3B-Instruct-2507": "http://localhost:8001/v1",
-}
+LOCAL_ENDPOINTS = {}
 
 MODEL_INFO = {
     "xiaomi/mimo-v2-flash": {
@@ -52,17 +49,6 @@ MODEL_INFO = {
         "max_output_tokens": 16384,
         "input_cost_per_token": 0.00000009,
         "output_cost_per_token": 0.00000029,
-    },
-    "deepseek/deepseek-v3.2": {
-        "max_tokens": 16384,
-        "max_input_tokens": 163840,
-        "max_output_tokens": 16384,
-        "input_cost_per_token": 0.00000025,
-        "output_cost_per_token": 0.00000038,
-    },
-    "Qwen/Qwen3-30B-A3B-Instruct-2507": {
-        "input_cost_per_token": 0.0000001,
-        "output_cost_per_token": 0.0000004,
     },
     "google/gemini-3-flash-preview": {
         "max_tokens": 65536,
@@ -76,8 +62,7 @@ MODEL_INFO = {
 # Model key mapping for prompt overrides
 MODEL_KEY_MAP = {
     "openrouter/xiaomi/mimo-v2-flash": "mimo",
-    "openrouter/deepseek/deepseek-v3.2": "deepseek",
-    "Qwen/Qwen3-30B-A3B-Instruct-2507": "qwen",
+    "openrouter/qwen/qwen3-30b-a3b-instruct-2507": "qwen",
 }
 
 
@@ -105,6 +90,7 @@ def build_prompt_overrides(optimized: dict) -> dict:
     Structure:
     {
         "mutation": {
+            "openrouter/xiaomi/mimo-v2-flash": "optimized instruction...",
             "Qwen/Qwen3-30B-A3B-Instruct-2507": "optimized instruction...",
         },
         "paradigm_shift": "optimized instruction..."
@@ -141,48 +127,45 @@ def build_config_with_optimized_prompts(optimized: dict) -> AlgoforgeConfig:
         score_fn=score_fn,
         budget=BudgetConfig(dollars=MAIN_BUDGET),
         sampler_model_pairs=[
-            # MiMo-V2-Flash (OpenRouter)
-            SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[0], weight=1.0, temperature=0.3),
-            SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[0], weight=1.0, temperature=0.7),
-            SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[0], weight=1.0, temperature=1.0),
-            SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[0], weight=1.0, temperature=1.2),
-            # DeepSeek (OpenRouter)
-            SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[1], weight=1.0, temperature=0.3),
-            SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[1], weight=1.0, temperature=0.7),
-            SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[1], weight=1.0, temperature=1.0),
-            SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[1], weight=1.0, temperature=1.2),
-            # Qwen 30B (Local TPU)
-            SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[2], weight=1.0, temperature=0.3),
-            SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[2], weight=1.0, temperature=0.7),
-            SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[2], weight=1.0, temperature=1.0),
-            SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[2], weight=1.0, temperature=1.2),
+            # MiMo-V2-Flash (OpenRouter) - cyclic annealing, 1 big cycle
+            SamplerModelPair(sampler="cyclic_annealing", model=LIGHT_MODELS[0], weight=1.0, n_cycles=1),
+            SamplerModelPair(sampler="cyclic_annealing", model=LIGHT_MODELS[0], weight=1.0, n_cycles=1),
+            SamplerModelPair(sampler="cyclic_annealing", model=LIGHT_MODELS[0], weight=1.0, n_cycles=1),
+            SamplerModelPair(sampler="cyclic_annealing", model=LIGHT_MODELS[0], weight=1.0, n_cycles=1),
+            # Qwen 30B (OpenRouter) - cyclic annealing, 1 big cycle
+            SamplerModelPair(sampler="cyclic_annealing", model=LIGHT_MODELS[1], weight=1.0, n_cycles=1),
+            SamplerModelPair(sampler="cyclic_annealing", model=LIGHT_MODELS[1], weight=1.0, n_cycles=1),
+            SamplerModelPair(sampler="cyclic_annealing", model=LIGHT_MODELS[1], weight=1.0, n_cycles=1),
+            SamplerModelPair(sampler="cyclic_annealing", model=LIGHT_MODELS[1], weight=1.0, n_cycles=1),
+            # Gemini Flash (OpenRouter) - paradigm shift model
+            SamplerModelPair(sampler="cyclic_annealing", model=PARADIGM_SHIFT_MODEL, weight=1.0, n_cycles=1),
         ],
         cvt=CVTConfig(
-            n_centroids=40,
+            n_centroids=50,
             defer_centroids=True,
-            predefined_centroids_file="/home/ttanveer/algoforge/examples/eplb/centroids.json"
         ),
         init=InitConfig(
-            enabled=False,
-            n_diverse_seeds=3,
-            n_variants_per_seed=5,
+            enabled=True,
+            n_diverse_seeds=5,
+            n_variants_per_seed=20,
             diversity_model=PARADIGM_SHIFT_MODEL,
             variant_models=LIGHT_MODELS,
             temperature=0.8,
+            diversity_prompt=DIVERSITY_SEED_PROMPT,
         ),
-        meta_advice=MetaAdviceConfig(enabled=False, interval=50, model=PARADIGM_SHIFT_MODEL),
-        pipeline=PipelineConfig(n_llm_workers=8, n_eval_processes=8, n_inspirations=1, output_mode="full", eval_timeout=300),
-        behavior=BehaviorConfig(ast_features=EPLB_AST_FEATURES, score_keys=EPLB_SCORE_KEYS),
+        meta_advice=MetaAdviceConfig(enabled=True, interval=50, model=PARADIGM_SHIFT_MODEL),
+        pipeline=PipelineConfig(n_llm_workers=12, n_eval_processes=12, n_inspirations=1, output_mode="full", eval_timeout=300),
+        behavior=BehaviorConfig(ast_features=EPLB_AST_FEATURES, score_keys=EPLB_SCORE_KEYS, init_noise=0.3),
         punctuated_equilibrium=PunctuatedEquilibriumConfig(
             enabled=True,
             interval=5,
             n_clusters=3,
-            n_variants=0,
+            n_variants=3,
             heavy_model=PARADIGM_SHIFT_MODEL,
             variant_models=LIGHT_MODELS,
-            behavior_noise=0.0,
+            behavior_noise=0.3,
             temperature=0.7,
-            reasoning_effort="disabled",
+            reasoning_effort="low",
         ),
         output_dir=run_dir,
         llm=LLMProviderConfig(
@@ -195,7 +178,26 @@ def build_config_with_optimized_prompts(optimized: dict) -> AlgoforgeConfig:
     return config
 
 
+def find_latest_run() -> Path | None:
+    """Find the latest run directory under runs/ with a snapshot.json."""
+    runs_dir = Path(__file__).parent / "runs"
+    if not runs_dir.exists():
+        return None
+    candidates = sorted(
+        [d for d in runs_dir.iterdir() if d.is_dir() and (d / "snapshot.json").exists()],
+        key=lambda d: d.name,
+        reverse=True,
+    )
+    return candidates[0] if candidates else None
+
+
 if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="AlgoForge with Prompt Optimization - EPLB")
+    parser.add_argument("--resume", action="store_true", help="Resume from the latest run in runs/")
+    args = parser.parse_args()
+
     print("="*60)
     print("AlgoForge with Prompt Optimization - EPLB")
     print("="*60)
@@ -212,9 +214,31 @@ if __name__ == "__main__":
     print(f"Loaded prompts: {mutation_count} mutation, paradigm_shift={has_paradigm}")
     print()
 
+    # Check for resume
+    resume_snapshot = None
+    if args.resume:
+        latest_run = find_latest_run()
+        if latest_run is None:
+            print("No previous run found to resume from. Starting fresh.")
+        else:
+            snapshot_path = latest_run / "snapshot.json"
+            with open(snapshot_path) as f:
+                resume_snapshot = json.load(f)
+            run_state = resume_snapshot.get("run_state", {})
+            print(f"Resuming from: {latest_run.name}")
+            print(f"  Prior cost: ${run_state.get('total_cost', 0):.3f}")
+            print(f"  Prior evals: {run_state.get('eval_count', 0)}")
+            print(f"  Prior best score: {run_state.get('best_score', 0):.1f}")
+            print()
+
     # Build config and run
     config = build_config_with_optimized_prompts(optimized)
+
+    # When resuming, reuse the same output directory
+    if resume_snapshot and latest_run:
+        config.output_dir = str(latest_run)
+
     print(f"Output directory: {config.output_dir}")
     print()
 
-    run(config)
+    run(config, resume_snapshot=resume_snapshot)

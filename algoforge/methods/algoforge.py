@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import time
 import types
 
 from ..config import AlgoforgeConfig, AlgoforgeResult
@@ -44,17 +45,65 @@ def _evaluate_code(code: str, score_fn, inputs: list, fn_name: str) -> dict:
     return score_fn(fn, inputs)
 
 
-def run(config: AlgoforgeConfig) -> AlgoforgeResult:
+def _restore_from_snapshot(
+    pool: CVTMAPElitesPool,
+    extractor: BehaviorExtractor,
+    snapshot: dict,
+) -> float:
+    """
+    Restore pool state from a snapshot dict.
+
+    Returns the total_cost from the snapshot (used as init_cost for the runner).
+    """
+    import numpy as np
+
+    elites = snapshot.get("elites", [])
+    run_state = snapshot.get("run_state", {})
+    resumed_cost = run_state.get("total_cost", 0.0)
+
+    logger.info(f"[Resume] Restoring {len(elites)} elites, prior cost: ${resumed_cost:.3f}")
+
+    # Generate centroids if deferred (init would normally do this)
+    if pool._centroids is None:
+        pool._centroids = pool._init_cvt_centroids()
+        pool._mins = np.zeros(pool._n_dims)
+        pool._maxs = np.ones(pool._n_dims)
+        pool._ranges = np.ones(pool._n_dims)
+
+    # Restore elites into pool
+    restored = 0
+    for elite_data in elites:
+        program = Program(code=elite_data["code"])
+        eval_result = EvaluationResult(
+            scores=elite_data["scores"],
+            is_valid=True,
+        )
+        accepted, _ = pool.add(program, eval_result)
+        if accepted:
+            restored += 1
+
+    extractor.set_phase('evolution')
+    logger.info(f"[Resume] Restored {restored}/{len(elites)} elites into pool")
+    return resumed_cost
+
+
+def run(config: AlgoforgeConfig, resume_snapshot: dict | None = None) -> AlgoforgeResult:
     """
     Run AlgoForge evolutionary optimization.
 
     This is a synchronous entry point that handles async internally.
+
+    Args:
+        config: AlgoForge configuration.
+        resume_snapshot: Optional snapshot dict (from snapshot.json) to resume from.
+                        When provided, skips init and loads elites from the snapshot.
     """
-    return asyncio.run(_run_async(config))
+    return asyncio.run(_run_async(config, resume_snapshot=resume_snapshot))
 
 
-async def _run_async(config: AlgoforgeConfig) -> AlgoforgeResult:
+async def _run_async(config: AlgoforgeConfig, resume_snapshot: dict | None = None) -> AlgoforgeResult:
     """Internal async implementation."""
+    run_start_time = time.time()
     _setup_logging()
 
     logger.info("[AlgoForge] Starting evolutionary optimization")
@@ -81,6 +130,7 @@ async def _run_async(config: AlgoforgeConfig) -> AlgoforgeResult:
         ast_features=config.behavior.ast_features,
         score_keys=config.behavior.score_keys,
         init_noise=config.behavior.init_noise,
+        custom_extractors=config.behavior.custom_extractors or None,
     )
 
     # Create CVT pool
@@ -120,12 +170,15 @@ async def _run_async(config: AlgoforgeConfig) -> AlgoforgeResult:
         seed_score = seed_result.get('score', 0.0)
         logger.info(f"[AlgoForge] Seed score: {seed_score:.1f}")
 
-        # Init phase
+        # Resume from snapshot or run init
         init_cost = 0.0
-        if config.init.enabled:
+        init_score_history = []
+        if resume_snapshot is not None:
+            init_cost = _restore_from_snapshot(pool, extractor, resume_snapshot)
+        elif config.init.enabled:
             logger.info("[AlgoForge] Running init phase")
-            diversifier = Diversifier(config, executor)
-            init_cost = await diversifier.run(pool, config.seed_program, seed_result, extractor)
+            diversifier = Diversifier(config, executor, start_time=run_start_time)
+            init_cost, init_score_history = await diversifier.run(pool, config.seed_program, seed_result, extractor)
             logger.info(f"[AlgoForge] Init phase complete, cost: ${init_cost:.3f}")
         else:
             # Load predefined centroids if configured
@@ -166,7 +219,7 @@ async def _run_async(config: AlgoforgeConfig) -> AlgoforgeResult:
 
         # Run main pipeline
         logger.info("[AlgoForge] Starting evolution pipeline")
-        runner = PipelineRunner(config, pool, executor, output_dir=config.output_dir, init_cost=init_cost)
+        runner = PipelineRunner(config, pool, executor, output_dir=config.output_dir, init_cost=init_cost, init_score_history=init_score_history, start_time=run_start_time)
         result = await runner.run()
 
         logger.info(f"[AlgoForge] Complete - best score: {result.best_score:.1f}, "

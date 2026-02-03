@@ -170,6 +170,7 @@ class MultiIslandPERunner:
             ast_features=config.behavior.ast_features,
             score_keys=config.behavior.score_keys,
             init_noise=0.0,
+            custom_extractors=config.behavior.custom_extractors or None,
         )
         # Set fixed bounds from centroids.json (convert list to tuple)
         bounds_tuple = {k: tuple(v) for k, v in self.bounds.items()}
