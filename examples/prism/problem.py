@@ -29,35 +29,47 @@ class Model:
 PROBLEM_DESCRIPTION = """
 # PRISM Problem
 
-Optimize the placement of machine learning models across GPUs to minimize the maximum KV Cache Pressure (KVPR).
+## Problem Setting
+Optimize the placement of machine learning models across GPUs to minimize the maximum KV Cache Pressure (KVPR). Given a set of models with varying sizes, request rates, and SLO requirements, determine the optimal assignment of models to GPUs while respecting memory constraints.
 
-## Critical Constraints (violations = 0 score)
-- Each model must be assigned to exactly one GPU
-- Total model_size on each GPU must NOT exceed GPU_MEM_SIZE (80GB)
-- All models in the input MUST appear in the output placement
-- GPU IDs must be valid: 0 to gpu_num-1
+KVPR (KV Cache Pressure) measures how crowded a GPU is:
+```
+KVPR = sum(model.req_rate / model.slo for model in gpu_models) / (GPU_MEM_SIZE - sum(model.model_size for model in gpu_models))
+```
 
-## Input
-- `gpu_num`: Number of available GPUs (typically 5-10)
-- `models`: List of Model objects with attributes:
-  - model_name: str - unique identifier
-  - model_size: int - size in GB (10-30)
-  - req_rate: int - requests per second (1-10)
-  - slo: int - service level objective (5-10)
-  - cur_gpu_id: int - can be ignored
+Lower maximum KVPR across all GPUs is better.
 
-## Output
-- `dict[int, list[Model]]`: mapping gpu_id to list of Models assigned to that GPU
-- Example: {0: [model_a, model_b], 1: [model_c], 2: [model_d, model_e]}
+## Target
+- **Primary**: Minimize maximum KVPR across all GPUs (lower is better)
+- **Hard Constraint**: Models must fit within GPU memory (80GB per GPU)
+- **Secondary**: Maximize successful placement rate across test cases
 
-## KVPR Formula
-KVPR(gpu) = sum(model.req_rate / model.slo for model in gpu_models) / (GPU_MEM_SIZE - sum(model.model_size for model in gpu_models))
+## Scoring (0-100)
+```
+baseline_kvpr = Average max-KVPR using round-robin placement
+optimal_kvpr = Theoretical minimum KVPR with perfect load balance
+solution_kvpr = Your solution's average max-KVPR across all test cases
 
-## Scoring
-- 90% based on KVPR minimization (lower is better)
-- Score = 100 * sqrt((baseline_kvpr - solution_kvpr) / (baseline_kvpr - optimal_kvpr))
-- Baseline: round-robin placement
-- Optimal: theoretical minimum with perfect load balance
+For each test case:
+    raw_ratio = (baseline_kvpr - solution_kvpr) / (baseline_kvpr - optimal_kvpr)
+    clamped_ratio = clamp(raw_ratio, 0, 1)
+    test_score = 100 * sqrt(clamped_ratio)
+
+final_score = Average of individual test scores
+```
+
+The sqrt scaling provides diminishing returns as solutions approach optimal, giving more credit for initial improvements over the baseline.
+
+## Implementation Notes
+- GPU memory: 80 GB per GPU
+- Model sizes: 10-30 GB
+- Request rates: 1-10 requests/second
+- SLO targets: 5-10 (latency units)
+- Number of models per test: 2x gpu_num
+- Number of GPUs per test: 5-10
+- Each test case has a 10-second timeout
+- 50 test cases are evaluated
+- Test cases use a fixed random seed (42) for reproducibility
 """
 
 FUNCTION_SIGNATURE = """
@@ -75,7 +87,7 @@ class Model:
 
 def compute_model_placement(gpu_num: int, models: list[Model]) -> dict[int, list[Model]]:
     '''
-    Compute optimal model placement across GPUs to minimize max KVPR.
+    Compute optimal model placement across GPUs.
 
     Args:
         gpu_num: Number of available GPUs (typically 5-10)
@@ -90,15 +102,12 @@ def compute_model_placement(gpu_num: int, models: list[Model]) -> dict[int, list
         - Total model_size on each GPU must not exceed GPU_MEM_SIZE (80GB)
 
     Goal:
-        Minimize max(KVPR) across all GPUs where:
-        KVPR(gpu) = sum(req_rate/slo) / (GPU_MEM_SIZE - sum(model_size))
+        Minimize max(KVPR) across all GPUs
     '''
     pass
 """
 
-SEED_PROGRAM = '''"""PRISM: GPU Model Placement Optimizer."""
-
-from dataclasses import dataclass
+SEED_PROGRAM = '''from dataclasses import dataclass
 
 GPU_MEM_SIZE = 80  # GB
 
@@ -109,7 +118,6 @@ class Model:
     req_rate: int
     slo: int
     cur_gpu_id: int
-
 
 def compute_model_placement(gpu_num, models):
     """
@@ -159,6 +167,64 @@ def compute_model_placement(gpu_num, models):
 '''
 
 SEED_INSPIRATIONS = []
+
+DIVERSITY_SEED_PROMPT = """
+# PRISM (GPU Model Placement) Optimization
+
+## Problem
+Optimize the placement of machine learning models across GPUs to minimize the maximum
+KV Cache Pressure (KVPR). Given models with varying sizes, request rates, and SLO
+requirements, determine optimal assignment while respecting memory constraints.
+
+KVPR measures how crowded a GPU is:
+```
+KVPR = sum(model.req_rate / model.slo for model in gpu_models) / (GPU_MEM_SIZE - sum(model.model_size for model in gpu_models))
+```
+
+Lower maximum KVPR across all GPUs is better.
+
+## Key Concepts
+- Models must fit within GPU memory (80GB per GPU)
+- Each model assigned to exactly one GPU
+- Model sizes: 10-30 GB, request rates: 1-10 req/s, SLO targets: 5-10
+- Number of models per test: 2x gpu_num, GPUs per test: 5-10
+- Scoring uses sqrt scaling: score = 100 * sqrt((baseline - solution) / (baseline - optimal))
+
+## Function Signature
+```python
+def compute_model_placement(gpu_num: int, models: list[Model]) -> dict[int, list[Model]]:
+    '''
+    Args:
+        gpu_num: Number of available GPUs (typically 5-10)
+        models: List of Model objects with model_size, req_rate, slo attributes
+
+    Returns:
+        dict mapping gpu_id (int) to list of Models assigned to that GPU
+    '''
+    pass
+```
+
+## You can import standard library modules.
+
+## Your Task: ALGORITHMIC DIVERSITY
+
+Design a solution using a **FUNDAMENTALLY DIFFERENT ALGORITHM** than the existing seeds.
+
+**DO NOT:**
+- Make minor variations or parameter tweaks
+- Use the same core algorithm with different constants
+
+**DO:**
+- Analyze what paradigm each existing seed uses
+- Design from first principles using a different strategy
+- Consider what information the existing seeds are NOT using
+
+## Existing Seeds:
+{existing_seeds}
+
+## Output
+Output ONLY the complete Python code in a ```python block.
+"""
 
 
 # --- Test Case Generation ---
