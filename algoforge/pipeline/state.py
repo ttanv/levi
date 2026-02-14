@@ -20,6 +20,7 @@ class ScoreHistoryEntry:
     archive_size: int
     cell_index: int | None = None  # Which cell this evaluation fell into
     is_punctuated_equilibrium: bool = False  # Whether from PE
+    cumulative_cost: float = 0.0
 
 
 @dataclass
@@ -153,6 +154,7 @@ class PipelineState:
             archive_size=archive_size,
             cell_index=cell_index,
             is_punctuated_equilibrium=is_punctuated_equilibrium,
+            cumulative_cost=self.total_cost,
         )
         self.score_history.append(entry)
 

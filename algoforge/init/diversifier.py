@@ -222,6 +222,7 @@ class Diversifier:
             sampler=sampler,
             archive_size=0,  # Not meaningful during init
             cell_index=None,
+            cumulative_cost=self.total_cost,
         ))
 
     async def _cascade_eval(self, code: str, fn_name: str) -> dict:
