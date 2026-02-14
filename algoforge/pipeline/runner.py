@@ -230,6 +230,7 @@ class PipelineRunner:
                 "archive_size": entry.archive_size,
                 "cell_index": entry.cell_index,
                 "is_punctuated_equilibrium": entry.is_punctuated_equilibrium,
+                "cumulative_cost": entry.cumulative_cost,
             }
             for entry in self.state.score_history
         ]
