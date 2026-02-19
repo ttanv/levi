@@ -35,7 +35,6 @@ class CellStats:
     """Statistics for a cell used by samplers."""
     n_samples: int = 0      # Times this cell was sampled
     n_successes: int = 0    # Times sampling led to accepted offspring
-    total_reward: float = 0.0  # Cumulative reward (unused by UCB, kept for extensibility)
 
     def success_rate(self) -> float:
         if self.n_samples == 0:
@@ -59,9 +58,8 @@ class CellStats:
 class Sampler(ABC):
     """Abstract base class for sampling strategies."""
 
-    def __init__(self, name: str, model_type: str):
+    def __init__(self, name: str):
         self.name = name
-        self.model_type = model_type  # "light" or "heavy"
         self.cell_stats: dict[int, CellStats] = {}
 
     def get_or_create_stats(self, cell: int) -> CellStats:
@@ -69,13 +67,12 @@ class Sampler(ABC):
             self.cell_stats[cell] = CellStats()
         return self.cell_stats[cell]
 
-    def update(self, cell: int, success: bool, reward: float = 0.0) -> None:
+    def update(self, cell: int, success: bool) -> None:
         """Update statistics after observing outcome."""
         stats = self.get_or_create_stats(cell)
         stats.n_samples += 1
         if success:
             stats.n_successes += 1
-        stats.total_reward += reward
 
     @abstractmethod
     def select_cells(
@@ -99,7 +96,7 @@ class UCBSampler(Sampler):
     """Upper Confidence Bound sampling - balances exploration and exploitation."""
 
     def __init__(self, c: float = 2.0):
-        super().__init__("ucb", "light")
+        super().__init__("ucb")
         self.c = c
         self._total_samples = 0
 
@@ -126,7 +123,7 @@ class SoftmaxSampler(Sampler):
     """Temperature-based softmax sampling weighted by fitness."""
 
     def __init__(self, temperature: float = 1.0):
-        super().__init__("softmax", "heavy")
+        super().__init__("softmax")
         self.temperature = temperature
 
     def select_cells(
@@ -181,7 +178,7 @@ class CyclicAnnealingSampler(Sampler):
     """
 
     def __init__(self, t_max: float = 1.2, t_min: float = 0.15, n_cycles: int = 4):
-        super().__init__("cyclic_annealing", "heavy")
+        super().__init__("cyclic_annealing")
         self.t_max = t_max
         self.t_min = t_min
         self.n_cycles = n_cycles
@@ -251,7 +248,7 @@ class UniformSampler(Sampler):
     """Uniform random sampling for pure exploration."""
 
     def __init__(self):
-        super().__init__("uniform", "light")
+        super().__init__("uniform")
 
     def select_cells(self, elites: dict[int, Elite], n: int, context: Optional[dict] = None) -> list[int]:
         if not elites:
@@ -264,7 +261,7 @@ class SubscoreSampler(Sampler):
     """Sample cells weighted by a specific subscore metric using softmax."""
 
     def __init__(self, subscore_key: str, display_name: str, temperature: float = 1.0):
-        super().__init__(f"subscore_{subscore_key}", "light")
+        super().__init__(f"subscore_{subscore_key}")
         self.subscore_key = subscore_key
         self.display_name = display_name
         self.temperature = temperature
@@ -331,10 +328,8 @@ class CVTMAPElitesPool:
     ) -> None:
         self._extractor = behavior_extractor
         self._n_centroids = n_centroids
-        self._temperature = temperature
         self._feature_names = behavior_extractor.features
         self._n_dims = len(self._feature_names)
-        self._bounds_padding = bounds_padding
 
         # Adaptive bounds
         self._mins: Optional[np.ndarray] = None
@@ -664,14 +659,13 @@ class CVTMAPElitesPool:
             metadata={
                 "sampler": sampler_name,
                 "source_cell": cells[0],
-                "model_type": sampler.model_type,
             },
         )
 
-    def update_sampler(self, sampler_name: str, cell: int, success: bool, reward: float = 0.0) -> None:
+    def update_sampler(self, sampler_name: str, cell: int, success: bool) -> None:
         """Update sampler statistics after observing outcome."""
         if sampler_name in self._samplers:
-            self._samplers[sampler_name].update(cell, success, reward)
+            self._samplers[sampler_name].update(cell, success)
 
     def get_sampler_names(self) -> list[str]:
         """Get list of all sampler names."""
