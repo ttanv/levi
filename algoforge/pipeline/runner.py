@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import math
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -37,8 +38,9 @@ class PipelineRunner:
         self.state = PipelineState(config.budget)
         if start_time is not None:
             self.state.start_time = start_time
-        self.state.total_cost = init_cost  # Include init phase cost
-        self.state.best_score_so_far = pool.get_stats().get("best_score", float('-inf'))
+        self.state.total_cost = self.state._coerce_finite_float(init_cost, default=0.0)  # Include init phase cost
+        initial_best = pool.get_stats().get("best_score", float("-inf"))
+        self.state.best_score_so_far = self.state._coerce_finite_float(initial_best, default=float("-inf"))
         if init_score_history:
             self.state.score_history = list(init_score_history)
             self.state.eval_count = len(init_score_history)
@@ -142,14 +144,98 @@ class PipelineRunner:
         return self._build_result()
 
     async def _wait_for_completion(self) -> None:
-        while not self.state.budget_exhausted:
+        while True:
+            if self.state.budget_exhausted:
+                break
             await asyncio.sleep(1.0)
+
+    def _sync_best_score_from_pool(self) -> None:
+        """Keep pipeline state best score aligned with archive best score."""
+        pool_best = self.pool.get_stats().get("best_score", float("-inf"))
+        try:
+            normalized = float(pool_best)
+        except (TypeError, ValueError):
+            return
+        if not math.isfinite(normalized):
+            return
+        if normalized > self.state.best_score_so_far:
+            self.state.best_score_so_far = normalized
+
+    def _ingest_pe_stats(self, stats: dict) -> None:
+        """Apply PE outcomes to state counters/history and line-by-line logs."""
+        evaluations = stats.get("evaluations", [])
+        for eval_data in evaluations:
+            source = eval_data.get("source", "pe")
+            model = str(eval_data.get("model", "unknown")).split("/")[-1]
+            archive_size = eval_data.get("archive_size", self.pool.size())
+            try:
+                archive_size_int = int(archive_size)
+            except (TypeError, ValueError):
+                archive_size_int = self.pool.size()
+            cell_index = eval_data.get("cell_index")
+
+            if "error" in eval_data:
+                error_msg = str(eval_data.get("error", "unknown error"))
+                self.state.record_error(error_msg)
+                logger.info(
+                    f"[Eval #{self.state.eval_count}] PE/{model:27s} ERROR ({source}): {error_msg[:80]}"
+                )
+                continue
+
+            try:
+                score = float(eval_data.get("score", 0.0))
+            except (TypeError, ValueError):
+                error_msg = f"Invalid PE score for {model}: {eval_data.get('score')!r}"
+                self.state.record_error(error_msg)
+                logger.info(f"[Eval #{self.state.eval_count}] PE/{model:27s} ERROR: {error_msg[:80]}")
+                continue
+            if not math.isfinite(score):
+                error_msg = f"Non-finite PE score for {model}: {eval_data.get('score')!r}"
+                self.state.record_error(error_msg)
+                logger.info(f"[Eval #{self.state.eval_count}] PE/{model:27s} ERROR: {error_msg[:80]}")
+                continue
+
+            accepted = bool(eval_data.get("accepted", False))
+            if accepted:
+                self.state.record_accept()
+            else:
+                self.state.record_reject()
+
+            is_new_best = score > self.state.best_score_so_far
+            try:
+                cell_index_int = int(cell_index) if cell_index is not None else None
+            except (TypeError, ValueError):
+                cell_index_int = None
+
+            self.state.record_score(
+                score=score,
+                accepted=accepted,
+                sampler=f"pe_{source}",
+                archive_size=archive_size_int,
+                cell_index=cell_index_int,
+                is_punctuated_equilibrium=True,
+            )
+
+            if is_new_best:
+                status = "NEW BEST ★"
+            elif accepted:
+                status = "accepted"
+            else:
+                status = "rejected"
+
+            logger.info(
+                f"[Eval #{self.state.eval_count}] PE/{model:27s} {status:12s} | "
+                f"score: {score:.1f} | best: {self.state.best_score_so_far:.1f} | "
+                f"${self.state.total_cost:.3f}"
+            )
 
     async def _status_monitor(self) -> None:
         while not self.stop_event.is_set():
             try:
                 await asyncio.sleep(30.0)
-                best_score = self.pool.get_stats().get("best_score", 0.0)
+                best_score = self.pool.get_stats().get("best_score", float("-inf"))
+                if not isinstance(best_score, (int, float)) or not math.isfinite(float(best_score)):
+                    best_score = float("-inf")
                 logger.info(
                     f"[Status] Cost: ${self.state.total_cost:.3f} | "
                     f"Evals: {self.state.eval_count} | "
@@ -167,6 +253,9 @@ class PipelineRunner:
     async def _pe_monitor(self) -> None:
         """Monitor for punctuated equilibrium trigger conditions."""
         pe_config = self.config.punctuated_equilibrium
+        if pe_config.interval <= 0:
+            logger.warning("[PE] Disabled: interval must be > 0")
+            return
 
         while not self.stop_event.is_set():
             try:
@@ -188,8 +277,18 @@ class PipelineRunner:
 
                     try:
                         stats = await self.pe.trigger(self.state.eval_count, self.state.budget_progress)
+                        if not isinstance(stats, dict):
+                            raise ValueError(f"Unexpected PE stats type: {type(stats).__name__}")
                         # Add PE cost to total
-                        self.state.add_cost(stats["total_cost"])
+                        self.state.add_cost(stats.get("total_cost", 0.0))
+                        self._ingest_pe_stats(stats)
+                        self._sync_best_score_from_pool()
+                        # Prevent immediate re-triggering when PE's own evaluations
+                        # move eval_count onto another interval boundary.
+                        self.state.last_pe_eval_count = max(
+                            self.state.last_pe_eval_count,
+                            self.state.eval_count,
+                        )
                     except Exception as e:
                         logger.error(f"[PE] Trigger failed (will continue): {e}")
 
