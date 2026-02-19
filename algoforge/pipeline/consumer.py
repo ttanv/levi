@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import math
 import types
 from typing import Callable, Optional
 
@@ -26,6 +27,17 @@ def _model_label(item: dict) -> str:
     if "_T" in sampler:
         return f"{model}{sampler[sampler.index('_T'):]}"
     return model
+
+
+def _coerce_score(result: dict) -> tuple[float | None, str | None]:
+    """Extract a finite numeric score from an evaluation result."""
+    try:
+        score = float(result.get("score", 0.0))
+    except (TypeError, ValueError):
+        return None, f"Invalid score value: {result.get('score')!r}"
+    if not math.isfinite(score):
+        return None, f"Non-finite score value: {result.get('score')!r}"
+    return score, None
 
 META_ADVISOR_PROMPT = """You are a lessons-learned advisor for an evolutionary code optimization system.
 
@@ -105,113 +117,126 @@ async def eval_consumer(
         except asyncio.CancelledError:
             break
 
-        state.eval_in_flight += 1
         try:
-            cascade = config.cascade
-            if cascade.enabled and cascade.quick_inputs:
-                quick_result = await executor.run(
-                    _evaluate_code,
-                    item["code"],
-                    config.score_fn,
-                    cascade.quick_inputs,
-                    fn_name,
-                    timeout=cascade.quick_timeout
-                )
-                if "error" in quick_result:
-                    result = quick_result
-                else:
-                    quick_score = quick_result.get('score', 0)
-                    threshold = state.best_score_so_far * cascade.min_score_ratio
-                    if quick_score < threshold:
-                        result = {"cascade_rejected": True, "quick_score": quick_score, "threshold": threshold}
-                    else:
-                        result = await executor.run(
-                            _evaluate_code,
-                            item["code"],
-                            config.score_fn,
-                            config.inputs,
-                            fn_name,
-                            timeout=config.pipeline.eval_timeout
-                        )
-            else:
-                result = await executor.run(
-                    _evaluate_code,
-                    item["code"],
-                    config.score_fn,
-                    config.inputs,
-                    fn_name,
-                    timeout=config.pipeline.eval_timeout
-                )
-        except TimeoutError:
-            result = {"error": "Timeout"}
-        except Exception as e:
-            result = {"error": str(e)}
-        finally:
-            state.eval_in_flight -= 1
-
-        async with archive_lock:
-            if "cascade_rejected" in result:
-                pool.update_sampler(item["sampler"], item["source_cell"], success=False)
-                state.record_reject()
-                label = _model_label(item)
-                logger.info(
-                    f"[Eval #{state.eval_count}] {label:30s} "
-                    f"CASCADE SKIP  | quick: {result['quick_score']:.1f} < {result['threshold']:.1f}"
-                )
-            elif "error" not in result:
-                program = Program(code=item["code"])
-                eval_result = EvaluationResult(
-                    scores=result,
-                    is_valid=True,
-                )
-                accepted, cell_index = pool.add(program, eval_result)
-                pool.update_sampler(item["sampler"], item["source_cell"], success=accepted)
-
-                if accepted:
-                    state.record_accept()
-                else:
-                    state.record_reject()
-
-                score = result.get('score', 0)
-
-                is_new_best = score > state.best_score_so_far
-
-                state.record_score(
-                    score=score,
-                    accepted=accepted,
-                    sampler=item["sampler"],
-                    archive_size=pool.size(),
-                    cell_index=cell_index,
-                )
-
-                if is_new_best:
-                    status = "NEW BEST ★"
-                elif accepted:
-                    status = "accepted"
-                else:
-                    status = "rejected"
-
-                label = _model_label(item)
-                logger.info(
-                    f"[Eval #{state.eval_count}] {label:30s} {status:12s} | "
-                    f"score: {score:.1f} | best: {state.best_score_so_far:.1f} | "
-                    f"${state.total_cost:.3f}"
-                )
-            else:
-                pool.update_sampler(item["sampler"], item["source_cell"], success=False)
-                state.record_error(result["error"])
-                label = _model_label(item)
-                logger.info(f"[Eval #{state.eval_count}] {label:30s} ERROR: {result['error'][:50]}")
-
-        if config.meta_advice.enabled and state.should_generate_meta_advice(config.meta_advice.interval):
-            asyncio.create_task(_generate_meta_advice(config, state))
-
-        # Save snapshot every N evaluations
-        if snapshot_callback and state.eval_count % SNAPSHOT_INTERVAL == 0:
+            state.eval_in_flight += 1
             try:
-                snapshot_callback()
+                cascade = config.cascade
+                if cascade.enabled and cascade.quick_inputs:
+                    quick_result = await executor.run(
+                        _evaluate_code,
+                        item["code"],
+                        config.score_fn,
+                        cascade.quick_inputs,
+                        fn_name,
+                        timeout=cascade.quick_timeout
+                    )
+                    if "error" in quick_result:
+                        result = quick_result
+                    else:
+                        quick_score = quick_result.get('score', 0)
+                        threshold = state.best_score_so_far * cascade.min_score_ratio
+                        if quick_score < threshold:
+                            result = {"cascade_rejected": True, "quick_score": quick_score, "threshold": threshold}
+                        else:
+                            result = await executor.run(
+                                _evaluate_code,
+                                item["code"],
+                                config.score_fn,
+                                config.inputs,
+                                fn_name,
+                                timeout=config.pipeline.eval_timeout
+                            )
+                else:
+                    result = await executor.run(
+                        _evaluate_code,
+                        item["code"],
+                        config.score_fn,
+                        config.inputs,
+                        fn_name,
+                        timeout=config.pipeline.eval_timeout
+                    )
+            except TimeoutError:
+                result = {"error": "Timeout"}
             except Exception as e:
-                logger.warning(f"[Snapshot] Failed to save: {e}")
+                result = {"error": str(e)}
+            finally:
+                state.eval_in_flight -= 1
+
+            async with archive_lock:
+                if "cascade_rejected" in result:
+                    pool.update_sampler(item["sampler"], item["source_cell"], success=False)
+                    state.record_reject()
+                    label = _model_label(item)
+                    logger.info(
+                        f"[Eval #{state.eval_count}] {label:30s} "
+                        f"CASCADE SKIP  | quick: {result['quick_score']:.1f} < {result['threshold']:.1f}"
+                    )
+                elif "error" not in result:
+                    score, score_error = _coerce_score(result)
+                    if score_error is not None:
+                        pool.update_sampler(item["sampler"], item["source_cell"], success=False)
+                        state.record_error(score_error)
+                        label = _model_label(item)
+                        logger.info(f"[Eval #{state.eval_count}] {label:30s} ERROR: {score_error[:50]}")
+                    else:
+                        result = dict(result)
+                        result["score"] = score
+
+                        program = Program(code=item["code"])
+                        eval_result = EvaluationResult(
+                            scores=result,
+                            is_valid=True,
+                        )
+                        accepted, cell_index = pool.add(program, eval_result)
+                        pool.update_sampler(item["sampler"], item["source_cell"], success=accepted)
+
+                        if accepted:
+                            state.record_accept()
+                        else:
+                            state.record_reject()
+
+                        is_new_best = score > state.best_score_so_far
+
+                        state.record_score(
+                            score=score,
+                            accepted=accepted,
+                            sampler=item["sampler"],
+                            archive_size=pool.size(),
+                            cell_index=cell_index,
+                        )
+
+                        if is_new_best:
+                            status = "NEW BEST ★"
+                        elif accepted:
+                            status = "accepted"
+                        else:
+                            status = "rejected"
+
+                        label = _model_label(item)
+                        logger.info(
+                            f"[Eval #{state.eval_count}] {label:30s} {status:12s} | "
+                            f"score: {score:.1f} | best: {state.best_score_so_far:.1f} | "
+                            f"${state.total_cost:.3f}"
+                        )
+                else:
+                    pool.update_sampler(item["sampler"], item["source_cell"], success=False)
+                    state.record_error(result["error"])
+                    label = _model_label(item)
+                    logger.info(f"[Eval #{state.eval_count}] {label:30s} ERROR: {result['error'][:50]}")
+
+            if config.meta_advice.enabled and state.should_generate_meta_advice(config.meta_advice.interval):
+                asyncio.create_task(_generate_meta_advice(config, state))
+
+            # Save snapshot every N evaluations
+            if snapshot_callback and state.eval_count % SNAPSHOT_INTERVAL == 0:
+                try:
+                    snapshot_callback()
+                except Exception as e:
+                    logger.warning(f"[Snapshot] Failed to save: {e}")
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.error(f"[Eval-{worker_id}] Unexpected error (continuing): {e}", exc_info=True)
 
 
 def _format_metrics_for_llm(

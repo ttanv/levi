@@ -6,6 +6,7 @@ Tests the CVT-MAP-Elites archive with multi-strategy sampling.
 
 import pytest
 import random
+import numpy as np
 
 from algoforge.core import Program, EvaluationResult
 from algoforge.pool import CVTMAPElitesPool, SampleResult
@@ -44,6 +45,15 @@ class TestSampleResult:
 
 class TestCVTMAPElitesPool:
     """Tests for CVTMAPElitesPool."""
+
+    @pytest.fixture(autouse=True)
+    def mock_centroid_init(self, monkeypatch):
+        """Avoid sklearn KMeans in tests; keep deterministic centroid layout."""
+        def _fake_init(self):
+            rng = np.random.default_rng(42)
+            return rng.uniform(0.0, 1.0, size=(self._n_centroids, self._n_dims))
+
+        monkeypatch.setattr(CVTMAPElitesPool, "_init_cvt_centroids", _fake_init)
 
     @pytest.fixture
     def extractor(self):
@@ -261,6 +271,15 @@ class TestCVTMAPElitesPool:
 
 class TestPoolProtocolCompliance:
     """Tests that CVTMAPElitesPool implements the expected interface."""
+
+    @pytest.fixture(autouse=True)
+    def mock_centroid_init(self, monkeypatch):
+        """Avoid sklearn KMeans in tests; keep deterministic centroid layout."""
+        def _fake_init(self):
+            rng = np.random.default_rng(42)
+            return rng.uniform(0.0, 1.0, size=(self._n_centroids, self._n_dims))
+
+        monkeypatch.setattr(CVTMAPElitesPool, "_init_cvt_centroids", _fake_init)
 
     @pytest.fixture
     def pool(self):

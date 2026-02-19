@@ -1,11 +1,15 @@
 """Shared pipeline state for producer-consumer coordination."""
 
 import asyncio
+import logging
+import math
 import time
 from dataclasses import dataclass, field
 from typing import Optional
 
 from ..config import BudgetConfig
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -61,34 +65,91 @@ class PipelineState:
     last_pe_eval_count: int = 0
     pe_trigger_count: int = 0
 
+    @staticmethod
+    def _coerce_finite_float(value: object, *, default: float) -> float:
+        """Best-effort numeric coercion with a safe fallback."""
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            return default
+        if not math.isfinite(numeric):
+            return default
+        return numeric
+
+    @staticmethod
+    def _coerce_positive_limit(value: object) -> float | None:
+        """Normalize a budget limit. Returns None for unlimited."""
+        if value is None:
+            return None
+        limit = PipelineState._coerce_finite_float(value, default=0.0)
+        return limit
+
     @property
     def budget_exhausted(self) -> bool:
-        if self.budget.dollars is not None and self.total_cost >= self.budget.dollars:
-            return True
-        if self.budget.evaluations is not None and self.eval_count >= self.budget.evaluations:
-            return True
-        if self.budget.seconds is not None:
-            if time.time() - self.start_time >= self.budget.seconds:
+        dollars_limit = self._coerce_positive_limit(self.budget.dollars)
+        if dollars_limit is not None:
+            if dollars_limit <= 0.0:
                 return True
+            total_cost = self._coerce_finite_float(self.total_cost, default=float("inf"))
+            if total_cost >= dollars_limit:
+                return True
+
+        if self.budget.evaluations is not None:
+            eval_limit = int(self._coerce_finite_float(self.budget.evaluations, default=0.0))
+            if eval_limit <= 0:
+                return True
+            eval_count = int(self._coerce_finite_float(self.eval_count, default=float("inf")))
+            if eval_count >= eval_limit:
+                return True
+
+        seconds_limit = self._coerce_positive_limit(self.budget.seconds)
+        if seconds_limit is not None:
+            if seconds_limit <= 0.0:
+                return True
+            if self.elapsed_seconds >= seconds_limit:
+                return True
+
         return False
 
     @property
     def elapsed_seconds(self) -> float:
-        return time.time() - self.start_time
+        start_time = self._coerce_finite_float(self.start_time, default=float("-inf"))
+        elapsed = time.time() - start_time
+        if not math.isfinite(elapsed):
+            return float("inf")
+        return max(0.0, elapsed)
 
     @property
     def budget_progress(self) -> float:
         """Return progress as fraction (0 to 1) based on primary budget type."""
-        if self.budget.dollars is not None:
-            return min(1.0, self.total_cost / self.budget.dollars)
+        dollars_limit = self._coerce_positive_limit(self.budget.dollars)
+        if dollars_limit is not None:
+            if dollars_limit <= 0.0:
+                return 1.0
+            total_cost = self._coerce_finite_float(self.total_cost, default=float("inf"))
+            return max(0.0, min(1.0, total_cost / dollars_limit))
+
         if self.budget.evaluations is not None:
-            return min(1.0, self.eval_count / self.budget.evaluations)
-        if self.budget.seconds is not None:
-            return min(1.0, self.elapsed_seconds / self.budget.seconds)
+            eval_limit = int(self._coerce_finite_float(self.budget.evaluations, default=0.0))
+            if eval_limit <= 0:
+                return 1.0
+            eval_count = int(self._coerce_finite_float(self.eval_count, default=float("inf")))
+            return max(0.0, min(1.0, eval_count / eval_limit))
+
+        seconds_limit = self._coerce_positive_limit(self.budget.seconds)
+        if seconds_limit is not None:
+            if seconds_limit <= 0.0:
+                return 1.0
+            return max(0.0, min(1.0, self.elapsed_seconds / seconds_limit))
+
         return 0.0
 
     def add_cost(self, cost: float) -> None:
-        self.total_cost += cost
+        normalized_cost = self._coerce_finite_float(cost, default=0.0)
+        if normalized_cost < 0.0:
+            logger.warning("[Budget] Ignoring negative cost update: %r", cost)
+            return
+        self.total_cost += normalized_cost
 
     def record_accept(self) -> None:
         self.eval_count += 1
@@ -109,6 +170,8 @@ class PipelineState:
         self.all_error_counts[short_error] = self.all_error_counts.get(short_error, 0) + 1
 
     def should_generate_meta_advice(self, interval: int) -> bool:
+        if interval <= 0:
+            return False
         return (
             self.eval_count > 0
             and self.eval_count % interval == 0
