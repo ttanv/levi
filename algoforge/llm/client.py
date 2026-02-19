@@ -68,7 +68,7 @@ class LLMClient:
         self.default_config = default_config or LLMConfig()
         self._api_key = api_key
         self._api_base = api_base
-        self._api_bases = api_bases or {}
+        _ = api_bases  # Backward-compatible constructor arg; intentionally unused.
 
         if models:
             self._models = models
