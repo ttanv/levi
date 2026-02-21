@@ -28,7 +28,6 @@ from .budget import BudgetManager, BudgetExhausted, ResourceType
 
 # Protocols and pools
 from .pool import ProgramPool, SampleResult, CVTMAPElitesPool
-from .evaluator import Evaluator, EvaluationStage, SandboxedEvaluator
 
 # LLM
 from .llm import (
@@ -71,10 +70,6 @@ __all__ = [
     'ProgramPool',
     'SampleResult',
     'CVTMAPElitesPool',
-    # Evaluator
-    'Evaluator',
-    'EvaluationStage',
-    'SandboxedEvaluator',
     # LLM
     'PromptBuilder',
     'ProgramWithScore',
