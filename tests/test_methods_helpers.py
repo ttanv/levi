@@ -4,8 +4,8 @@ import numpy as np
 import pytest
 
 from algoforge.core import EvaluationResult, Program
-from algoforge.methods.algoforge import _evaluate_code, _restore_from_snapshot
-from algoforge.utils import extract_fn_name
+from algoforge.methods.algoforge import _restore_from_snapshot
+from algoforge.utils import extract_fn_name, evaluate_code
 
 
 class DummyExtractor:
@@ -44,31 +44,33 @@ class TestEvaluateCode:
             return {"score": sum(fn(x) for x in inputs)}
 
         code = "def solve(x):\n    return x + 1"
-        result = _evaluate_code(code, score_fn, [1, 2, 3], "solve")
+        result = evaluate_code(code, score_fn, [1, 2, 3], "solve")
 
         assert result == {"score": 9}
         assert observed["name"] == "solve"
 
     def test_returns_syntax_error_dict(self):
         code = "def solve(x)\n    return x"
-        result = _evaluate_code(code, lambda *_: {"score": 0}, [1], "solve")
+        result = evaluate_code(code, lambda *_: {"score": 0}, [1], "solve")
 
         assert "error" in result
         assert result["error"].startswith("Syntax error:")
 
     def test_returns_missing_function_error(self):
         code = "def other(x):\n    return x"
-        result = _evaluate_code(code, lambda *_: {"score": 0}, [1], "solve")
+        result = evaluate_code(code, lambda *_: {"score": 0}, [1], "solve")
 
         assert result == {"error": "Function 'solve' not found (got NoneType)"}
 
-    def test_propagates_score_function_exceptions(self):
+    def test_catches_score_function_exceptions(self):
         def score_fn(_fn, _inputs):
             raise RuntimeError("scoring failed")
 
         code = "def solve(x):\n    return x"
-        with pytest.raises(RuntimeError, match="scoring failed"):
-            _evaluate_code(code, score_fn, [1], "solve")
+        result = evaluate_code(code, score_fn, [1], "solve")
+
+        assert "error" in result
+        assert "scoring failed" in result["error"]
 
 
 class TestRestoreFromSnapshot:

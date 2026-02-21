@@ -8,8 +8,6 @@ change separated by long periods of stasis. This module implements periodic
 
 import asyncio
 import logging
-import math
-import types
 from typing import Optional
 
 import numpy as np
@@ -20,45 +18,11 @@ from ..core import Program, EvaluationResult
 from ..pool import CVTMAPElitesPool
 from ..pool.cvt_map_elites import Elite
 from ..llm import get_llm_client
-from ..utils import ResilientProcessPool, extract_code, extract_fn_name
+from ..utils import ResilientProcessPool, extract_code, extract_fn_name, evaluate_code, coerce_score
 from ..pipeline.state import PipelineState, BudgetLimitReached
 from .prompts import PARADIGM_SHIFT_PROMPT, PARADIGM_SHIFT_PROMPTS, VARIANT_GENERATION_PROMPT, get_budget_stage
 
 logger = logging.getLogger(__name__)
-
-
-def _evaluate_code(code: str, score_fn, inputs: list, fn_name: str) -> dict:
-    """Runs in subprocess: parse code, extract callable, call score_fn."""
-    namespace = {}
-    try:
-        exec(code, namespace)
-    except SyntaxError as e:
-        return {"error": f"Syntax error: {e}"}
-    except MemoryError:
-        return {"error": "MemoryError during code execution"}
-
-    fn = namespace.get(fn_name)
-    if not isinstance(fn, types.FunctionType):
-        return {"error": f"Function '{fn_name}' not found (got {type(fn).__name__})"}
-
-    try:
-        result = score_fn(fn, inputs)
-        return result
-    except MemoryError:
-        return {"error": "MemoryError during scoring"}
-    except Exception as e:
-        return {"error": f"Scoring error: {e}"}
-
-
-def _coerce_score(result: dict) -> tuple[float | None, str | None]:
-    """Extract a finite numeric score from an evaluation result."""
-    try:
-        score = float(result.get("score", 0.0))
-    except (TypeError, ValueError):
-        return None, f"Invalid score value: {result.get('score')!r}"
-    if not math.isfinite(score):
-        return None, f"Non-finite score value: {result.get('score')!r}"
-    return score, None
 
 
 class PunctuatedEquilibrium:
@@ -225,7 +189,7 @@ Output ONLY complete, runnable Python code in a ```python block.
     async def _evaluate(self, code: str) -> dict:
         """Evaluate code using the executor."""
         return await self.executor.run(
-            _evaluate_code,
+            evaluate_code,
             code,
             self.config.score_fn,
             self.config.inputs,
@@ -364,7 +328,7 @@ Output ONLY complete, runnable Python code in a ```python block.
             result = {"error": str(e)}
 
         if "error" not in result:
-            score, score_error = _coerce_score(result)
+            score, score_error = coerce_score(result)
             if score_error is not None:
                 logger.warning(f"[PE] Paradigm shift invalid score: {score_error}")
                 result = {"error": score_error}
@@ -489,7 +453,7 @@ Output ONLY complete, runnable Python code in a ```python block.
                     result = {"error": str(e)}
 
                 if "error" not in result:
-                    score, score_error = _coerce_score(result)
+                    score, score_error = coerce_score(result)
                     if score_error is not None:
                         logger.warning(f"[PE] Variant {vr['idx']} invalid score: {score_error}")
                         result = {"error": score_error}
