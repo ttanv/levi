@@ -25,6 +25,24 @@ class LLMResponseError(LLMError):
     pass
 
 
+class LLMConfigurationError(LLMError):
+    """Invalid local/global LLM configuration."""
+
+    pass
+
+
+class LLMAuthenticationError(LLMError):
+    """Authentication or authorization failure with an LLM provider."""
+
+    pass
+
+
+class LLMRateLimitError(LLMError):
+    """Rate-limited request to an LLM provider."""
+
+    pass
+
+
 class LLMRetryExhaustedError(LLMError):
     """All retry attempts exhausted."""
 

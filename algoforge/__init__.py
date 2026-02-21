@@ -32,7 +32,6 @@ from .evaluator import Evaluator, EvaluationStage, SandboxedEvaluator
 
 # LLM
 from .llm import (
-    LLMClient, LLMConfig, LLMResponse, ModelWeight,
     PromptBuilder, ProgramWithScore, OutputMode,
 )
 
@@ -77,10 +76,6 @@ __all__ = [
     'EvaluationStage',
     'SandboxedEvaluator',
     # LLM
-    'LLMClient',
-    'LLMConfig',
-    'LLMResponse',
-    'ModelWeight',
     'PromptBuilder',
     'ProgramWithScore',
     'OutputMode',

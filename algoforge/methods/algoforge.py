@@ -18,6 +18,24 @@ from ..llm.unified_client import UnifiedLLMClient, UnifiedLLMClientConfig
 logger = logging.getLogger(__name__)
 
 
+def _collect_referenced_models(config: AlgoforgeConfig) -> set[str]:
+    """Collect all model names referenced by runtime config."""
+    models: set[str] = {pair.model for pair in config.sampler_model_pairs}
+
+    if config.init.diversity_model:
+        models.add(config.init.diversity_model)
+    if config.init.variant_models:
+        models.update(config.init.variant_models)
+    if config.meta_advice.model:
+        models.add(config.meta_advice.model)
+    if config.punctuated_equilibrium.heavy_model:
+        models.add(config.punctuated_equilibrium.heavy_model)
+    if config.punctuated_equilibrium.variant_models:
+        models.update(config.punctuated_equilibrium.variant_models)
+
+    return models
+
+
 def _setup_logging() -> None:
     """Configure logging for algoforge."""
     logging.basicConfig(
@@ -114,6 +132,7 @@ async def _run_async(config: AlgoforgeConfig, resume_snapshot: dict | None = Non
     llm_config = UnifiedLLMClientConfig(
         local_endpoints=config.llm.local_endpoints,
         model_info=config.llm.model_info,
+        known_models=_collect_referenced_models(config),
         max_retries=config.llm.max_retries,
         retry_delay=config.llm.retry_delay,
         retry_backoff=config.llm.retry_backoff,

@@ -11,10 +11,7 @@ from algoforge import (
 from algoforge.config.models import PunctuatedEquilibriumConfig, LLMProviderConfig
 
 # Behavioral dimensions: AST features that distinguish algorithmic approaches
-# - loop_nesting_max: O(n) vs O(n²) vs O(n³) complexity
-# - branch_count: Simple vs heuristic-heavy logic
-# - comparison_count: Linear vs binary search intensity
-# - subscript_count: List-append vs index-manipulation style
+
 PRISM_AST_FEATURES = ['loop_nesting_max', 'branch_count', 'comparison_count', 'subscript_count']
 PRISM_SCORE_KEYS = []  # Use only AST features for behavioral diversity
 
