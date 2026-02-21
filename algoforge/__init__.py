@@ -20,8 +20,6 @@ Example:
     result = af.run(config)
 """
 
-from typing import Callable, Any, Optional
-
 # Core types
 from .core import Program, EvaluationResult, MetricDict
 
@@ -31,7 +29,6 @@ from .budget import BudgetManager, BudgetExhausted, ResourceType
 # Protocols and pools
 from .pool import ProgramPool, SampleResult, CVTMAPElitesPool
 from .evaluator import Evaluator, EvaluationStage, SandboxedEvaluator
-from .database import RawStorage, StorageRecord, InMemoryStorage
 
 # LLM
 from .llm import (
@@ -52,7 +49,6 @@ from .config import (
     InitConfig,
     MetaAdviceConfig,
     BehaviorConfig,
-    CheckpointConfig,
     CascadeConfig,
     PipelineConfig,
 )
@@ -80,10 +76,6 @@ __all__ = [
     'Evaluator',
     'EvaluationStage',
     'SandboxedEvaluator',
-    # Database
-    'RawStorage',
-    'StorageRecord',
-    'InMemoryStorage',
     # LLM
     'LLMClient',
     'LLMConfig',
@@ -104,7 +96,6 @@ __all__ = [
     'InitConfig',
     'MetaAdviceConfig',
     'BehaviorConfig',
-    'CheckpointConfig',
     'CascadeConfig',
     'PipelineConfig',
     # Methods
