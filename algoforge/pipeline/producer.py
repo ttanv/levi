@@ -10,7 +10,7 @@ from ..config import AlgoforgeConfig
 from ..pool import CVTMAPElitesPool
 from ..llm import PromptBuilder, ProgramWithScore, OutputMode, get_llm_client, LLMRetryExhaustedError
 from ..utils import extract_code
-from .state import PipelineState
+from .state import PipelineState, BudgetLimitReached
 
 logger = logging.getLogger(__name__)
 
@@ -83,10 +83,10 @@ async def llm_producer(
 
             prompt = builder.build()
 
-            state.llm_in_flight += 1
             try:
                 llm = get_llm_client()
-                response = await llm.acompletion(
+                response = await state.acompletion(
+                    llm,
                     model=model,
                     messages=[{"role": "user", "content": prompt}],
                     temperature=config.pipeline.temperature,
@@ -94,18 +94,18 @@ async def llm_producer(
                     timeout=300,
                 )
                 content = response.content
-                cost = response.cost
             except LLMRetryExhaustedError as e:
                 logger.warning(f"[LLM-{worker_id}] [{model}] Error after retries: {e.last_error}")
                 continue
+            except BudgetLimitReached:
+                stop_event.set()
+                break
             except Exception as e:
                 logger.warning(f"[LLM-{worker_id}] [{model}] Error: {e}")
                 await asyncio.sleep(1.0)
                 continue
-            finally:
-                state.llm_in_flight -= 1
 
-            state.add_cost(cost)
+            # state.acompletion already accounts for cost centrally.
 
             if state.budget_exhausted:
                 stop_event.set()

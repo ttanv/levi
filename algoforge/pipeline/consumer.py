@@ -10,7 +10,7 @@ from ..config import AlgoforgeConfig
 from ..core import Program, EvaluationResult
 from ..pool import CVTMAPElitesPool
 from ..utils import ResilientProcessPool, extract_fn_name
-from .state import PipelineState
+from .state import PipelineState, BudgetLimitReached
 
 SNAPSHOT_INTERVAL = 10  # Save snapshot every N evaluations
 
@@ -118,7 +118,9 @@ async def eval_consumer(
             break
 
         try:
-            state.eval_in_flight += 1
+            if not await state.try_start_evaluation():
+                stop_event.set()
+                break
             try:
                 cascade = config.cascade
                 if cascade.enabled and cascade.quick_inputs:
@@ -159,8 +161,6 @@ async def eval_consumer(
                 result = {"error": "Timeout"}
             except Exception as e:
                 result = {"error": str(e)}
-            finally:
-                state.eval_in_flight -= 1
 
             async with archive_lock:
                 if "cascade_rejected" in result:
@@ -233,9 +233,12 @@ async def eval_consumer(
                     snapshot_callback()
                 except Exception as e:
                     logger.warning(f"[Snapshot] Failed to save: {e}")
+            await state.finish_evaluation()
         except asyncio.CancelledError:
+            await state.finish_evaluation()
             break
         except Exception as e:
+            await state.finish_evaluation()
             logger.error(f"[Eval-{worker_id}] Unexpected error (continuing): {e}", exc_info=True)
 
 
@@ -298,7 +301,8 @@ async def _generate_meta_advice(config: AlgoforgeConfig, state: PipelineState) -
         if "deepseek" in config.meta_advice.model.lower():
             extras["reasoning"] = {"enabled": True}
 
-        response = await llm.acompletion(
+        response = await state.acompletion(
+            llm,
             model=config.meta_advice.model,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.7,
@@ -308,11 +312,16 @@ async def _generate_meta_advice(config: AlgoforgeConfig, state: PipelineState) -
         )
         advice = response.content.strip()
         cost = response.cost
+    except BudgetLimitReached:
+        return
+    except Exception as e:
+        logger.warning(f"[Meta-Advice] Failed to generate: {e}")
+        return
 
+    try:
         state.previous_meta_advice = state.current_meta_advice
         state.current_meta_advice = advice
-        state.add_cost(cost)
 
         logger.info(f"[Meta-Advice] Generated new advice (${cost:.4f})")
     except Exception as e:
-        logger.warning(f"[Meta-Advice] Failed to generate: {e}")
+        logger.warning(f"[Meta-Advice] Failed to update state: {e}")

@@ -29,19 +29,22 @@ class PipelineRunner:
         init_cost: float = 0.0,
         init_score_history: Optional[list] = None,
         start_time: Optional[float] = None,
+        state: Optional[PipelineState] = None,
     ):
         self.config = config
         self.pool = pool
         self.executor = executor
         self.archive_lock = asyncio.Lock()
         self.code_queue = asyncio.Queue()
-        self.state = PipelineState(config.budget)
+        self.state = state or PipelineState(config.budget)
         if start_time is not None:
             self.state.start_time = start_time
-        self.state.total_cost = self.state._coerce_finite_float(init_cost, default=0.0)  # Include init phase cost
+        if state is None:
+            # Include init phase cost when runner owns state lifecycle.
+            self.state.total_cost = self.state._coerce_finite_float(init_cost, default=0.0)
         initial_best = pool.get_stats().get("best_score", float("-inf"))
         self.state.best_score_so_far = self.state._coerce_finite_float(initial_best, default=float("-inf"))
-        if init_score_history:
+        if init_score_history and not self.state.score_history:
             self.state.score_history = list(init_score_history)
             self.state.eval_count = len(init_score_history)
         self.stop_event = asyncio.Event()
@@ -60,6 +63,7 @@ class PipelineRunner:
                 pool=pool,
                 executor=executor,
                 archive_lock=self.archive_lock,
+                state=self.state,
             )
 
     async def run(self) -> AlgoforgeResult:
@@ -114,10 +118,6 @@ class PipelineRunner:
             for task in producers:
                 task.cancel()
             await asyncio.gather(*producers, return_exceptions=True)
-
-            # Wait for queue to drain
-            while not self.code_queue.empty():
-                await asyncio.sleep(0.5)
 
             for task in consumers:
                 task.cancel()
@@ -279,8 +279,7 @@ class PipelineRunner:
                         stats = await self.pe.trigger(self.state.eval_count, self.state.budget_progress)
                         if not isinstance(stats, dict):
                             raise ValueError(f"Unexpected PE stats type: {type(stats).__name__}")
-                        # Add PE cost to total
-                        self.state.add_cost(stats.get("total_cost", 0.0))
+                        # PE LLM cost is accounted centrally by state.acompletion.
                         self._ingest_pe_stats(stats)
                         self._sync_best_score_from_pool()
                         # Prevent immediate re-triggering when PE's own evaluations

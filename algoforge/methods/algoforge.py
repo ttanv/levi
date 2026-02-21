@@ -10,6 +10,7 @@ from ..core import Program, EvaluationResult
 from ..pool import CVTMAPElitesPool
 from ..behavior import BehaviorExtractor
 from ..pipeline import PipelineRunner
+from ..pipeline.state import PipelineState
 from ..init import Diversifier
 from ..utils import ResilientProcessPool, extract_fn_name
 from ..llm import set_llm_client, clear_llm_client
@@ -123,6 +124,8 @@ async def _run_async(config: AlgoforgeConfig, resume_snapshot: dict | None = Non
     """Internal async implementation."""
     run_start_time = time.time()
     _setup_logging()
+    state = PipelineState(config.budget, start_time=run_start_time)
+    state.configure_llm_concurrency(config.pipeline.n_llm_workers)
 
     logger.info("[AlgoForge] Starting evolutionary optimization")
     logger.info(f"[AlgoForge] Budget: {config.budget}")
@@ -168,6 +171,9 @@ async def _run_async(config: AlgoforgeConfig, resume_snapshot: dict | None = Non
         fn_name = extract_fn_name(config.function_signature)
         logger.info("[AlgoForge] Evaluating seed program")
 
+        if not await state.try_start_evaluation():
+            raise RuntimeError("Budget exhausted before seed evaluation")
+
         try:
             seed_result = await executor.run(
                 _evaluate_code,
@@ -180,11 +186,22 @@ async def _run_async(config: AlgoforgeConfig, resume_snapshot: dict | None = Non
         except Exception as e:
             logger.error(f"[AlgoForge] Failed to evaluate seed: {e}")
             raise RuntimeError(f"Seed program evaluation failed: {e}")
+        finally:
+            await state.finish_evaluation()
 
         if "error" in seed_result:
+            state.record_error(str(seed_result["error"]))
             raise RuntimeError(f"Seed program evaluation error: {seed_result['error']}")
 
         seed_score = seed_result.get('score', 0.0)
+        state.record_accept()
+        state.record_score(
+            score=seed_score,
+            accepted=True,
+            sampler="seed",
+            archive_size=0,
+            cell_index=None,
+        )
         logger.info(f"[AlgoForge] Seed score: {seed_score:.1f}")
 
         # Resume from snapshot or run init
@@ -192,17 +209,27 @@ async def _run_async(config: AlgoforgeConfig, resume_snapshot: dict | None = Non
         init_score_history = []
         if resume_snapshot is not None:
             init_cost = _restore_from_snapshot(pool, extractor, resume_snapshot)
+            state.total_cost = state._coerce_finite_float(init_cost, default=0.0)
         else:
             if not config.init.enabled:
                 logger.info("[AlgoForge] init.enabled=False ignored; running data-driven init")
             logger.info("[AlgoForge] Running init phase")
-            diversifier = Diversifier(config, executor, start_time=run_start_time)
+            diversifier = Diversifier(config, executor, start_time=run_start_time, state=state)
             init_cost, init_score_history = await diversifier.run(pool, config.seed_program, seed_result, extractor)
             logger.info(f"[AlgoForge] Init phase complete, cost: ${init_cost:.3f}")
 
         # Run main pipeline
         logger.info("[AlgoForge] Starting evolution pipeline")
-        runner = PipelineRunner(config, pool, executor, output_dir=config.output_dir, init_cost=init_cost, init_score_history=init_score_history, start_time=run_start_time)
+        runner = PipelineRunner(
+            config,
+            pool,
+            executor,
+            output_dir=config.output_dir,
+            init_cost=init_cost,
+            init_score_history=init_score_history,
+            start_time=run_start_time,
+            state=state,
+        )
         result = await runner.run()
 
         logger.info(f"[AlgoForge] Complete - best score: {result.best_score:.1f}, "
