@@ -62,12 +62,15 @@ class BehaviorExtractor:
         ast_features: Optional[list[str]] = None,
         score_keys: Optional[list[str]] = None,
         init_noise: float = 0.15,
-        custom_extractors: Optional[dict[str, Callable[[Program, ast.AST], float]]] = None,
+        custom_extractors: Optional[dict[str, Callable[[Program], float]]] = None,
     ) -> None:
         self.ast_features = ast_features or ["loop_count", "branch_count", "math_operators", "loop_nesting_max"]
         self.score_keys = score_keys or []
         self.init_noise = init_noise
-        self.extractors = {**self.BUILT_IN_FEATURES, **(custom_extractors or {})}
+        # Custom extractors take (Program,) only — no AST dependency.
+        # This allows non-code content types (e.g. prompts) to provide extractors.
+        self._custom_extractors: dict[str, Callable[[Program], float]] = custom_extractors or {}
+        self.extractors = {**self.BUILT_IN_FEATURES}
 
         # All features = AST features + score keys
         self.features = self.ast_features + self.score_keys
@@ -151,15 +154,20 @@ class BehaviorExtractor:
     def extract(self, program: Program, eval_result: Optional[dict] = None) -> FeatureVector:
         """Extract behavioral features from a program."""
         try:
-            tree = ast.parse(program.code)
+            tree = ast.parse(program.content)
         except SyntaxError:
             return FeatureVector({f: 0.5 for f in self.features})
 
         raw_values: dict[str, float] = {}
 
-        # Extract AST-based features
+        # Extract AST-based features (built-in take (Program, AST))
         for feature_name in self.ast_features:
-            if feature_name in self.extractors:
+            if feature_name in self._custom_extractors:
+                try:
+                    raw_values[feature_name] = self._custom_extractors[feature_name](program)
+                except Exception:
+                    raw_values[feature_name] = 0.0
+            elif feature_name in self.extractors:
                 try:
                     raw_values[feature_name] = self.extractors[feature_name](program, tree)
                 except Exception:

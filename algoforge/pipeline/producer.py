@@ -113,7 +113,7 @@ async def llm_producer(
 
             # Extract or apply code based on mode
             if use_diff:
-                code = apply_diff(parent.code, content)
+                code = apply_diff(parent.content, content)
             else:
                 code = extract_code(content)
             if not code:

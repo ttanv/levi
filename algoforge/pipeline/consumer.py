@@ -150,7 +150,7 @@ async def eval_consumer(
                         result = dict(result)
                         result["score"] = score
 
-                        program = Program(code=item["code"])
+                        program = Program(content=item["code"])
                         eval_result = EvaluationResult(
                             scores=result,
                             is_valid=True,

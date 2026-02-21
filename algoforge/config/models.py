@@ -67,6 +67,8 @@ class BehaviorConfig(BaseModel):
     )
     score_keys: list[str] = Field(default_factory=list)
     init_noise: float = 0.15
+    # Custom extractors: Callable[[Program], float]. Unlike built-in AST extractors,
+    # these receive only the Program, making them usable for non-code content types.
     custom_extractors: dict[str, Callable] = Field(default_factory=dict)
 
     model_config = {"arbitrary_types_allowed": True}
@@ -113,6 +115,8 @@ class AlgoforgeConfig(BaseModel):
     function_signature: str
     seed_program: str
     inputs: list[Any]
+    # v0.1: code-only. First arg is the extracted callable from exec().
+    # For prompt support, generalize to Callable[[str | Callable, list], dict].
     score_fn: Callable[[Callable, list], dict]
     budget: BudgetConfig
     sampler_model_pairs: list[SamplerModelPair]
@@ -132,11 +136,7 @@ class AlgoforgeConfig(BaseModel):
     llm: LLMProviderConfig = Field(default_factory=LLMProviderConfig)
 
     # Prompt overrides from DSPy optimization
-    # Structure: {"mutation": {model: instructions}, "paradigm_shift": instructions}
     prompt_overrides: dict[str, Any] = Field(default_factory=dict)
-
-    # Deprecated: kept for backward compatibility, migrated to llm.local_endpoints
-    api_bases: dict[str, str] = Field(default_factory=dict)
 
     model_config = {"arbitrary_types_allowed": True}
 
@@ -146,13 +146,6 @@ class AlgoforgeConfig(BaseModel):
         if not v:
             raise ValueError('must have at least one sampler_model_pair')
         return v
-
-    @model_validator(mode='after')
-    def migrate_api_bases(self) -> 'AlgoforgeConfig':
-        """Migrate api_bases to llm.local_endpoints for backward compatibility."""
-        if self.api_bases and not self.llm.local_endpoints:
-            self.llm.local_endpoints = self.api_bases
-        return self
 
 
 class AlgoforgeResult(BaseModel):

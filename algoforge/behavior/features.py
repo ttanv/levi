@@ -13,7 +13,7 @@ from ..core import Program
 
 def compute_code_length(program: Program, tree: Optional[ast.AST] = None) -> float:
     """Character count of code."""
-    return float(len(program.code))
+    return float(len(program.content))
 
 
 def compute_ast_depth(program: Program, tree: ast.AST) -> float:

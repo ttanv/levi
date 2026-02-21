@@ -24,7 +24,7 @@ class TestProgramWithScore:
 
     def test_creation_with_result(self):
         """ProgramWithScore can be created with a program and result."""
-        prog = Program(code="def solve(x): return x")
+        prog = Program(content="def solve(x): return x")
         result = EvaluationResult(
             scores={"score": 0.85},
         )
@@ -37,7 +37,7 @@ class TestProgramWithScore:
 
     def test_creation_without_result(self):
         """ProgramWithScore can be created without a result."""
-        prog = Program(code="def solve(x): return x")
+        prog = Program(content="def solve(x): return x")
 
         pws = ProgramWithScore(program=prog, result=None)
 
@@ -47,7 +47,7 @@ class TestProgramWithScore:
 
     def test_score_property_uses_primary_score(self):
         """score property uses result's primary_score."""
-        prog = Program(code="def solve(x): return x")
+        prog = Program(content="def solve(x): return x")
         result = EvaluationResult(
             scores={"accuracy": 0.9, "speed": 0.7},  # No 'score' key
         )
@@ -105,8 +105,8 @@ class TestPromptBuilder:
     def test_add_parents(self):
         """add_parents() adds parent programs to prompt."""
         builder = PromptBuilder()
-        prog1 = Program(code="def solve(x): return x")
-        prog2 = Program(code="def solve(x): return x * 2")
+        prog1 = Program(content="def solve(x): return x")
+        prog2 = Program(content="def solve(x): return x * 2")
 
         parents = [
             ProgramWithScore(prog1, None),
@@ -124,7 +124,7 @@ class TestPromptBuilder:
     def test_add_parents_with_scores(self):
         """add_parents() includes scores when available."""
         builder = PromptBuilder()
-        prog = Program(code="def solve(x): return x")
+        prog = Program(content="def solve(x): return x")
         result = EvaluationResult(
             scores={"score": 0.75},
         )
@@ -139,7 +139,7 @@ class TestPromptBuilder:
     def test_add_parents_with_priority(self):
         """add_parents() respects priority ordering."""
         builder = PromptBuilder()
-        prog = Program(code="def solve(x): return x")
+        prog = Program(content="def solve(x): return x")
 
         builder.add_section("Before", "Before parents", priority=10)
         builder.add_parents([ProgramWithScore(prog, None)], priority=20)
@@ -224,7 +224,7 @@ class TestPromptBuilder:
     def test_build_complete_prompt(self):
         """build() assembles a complete prompt correctly."""
         builder = PromptBuilder()
-        prog = Program(code="def solve(x): return x")
+        prog = Program(content="def solve(x): return x")
 
         builder.add_section("Problem", "Optimize for speed", priority=10)
         builder.add_section("Signature", "def solve(x) -> int:", priority=20)
@@ -248,7 +248,7 @@ class TestPromptBuilder:
 
     def test_chained_building(self):
         """All methods can be chained together."""
-        prog = Program(code="def solve(x): return x")
+        prog = Program(content="def solve(x): return x")
 
         prompt = (
             PromptBuilder()
@@ -269,7 +269,7 @@ class TestPromptBuilder:
     def test_code_block_formatting(self):
         """Parent code is wrapped in markdown code blocks."""
         builder = PromptBuilder()
-        prog = Program(code="def solve(x):\n    return x * 2")
+        prog = Program(content="def solve(x):\n    return x * 2")
 
         builder.add_parents([ProgramWithScore(prog, None)])
 
@@ -283,7 +283,7 @@ class TestPromptBuilder:
         """Multiple parents get v1, v2, v3 labels."""
         builder = PromptBuilder()
         programs = [
-            Program(code=f"def solve(x): return x + {i}")
+            Program(content=f"def solve(x): return x + {i}")
             for i in range(3)
         ]
 
@@ -319,7 +319,7 @@ class TestPromptBuilderIntegration:
         )
 
         # Parent programs
-        parent = Program(code='''def get_random_costs():
+        parent = Program(content='''def get_random_costs():
     schedules = []
     for w in workloads:
         schedule = list(range(w.num_txns))
@@ -359,7 +359,7 @@ class TestPromptBuilderIntegration:
         """Builds a prompt with DIFF output mode."""
         builder = PromptBuilder()
 
-        parent = Program(code="def solve(x): return x * 2")
+        parent = Program(content="def solve(x): return x * 2")
 
         builder.add_section("Problem", "Make the function faster", priority=10)
         builder.add_parents([ProgramWithScore(parent, None)], priority=20)
@@ -377,7 +377,7 @@ class TestPromptBuilderIntegration:
         """Builds a prompt with execution feedback."""
         builder = PromptBuilder()
 
-        parent = Program(code='''def solve(items):
+        parent = Program(content='''def solve(items):
     result = []
     for item in items:
         result.append(item * 2)

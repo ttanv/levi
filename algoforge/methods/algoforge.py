@@ -76,7 +76,7 @@ def _restore_from_snapshot(
     # Restore elites into pool
     restored = 0
     for elite_data in elites:
-        program = Program(code=elite_data["code"])
+        program = Program(content=elite_data["code"])
         eval_result = EvaluationResult(
             scores=elite_data["scores"],
             is_valid=True,

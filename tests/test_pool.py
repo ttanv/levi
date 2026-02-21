@@ -18,9 +18,9 @@ class TestSampleResult:
 
     def test_sample_result_creation(self):
         """SampleResult can be created with parent and inspirations."""
-        parent = Program(code="def solve(x): return x")
-        insp1 = Program(code="def solve(x): return x + 1")
-        insp2 = Program(code="def solve(x): return x * 2")
+        parent = Program(content="def solve(x): return x")
+        insp1 = Program(content="def solve(x): return x + 1")
+        insp2 = Program(content="def solve(x): return x * 2")
 
         result = SampleResult(
             parent=parent,
@@ -34,7 +34,7 @@ class TestSampleResult:
 
     def test_sample_result_empty_inspirations(self):
         """SampleResult works with empty inspirations."""
-        parent = Program(code="def solve(x): return x")
+        parent = Program(content="def solve(x): return x")
 
         result = SampleResult(parent=parent)
 
@@ -82,7 +82,7 @@ class TestCVTMAPElitesPool:
 
     def test_add_valid_program(self, pool):
         """add() accepts valid programs."""
-        prog = Program(code="def solve(x): return x")
+        prog = Program(content="def solve(x): return x")
         result = EvaluationResult(
             scores={"score": 0.8},
             is_valid=True,
@@ -95,7 +95,7 @@ class TestCVTMAPElitesPool:
 
     def test_add_invalid_program(self, pool):
         """add() rejects invalid programs."""
-        prog = Program(code="def solve(x): return x")
+        prog = Program(content="def solve(x): return x")
         result = EvaluationResult(
             is_valid=False,
             error="Error",
@@ -109,8 +109,8 @@ class TestCVTMAPElitesPool:
     def test_add_replaces_worse_in_same_cell(self, pool):
         """add() replaces lower-scoring program in same cell."""
         # Two programs with same behavior should map to same cell
-        prog1 = Program(code="def solve(x): return x")
-        prog2 = Program(code="def solve(x): return x")  # Same code = same behavior
+        prog1 = Program(content="def solve(x): return x")
+        prog2 = Program(content="def solve(x): return x")  # Same code = same behavior
 
         pool.add(prog1, EvaluationResult(
                         scores={"score": 0.5},
@@ -130,8 +130,8 @@ class TestCVTMAPElitesPool:
 
     def test_add_rejects_worse_in_same_cell(self, pool):
         """add() rejects lower-scoring program if cell has better."""
-        prog1 = Program(code="def solve(x): return x")
-        prog2 = Program(code="def solve(x): return x")
+        prog1 = Program(content="def solve(x): return x")
+        prog2 = Program(content="def solve(x): return x")
 
         pool.add(prog1, EvaluationResult(
             scores={"score": 0.8},  # Higher score first
@@ -148,7 +148,7 @@ class TestCVTMAPElitesPool:
 
     def test_sample_returns_sample_result(self, pool):
         """sample() returns a SampleResult."""
-        prog = Program(code="def solve(x): return x")
+        prog = Program(content="def solve(x): return x")
         pool.add(prog, EvaluationResult(
             scores={"score": 0.8},
             is_valid=True,
@@ -176,7 +176,7 @@ class TestCVTMAPElitesPool:
         ]
 
         for i, code in enumerate(codes):
-            prog = Program(code=code)
+            prog = Program(content=code)
             pool.add(prog, EvaluationResult(
                 scores={"score": i * 0.3},  # Last has highest
                 is_valid=True,
@@ -185,7 +185,7 @@ class TestCVTMAPElitesPool:
         best = pool.best()
 
         # The last program should have highest score
-        assert "for i in range" in best.code
+        assert "for i in range" in best.content
 
     def test_best_empty_raises(self, pool):
         """best() raises when pool is empty."""
@@ -202,7 +202,7 @@ class TestCVTMAPElitesPool:
 
     def test_get_stats(self, pool):
         """get_stats() returns expected statistics."""
-        prog = Program(code="def solve(x): return x")
+        prog = Program(content="def solve(x): return x")
         pool.add(prog, EvaluationResult(
             scores={"score": 0.8},
             is_valid=True,
@@ -242,7 +242,7 @@ class TestCVTMAPElitesPool:
         ]
 
         for code in codes:
-            prog = Program(code=code)
+            prog = Program(content=code)
             pool.add(prog, EvaluationResult(
                 scores={"score": 0.5},
                 is_valid=True,
@@ -256,7 +256,7 @@ class TestCVTMAPElitesPool:
         # Add some programs
         for i in range(5):
             code = f"def solve(x): return x + {i}"
-            prog = Program(code=code)
+            prog = Program(content=code)
             pool.add(prog, EvaluationResult(
                 scores={"score": i * 0.1},
                 is_valid=True,

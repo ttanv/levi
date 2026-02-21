@@ -135,7 +135,7 @@ class PunctuatedEquilibrium:
         rep_text_parts = []
         for i, (cluster_id, elite) in enumerate(representatives):
             score = elite.result.primary_score
-            code = elite.program.code
+            code = elite.program.content
             rep_text_parts.append(
                 f"### Region {i+1} (Cluster {cluster_id}, Score: {score:.1f})\n"
                 f"```python\n{code}\n```"
@@ -339,7 +339,7 @@ Output ONLY complete, runnable Python code in a ```python block.
         if "error" not in result:
             stats["paradigm_score"] = score
 
-            program = Program(code=paradigm_code, metadata={
+            program = Program(content=paradigm_code, metadata={
                 "source": "punctuated_equilibrium",
                 "pe_type": "paradigm_shift",
             })
@@ -462,7 +462,7 @@ Output ONLY complete, runnable Python code in a ```python block.
                         result["score"] = score
 
                 if "error" not in result:
-                    program = Program(code=variant_code, metadata={
+                    program = Program(content=variant_code, metadata={
                         "source": "punctuated_equilibrium",
                         "pe_type": "variant",
                     })

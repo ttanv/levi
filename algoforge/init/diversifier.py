@@ -292,7 +292,7 @@ class Diversifier:
         # Build all seeds as ProgramWithScore for sampling
         all_parents = []
         for seed_code, seed_score, _ in diverse_seeds:
-            prog = Program(code=seed_code, metadata={"score": seed_score})
+            prog = Program(content=seed_code, metadata={"score": seed_score})
             eval_res = EvaluationResult(
                 scores={'score': seed_score},
                 is_valid=True,
@@ -399,7 +399,7 @@ class Diversifier:
                     failure_errors.append((error_msg, data["code"][:100]))
                 continue
             score = result.get('score', 0.0)
-            program = Program(code=data["code"], metadata={"primary_score": score})
+            program = Program(content=data["code"], metadata={"primary_score": score})
             behavior = extractor.extract(program, result)
             valid_programs.append({
                 "code": data["code"],
@@ -411,7 +411,7 @@ class Diversifier:
 
         # Add diverse seeds directly (already evaluated in Phase 1, no need to re-evaluate)
         for seed_code, seed_score, seed_result in diverse_seeds:
-            program = Program(code=seed_code, metadata={"primary_score": seed_score})
+            program = Program(content=seed_code, metadata={"primary_score": seed_score})
             behavior = extractor.extract(program, seed_result)
             valid_programs.append({
                 "code": seed_code,
@@ -444,7 +444,7 @@ class Diversifier:
         if not behavior_vectors:
             logger.warning("[Init Phase 3] No valid programs to build centroids")
             if seed_program and seed_result and "error" not in seed_result:
-                program = Program(code=seed_program, metadata={"primary_score": seed_result.get('score', 0.0)})
+                program = Program(content=seed_program, metadata={"primary_score": seed_result.get('score', 0.0)})
                 eval_result = EvaluationResult(
                     scores=seed_result,
                     is_valid=True,
@@ -473,7 +473,7 @@ class Diversifier:
         n_accepted = 0
         for cell_idx, progs in cell_to_programs.items():
             best_prog = random.choice(progs)
-            program = Program(code=best_prog["code"], metadata={"primary_score": best_prog["score"]})
+            program = Program(content=best_prog["code"], metadata={"primary_score": best_prog["score"]})
             eval_result = EvaluationResult(
                 scores=best_prog["result"],
                 is_valid=True,
