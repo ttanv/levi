@@ -4,7 +4,6 @@ import asyncio
 import logging
 import random
 import time
-import types
 
 import numpy as np
 
@@ -14,7 +13,7 @@ from ..pipeline.state import ScoreHistoryEntry, PipelineState, BudgetLimitReache
 from ..pool import CVTMAPElitesPool
 from ..behavior import BehaviorExtractor
 from ..llm import PromptBuilder, ProgramWithScore, OutputMode, get_llm_client
-from ..utils import ResilientProcessPool, extract_code, extract_fn_name
+from ..utils import ResilientProcessPool, extract_code, extract_fn_name, evaluate_code
 
 logger = logging.getLogger(__name__)
 
@@ -52,26 +51,6 @@ The goal is to explore different regions of the algorithm design space. A popula
 ## Output
 Output ONLY the complete Python code in a ```python block.
 """
-
-
-def _evaluate_code(code: str, score_fn, inputs: list, fn_name: str) -> dict:
-    """Runs in subprocess: parse code, extract callable, call score_fn."""
-    namespace = {}
-    try:
-        exec(code, namespace)
-    except SyntaxError as e:
-        return {"error": f"Syntax error: {e}"}
-    except MemoryError:
-        return {"error": "MemoryError during code execution"}
-
-    fn = namespace.get(fn_name)
-    if not isinstance(fn, types.FunctionType):
-        return {"error": f"Function '{fn_name}' not found (got {type(fn).__name__})"}
-
-    try:
-        return score_fn(fn, inputs)
-    except MemoryError:
-        return {"error": "MemoryError during scoring"}
 
 
 class Diversifier:
@@ -130,7 +109,7 @@ class Diversifier:
         cascade = self.config.cascade
         if cascade.enabled and cascade.quick_inputs:
             quick_result = await self.executor.run(
-                _evaluate_code,
+                evaluate_code,
                 code,
                 self.config.score_fn,
                 cascade.quick_inputs,
@@ -145,7 +124,7 @@ class Diversifier:
                 return {"error": f"Cascade rejected: {quick_score:.1f} < {threshold:.1f}"}
 
         result = await self.executor.run(
-            _evaluate_code,
+            evaluate_code,
             code,
             self.config.score_fn,
             self.config.inputs,
@@ -268,7 +247,7 @@ class Diversifier:
 
                 try:
                     result = await self.executor.run(
-                        _evaluate_code,
+                        evaluate_code,
                         new_code,
                         self.config.score_fn,
                         self.config.inputs,

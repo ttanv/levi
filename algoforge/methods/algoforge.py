@@ -3,7 +3,6 @@
 import asyncio
 import logging
 import time
-import types
 
 from ..config import AlgoforgeConfig, AlgoforgeResult
 from ..core import Program, EvaluationResult
@@ -12,7 +11,7 @@ from ..behavior import BehaviorExtractor
 from ..pipeline import PipelineRunner
 from ..pipeline.state import PipelineState
 from ..init import Diversifier
-from ..utils import ResilientProcessPool, extract_fn_name
+from ..utils import ResilientProcessPool, extract_fn_name, evaluate_code
 from ..llm import set_llm_client, clear_llm_client
 from ..llm.unified_client import UnifiedLLMClient, UnifiedLLMClientConfig
 
@@ -47,21 +46,6 @@ def _setup_logging() -> None:
     logging.getLogger("LiteLLM").setLevel(logging.ERROR)
     logging.getLogger("litellm").setLevel(logging.ERROR)
     logging.getLogger("httpx").setLevel(logging.WARNING)
-
-
-def _evaluate_code(code: str, score_fn, inputs: list, fn_name: str) -> dict:
-    """Runs in subprocess for seed evaluation (no memory limit - trusted code)."""
-    namespace = {}
-    try:
-        exec(code, namespace)
-    except SyntaxError as e:
-        return {"error": f"Syntax error: {e}"}
-
-    fn = namespace.get(fn_name)
-    if not isinstance(fn, types.FunctionType):
-        return {"error": f"Function '{fn_name}' not found (got {type(fn).__name__})"}
-
-    return score_fn(fn, inputs)
 
 
 def _restore_from_snapshot(
@@ -176,7 +160,7 @@ async def _run_async(config: AlgoforgeConfig, resume_snapshot: dict | None = Non
 
         try:
             seed_result = await executor.run(
-                _evaluate_code,
+                evaluate_code,
                 config.seed_program,
                 config.score_fn,
                 config.inputs,

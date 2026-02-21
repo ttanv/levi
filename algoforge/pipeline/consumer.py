@@ -2,14 +2,12 @@
 
 import asyncio
 import logging
-import math
-import types
 from typing import Callable, Optional
 
 from ..config import AlgoforgeConfig
 from ..core import Program, EvaluationResult
 from ..pool import CVTMAPElitesPool
-from ..utils import ResilientProcessPool, extract_fn_name
+from ..utils import ResilientProcessPool, extract_fn_name, evaluate_code, coerce_score
 from .state import PipelineState, BudgetLimitReached
 
 SNAPSHOT_INTERVAL = 10  # Save snapshot every N evaluations
@@ -28,16 +26,6 @@ def _model_label(item: dict) -> str:
         return f"{model}{sampler[sampler.index('_T'):]}"
     return model
 
-
-def _coerce_score(result: dict) -> tuple[float | None, str | None]:
-    """Extract a finite numeric score from an evaluation result."""
-    try:
-        score = float(result.get("score", 0.0))
-    except (TypeError, ValueError):
-        return None, f"Invalid score value: {result.get('score')!r}"
-    if not math.isfinite(score):
-        return None, f"Non-finite score value: {result.get('score')!r}"
-    return score, None
 
 META_ADVISOR_PROMPT = """You are a lessons-learned advisor for an evolutionary code optimization system.
 
@@ -76,26 +64,6 @@ Keep it SHORT and DIRECT:
 """
 
 
-def _evaluate_code(code: str, score_fn: Callable, inputs: list, fn_name: str) -> dict:
-    """Runs in subprocess: parse code, extract callable, call score_fn."""
-    namespace = {}
-    try:
-        exec(code, namespace)
-    except SyntaxError as e:
-        return {"error": f"Syntax error: {e}"}
-    except MemoryError:
-        return {"error": "MemoryError during code execution"}
-
-    fn = namespace.get(fn_name)
-    if not isinstance(fn, types.FunctionType):
-        return {"error": f"Function '{fn_name}' not found (got {type(fn).__name__})"}
-
-    try:
-        return score_fn(fn, inputs)
-    except MemoryError:
-        return {"error": "MemoryError during scoring"}
-
-
 async def eval_consumer(
     worker_id: int,
     code_queue: asyncio.Queue,
@@ -125,7 +93,7 @@ async def eval_consumer(
                 cascade = config.cascade
                 if cascade.enabled and cascade.quick_inputs:
                     quick_result = await executor.run(
-                        _evaluate_code,
+                        evaluate_code,
                         item["code"],
                         config.score_fn,
                         cascade.quick_inputs,
@@ -141,7 +109,7 @@ async def eval_consumer(
                             result = {"cascade_rejected": True, "quick_score": quick_score, "threshold": threshold}
                         else:
                             result = await executor.run(
-                                _evaluate_code,
+                                evaluate_code,
                                 item["code"],
                                 config.score_fn,
                                 config.inputs,
@@ -150,7 +118,7 @@ async def eval_consumer(
                             )
                 else:
                     result = await executor.run(
-                        _evaluate_code,
+                        evaluate_code,
                         item["code"],
                         config.score_fn,
                         config.inputs,
@@ -172,7 +140,7 @@ async def eval_consumer(
                         f"CASCADE SKIP  | quick: {result['quick_score']:.1f} < {result['threshold']:.1f}"
                     )
                 elif "error" not in result:
-                    score, score_error = _coerce_score(result)
+                    score, score_error = coerce_score(result)
                     if score_error is not None:
                         pool.update_sampler(item["sampler"], item["source_cell"], success=False)
                         state.record_error(score_error)
