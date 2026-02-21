@@ -21,6 +21,7 @@ from ..pool import CVTMAPElitesPool
 from ..pool.cvt_map_elites import Elite
 from ..llm import get_llm_client
 from ..utils import ResilientProcessPool, extract_code, extract_fn_name
+from ..pipeline.state import PipelineState, BudgetLimitReached
 from .prompts import PARADIGM_SHIFT_PROMPT, PARADIGM_SHIFT_PROMPTS, VARIANT_GENERATION_PROMPT, get_budget_stage
 
 logger = logging.getLogger(__name__)
@@ -78,11 +79,13 @@ class PunctuatedEquilibrium:
         pool: CVTMAPElitesPool,
         executor: ResilientProcessPool,
         archive_lock: asyncio.Lock,
+        state: PipelineState,
     ):
         self.config = config
         self.pool = pool
         self.executor = executor
         self.archive_lock = archive_lock
+        self.state = state
         self.pe_config = config.punctuated_equilibrium
         self.fn_name = extract_fn_name(config.function_signature)
 
@@ -263,6 +266,17 @@ Output ONLY complete, runnable Python code in a ```python block.
             "total_cost": 0.0,
             "evaluations": [],
         }
+        pe_evals_started = 0
+
+        def can_start_pe_eval() -> bool:
+            if self.state.budget_exhausted:
+                return False
+            if self.state.budget.evaluations is None:
+                return True
+            eval_limit = int(self.state._coerce_finite_float(self.state.budget.evaluations, default=0.0))
+            if eval_limit <= 0:
+                return False
+            return (self.state.eval_count + pe_evals_started) < eval_limit
 
         # Step 1: Cluster occupied centroids
         async with self.archive_lock:
@@ -304,7 +318,8 @@ Output ONLY complete, runnable Python code in a ```python block.
                     extras["reasoning_effort"] = self.pe_config.reasoning_effort
                     logger.info(f"[PE] Using reasoning_effort={self.pe_config.reasoning_effort} for paradigm shift")
 
-            response = await llm.acompletion(
+            response = await self.state.acompletion(
+                llm,
                 model=heavy_model,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=self.pe_config.temperature,
@@ -315,6 +330,9 @@ Output ONLY complete, runnable Python code in a ```python block.
             content = response.content
             cost = response.cost
             stats["total_cost"] += cost
+        except BudgetLimitReached:
+            logger.info("[PE] Budget exhausted before paradigm shift generation")
+            return stats
         except Exception as e:
             logger.warning(f"[PE] Paradigm shift generation failed: {e}")
             return stats
@@ -328,7 +346,18 @@ Output ONLY complete, runnable Python code in a ```python block.
         logger.debug("[PE] Paradigm shift code generated (%d chars)", len(paradigm_code))
 
         # Step 4: Evaluate paradigm shift solution
+        if not can_start_pe_eval():
+            logger.info("[PE] Skipping paradigm shift evaluation (budget exhausted)")
+            stats["evaluations"].append({
+                "source": "paradigm_shift",
+                "model": heavy_model,
+                "error": "Budget exhausted",
+                "archive_size": self.pool.size(),
+            })
+            return stats
+
         try:
+            pe_evals_started += 1
             result = await self._evaluate(paradigm_code)
         except Exception as e:
             logger.warning(f"[PE] Paradigm shift evaluation failed: {e}")
@@ -404,7 +433,8 @@ Output ONLY complete, runnable Python code in a ```python block.
             async def generate_variant(model: str, idx: int):
                 try:
                     llm = get_llm_client()
-                    response = await llm.acompletion(
+                    response = await self.state.acompletion(
+                        llm,
                         model=model,
                         messages=[{"role": "user", "content": variant_prompt}],
                         temperature=self.pe_config.temperature,
@@ -412,6 +442,8 @@ Output ONLY complete, runnable Python code in a ```python block.
                         timeout=300,
                     )
                     return {"idx": idx, "content": response.content, "cost": response.cost, "model": model}
+                except BudgetLimitReached:
+                    return {"idx": idx, "error": "Budget exhausted", "model": model}
                 except Exception as e:
                     return {"idx": idx, "error": str(e), "model": model}
 
@@ -439,7 +471,18 @@ Output ONLY complete, runnable Python code in a ```python block.
 
                 stats["variants_generated"] += 1
 
+                if not can_start_pe_eval():
+                    logger.info(f"[PE] Skipping variant {vr['idx']} evaluation (budget exhausted)")
+                    stats["evaluations"].append({
+                        "source": "variant",
+                        "model": vr.get("model", "unknown"),
+                        "error": "Budget exhausted",
+                        "archive_size": self.pool.size(),
+                    })
+                    continue
+
                 try:
+                    pe_evals_started += 1
                     result = await self._evaluate(variant_code)
                 except Exception as e:
                     logger.warning(f"[PE] Variant {vr['idx']} evaluation exception: {e}")

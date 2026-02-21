@@ -10,7 +10,7 @@ import numpy as np
 
 from ..config import AlgoforgeConfig
 from ..core import Program, EvaluationResult
-from ..pipeline.state import ScoreHistoryEntry
+from ..pipeline.state import ScoreHistoryEntry, PipelineState, BudgetLimitReached
 from ..pool import CVTMAPElitesPool
 from ..behavior import BehaviorExtractor
 from ..llm import PromptBuilder, ProgramWithScore, OutputMode, get_llm_client
@@ -82,9 +82,11 @@ class Diversifier:
         config: AlgoforgeConfig,
         executor: ResilientProcessPool,
         start_time: float = 0.0,
+        state: PipelineState | None = None,
     ):
         self.config = config
         self.executor = executor
+        self.state = state
         self.total_cost = 0.0
         self.best_score = 0.0
         self.score_history: list[ScoreHistoryEntry] = []
@@ -93,6 +95,18 @@ class Diversifier:
 
     def _record_score(self, score: float, sampler: str) -> None:
         """Record a score from the init phase."""
+        if self.state is not None:
+            self.state.record_accept()
+            self.state.record_score(
+                score=score,
+                accepted=True,
+                sampler=sampler,
+                archive_size=0,
+                cell_index=None,
+            )
+            self.best_score = self.state.best_score_so_far
+            return
+
         self._init_eval_count += 1
         if score > self.best_score:
             self.best_score = score
@@ -110,6 +124,9 @@ class Diversifier:
 
     async def _cascade_eval(self, code: str, fn_name: str) -> dict:
         """Evaluate with cascade: quick test first, full eval only if promising."""
+        if self.state is not None and self.state.budget_exhausted:
+            return {"error": "Budget exhausted"}
+
         cascade = self.config.cascade
         if cascade.enabled and cascade.quick_inputs:
             quick_result = await self.executor.run(
@@ -157,7 +174,8 @@ class Diversifier:
         self.best_score = seed_score
 
         # Record the seed itself
-        self._record_score(seed_score, sampler="init_seed")
+        if self.state is None or self.state.eval_count == 0:
+            self._record_score(seed_score, sampler="init_seed")
 
         # Phase 1: Generate diverse seeds
         diverse_seeds = await self._generate_diverse_seeds(
@@ -175,6 +193,8 @@ class Diversifier:
             seed_program, seed_result  # Always pass seed as fallback
         )
 
+        if self.state is not None:
+            return self.total_cost, list(self.state.score_history)
         return self.total_cost, self.score_history
 
     async def _generate_diverse_seeds(
@@ -194,6 +214,10 @@ class Diversifier:
         diverse_seeds = [(seed_program, seed_score, seed_result)]
 
         for i in range(n_seeds):
+            if self.state is not None and self.state.budget_exhausted:
+                logger.info("[Init Phase 1] Stopping seed generation (budget exhausted)")
+                break
+
             existing_seeds_text = "\n\n---\n\n".join([
                 f"### Seed {j+1} (Score: {score:.1f}):\n```python\n{code}\n```"
                 for j, (code, score, _) in enumerate(diverse_seeds)
@@ -210,13 +234,23 @@ class Diversifier:
 
             try:
                 llm = get_llm_client()
-                response = await llm.acompletion(
-                    model=model,
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=self.config.init.temperature,
-                    max_tokens=4096,
-                    timeout=300,
-                )
+                if self.state is not None:
+                    response = await self.state.acompletion(
+                        llm,
+                        model=model,
+                        messages=[{"role": "user", "content": prompt}],
+                        temperature=self.config.init.temperature,
+                        max_tokens=4096,
+                        timeout=300,
+                    )
+                else:
+                    response = await llm.acompletion(
+                        model=model,
+                        messages=[{"role": "user", "content": prompt}],
+                        temperature=self.config.init.temperature,
+                        max_tokens=4096,
+                        timeout=300,
+                    )
                 content = response.content
                 self.total_cost += response.cost
 
@@ -225,23 +259,38 @@ class Diversifier:
                     logger.info(f"  [Seed {i+1}] Failed to extract code")
                     continue
 
-                result = await self.executor.run(
-                    _evaluate_code,
-                    new_code,
-                    self.config.score_fn,
-                    self.config.inputs,
-                    fn_name,
-                    timeout=self.config.pipeline.eval_timeout
-                )
+                reserved_eval = False
+                if self.state is not None:
+                    if not await self.state.try_start_evaluation():
+                        logger.info("[Init Phase 1] Stopping seed evaluation (budget exhausted)")
+                        break
+                    reserved_eval = True
 
-                if "error" not in result:
-                    new_score = result.get('score', 0.0)
-                    self._record_score(new_score, sampler="init_diversity")
-                    diverse_seeds.append((new_code, new_score, result))
-                    logger.info(f"  [Seed {i+1}] OK - score: {new_score:.1f}")
-                else:
-                    logger.info(f"  [Seed {i+1}] Eval failed: {result['error'][:50]}")
+                try:
+                    result = await self.executor.run(
+                        _evaluate_code,
+                        new_code,
+                        self.config.score_fn,
+                        self.config.inputs,
+                        fn_name,
+                        timeout=self.config.pipeline.eval_timeout
+                    )
 
+                    if "error" not in result:
+                        new_score = result.get('score', 0.0)
+                        self._record_score(new_score, sampler="init_diversity")
+                        diverse_seeds.append((new_code, new_score, result))
+                        logger.info(f"  [Seed {i+1}] OK - score: {new_score:.1f}")
+                    else:
+                        if self.state is not None:
+                            self.state.record_error(str(result.get("error", "unknown error")))
+                        logger.info(f"  [Seed {i+1}] Eval failed: {result['error'][:50]}")
+                finally:
+                    if reserved_eval and self.state is not None:
+                        await self.state.finish_evaluation()
+            except BudgetLimitReached:
+                logger.info("[Init Phase 1] Stopping seed generation (budget exhausted)")
+                break
             except Exception as e:
                 logger.warning(f"  [Seed {i+1}] Error: {e}")
 
@@ -291,14 +340,26 @@ class Diversifier:
         async def generate_variant(idx: int, prompt: str, model: str) -> dict:
             try:
                 llm = get_llm_client()
-                response = await llm.acompletion(
-                    model=model,
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=self.config.init.temperature,
-                    max_tokens=4096,
-                    timeout=300,
-                )
+                if self.state is not None:
+                    response = await self.state.acompletion(
+                        llm,
+                        model=model,
+                        messages=[{"role": "user", "content": prompt}],
+                        temperature=self.config.init.temperature,
+                        max_tokens=4096,
+                        timeout=300,
+                    )
+                else:
+                    response = await llm.acompletion(
+                        model=model,
+                        messages=[{"role": "user", "content": prompt}],
+                        temperature=self.config.init.temperature,
+                        max_tokens=4096,
+                        timeout=300,
+                    )
                 return {"idx": idx, "content": response.content, "cost": response.cost}
+            except BudgetLimitReached:
+                return {"idx": idx, "error": "Budget exhausted"}
             except Exception as e:
                 return {"idx": idx, "error": str(e)}
 
@@ -319,11 +380,25 @@ class Diversifier:
         logger.info(f"[Init Phase 2] Evaluating {total_candidates} candidates")
 
         async def eval_candidate(cand: dict) -> tuple[int, dict]:
+            if self.state is not None:
+                if not await self.state.try_start_evaluation():
+                    return cand["idx"], {"code": cand["code"], "result": {"error": "Budget exhausted", "budget_stop": True}}
             try:
                 result = await self._cascade_eval(cand["code"], fn_name)
+                if self.state is not None and "error" in result:
+                    error_msg = str(result.get("error", "unknown error"))
+                    if error_msg.startswith("Cascade rejected:"):
+                        self.state.record_reject()
+                    elif error_msg != "Budget exhausted":
+                        self.state.record_error(error_msg)
                 return cand["idx"], {"code": cand["code"], "result": result}
             except Exception as e:
+                if self.state is not None:
+                    self.state.record_error(str(e))
                 return cand["idx"], {"code": cand["code"], "result": {"error": str(e)}}
+            finally:
+                if self.state is not None:
+                    await self.state.finish_evaluation()
 
         eval_tasks = [eval_candidate(c) for c in candidates]
         eval_results = await asyncio.gather(*eval_tasks)
@@ -337,6 +412,8 @@ class Diversifier:
         for _, data in eval_results:
             result = data["result"]
             if "error" in result:
+                if result.get("budget_stop"):
+                    continue
                 # Collect unique failure errors for logging
                 error_msg = result["error"]
                 if len(failure_errors) < 5 and error_msg not in [e for e, _ in failure_errors]:

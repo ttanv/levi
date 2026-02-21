@@ -23,9 +23,6 @@ Example:
 # Core types
 from .core import Program, EvaluationResult, MetricDict
 
-# Budget management
-from .budget import BudgetManager, BudgetExhausted, ResourceType
-
 # Protocols and pools
 from .pool import ProgramPool, SampleResult, CVTMAPElitesPool
 
@@ -62,10 +59,6 @@ __all__ = [
     'Program',
     'EvaluationResult',
     'MetricDict',
-    # Budget
-    'BudgetManager',
-    'BudgetExhausted',
-    'ResourceType',
     # Pool
     'ProgramPool',
     'SampleResult',

@@ -5,11 +5,15 @@ import logging
 import math
 import time
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Optional
 
 from ..config import BudgetConfig
 
 logger = logging.getLogger(__name__)
+
+
+class BudgetLimitReached(RuntimeError):
+    """Raised when a new operation cannot start due to exhausted budget."""
 
 
 @dataclass
@@ -65,6 +69,13 @@ class PipelineState:
     last_pe_eval_count: int = 0
     pe_trigger_count: int = 0
 
+    # Shared runtime gate primitives
+    _gate_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
+    _llm_serial_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
+    _llm_semaphore: asyncio.Semaphore = field(default_factory=lambda: asyncio.Semaphore(1), repr=False)
+    _llm_cost_ema: float = 0.0
+    _llm_cost_samples: int = 0
+
     @staticmethod
     def _coerce_finite_float(value: object, *, default: float) -> float:
         """Best-effort numeric coercion with a safe fallback."""
@@ -84,6 +95,13 @@ class PipelineState:
         limit = PipelineState._coerce_finite_float(value, default=0.0)
         return limit
 
+    def configure_llm_concurrency(self, max_in_flight: int) -> None:
+        """Set global max concurrent LLM requests for this run."""
+        limit = int(self._coerce_finite_float(max_in_flight, default=1.0))
+        if limit <= 0:
+            limit = 1
+        self._llm_semaphore = asyncio.Semaphore(limit)
+
     @property
     def budget_exhausted(self) -> bool:
         dollars_limit = self._coerce_positive_limit(self.budget.dollars)
@@ -98,8 +116,9 @@ class PipelineState:
             eval_limit = int(self._coerce_finite_float(self.budget.evaluations, default=0.0))
             if eval_limit <= 0:
                 return True
-            eval_count = int(self._coerce_finite_float(self.eval_count, default=float("inf")))
-            if eval_count >= eval_limit:
+            # Treat in-flight evaluations as already committed budget.
+            eval_used = int(self._coerce_finite_float(self.eval_count + self.eval_in_flight, default=float("inf")))
+            if eval_used >= eval_limit:
                 return True
 
         seconds_limit = self._coerce_positive_limit(self.budget.seconds)
@@ -133,8 +152,8 @@ class PipelineState:
             eval_limit = int(self._coerce_finite_float(self.budget.evaluations, default=0.0))
             if eval_limit <= 0:
                 return 1.0
-            eval_count = int(self._coerce_finite_float(self.eval_count, default=float("inf")))
-            return max(0.0, min(1.0, eval_count / eval_limit))
+            eval_used = int(self._coerce_finite_float(self.eval_count + self.eval_in_flight, default=float("inf")))
+            return max(0.0, min(1.0, eval_used / eval_limit))
 
         seconds_limit = self._coerce_positive_limit(self.budget.seconds)
         if seconds_limit is not None:
@@ -150,6 +169,114 @@ class PipelineState:
             logger.warning("[Budget] Ignoring negative cost update: %r", cost)
             return
         self.total_cost += normalized_cost
+
+    async def try_start_evaluation(self) -> bool:
+        """Reserve one evaluation slot if budget permits."""
+        async with self._gate_lock:
+            if self.budget_exhausted:
+                return False
+            self.eval_in_flight += 1
+            return True
+
+    async def finish_evaluation(self) -> None:
+        """Release one reserved evaluation slot."""
+        async with self._gate_lock:
+            if self.eval_in_flight > 0:
+                self.eval_in_flight -= 1
+
+    def _remaining_dollars(self) -> float | None:
+        dollars_limit = self._coerce_positive_limit(self.budget.dollars)
+        if dollars_limit is None:
+            return None
+        return dollars_limit - self._coerce_finite_float(self.total_cost, default=float("inf"))
+
+    def _llm_serial_threshold(self, dollars_limit: float) -> float:
+        if self._llm_cost_samples > 0:
+            ema = self._llm_cost_ema
+        else:
+            # Reasonable bootstrap until we observe real costs.
+            ema = max(0.01 * dollars_limit, 0.05)
+        return max(3.0 * ema, 0.03 * dollars_limit, 0.05)
+
+    def _should_use_llm_serial_mode(self) -> bool:
+        dollars_limit = self._coerce_positive_limit(self.budget.dollars)
+        if dollars_limit is not None:
+            remaining = self._remaining_dollars()
+            if remaining is not None and remaining <= self._llm_serial_threshold(dollars_limit):
+                return True
+
+        if self.budget.evaluations is not None:
+            eval_limit = int(self._coerce_finite_float(self.budget.evaluations, default=0.0))
+            eval_remaining = eval_limit - (self.eval_count + self.eval_in_flight)
+            if eval_remaining <= 2:
+                return True
+
+        seconds_limit = self._coerce_positive_limit(self.budget.seconds)
+        if seconds_limit is not None:
+            time_remaining = seconds_limit - self.elapsed_seconds
+            if time_remaining <= 15.0:
+                return True
+
+        return False
+
+    def _record_llm_cost(self, cost: object) -> None:
+        normalized_cost = self._coerce_finite_float(cost, default=0.0)
+        if normalized_cost < 0.0:
+            return
+        self.total_cost += normalized_cost
+        if self._llm_cost_samples == 0:
+            self._llm_cost_ema = normalized_cost
+        else:
+            self._llm_cost_ema = (0.8 * self._llm_cost_ema) + (0.2 * normalized_cost)
+        self._llm_cost_samples += 1
+
+    async def acompletion(
+        self,
+        llm_client: Any,
+        *,
+        model: str,
+        messages: list[dict[str, str]],
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        timeout: Optional[float] = None,
+        **extras: Any,
+    ) -> Any:
+        """Global LLM budget/concurrency gate around client acompletion."""
+        async with self._llm_semaphore:
+            async with self._gate_lock:
+                if self.budget_exhausted:
+                    raise BudgetLimitReached("Budget exhausted before LLM call")
+                self.llm_in_flight += 1
+                use_serial_mode = self._should_use_llm_serial_mode()
+
+            try:
+                if use_serial_mode:
+                    async with self._llm_serial_lock:
+                        response = await llm_client.acompletion(
+                            model=model,
+                            messages=messages,
+                            temperature=temperature,
+                            max_tokens=max_tokens,
+                            timeout=timeout,
+                            **extras,
+                        )
+                else:
+                    response = await llm_client.acompletion(
+                        model=model,
+                        messages=messages,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                        timeout=timeout,
+                        **extras,
+                    )
+            finally:
+                async with self._gate_lock:
+                    self.llm_in_flight = max(0, self.llm_in_flight - 1)
+
+            async with self._gate_lock:
+                self._record_llm_cost(getattr(response, "cost", 0.0))
+
+            return response
 
     def record_accept(self) -> None:
         self.eval_count += 1

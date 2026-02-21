@@ -1,9 +1,12 @@
 """Tests for pipeline state bookkeeping and budget semantics."""
 
+import asyncio
 import math
 
+import pytest
+
 from algoforge.config.models import BudgetConfig
-from algoforge.pipeline.state import PipelineState
+from algoforge.pipeline.state import BudgetLimitReached, PipelineState
 
 
 class TestPipelineStateBudget:
@@ -120,3 +123,63 @@ class TestPipelineStateMetrics:
         state.add_cost("invalid")
 
         assert math.isclose(state.total_cost, 1.0)
+
+
+class TestPipelineStateGates:
+    def test_eval_reservation_respects_limit(self):
+        state = PipelineState(BudgetConfig(evaluations=2))
+
+        assert asyncio.run(state.try_start_evaluation()) is True
+        assert asyncio.run(state.try_start_evaluation()) is True
+        assert asyncio.run(state.try_start_evaluation()) is False
+
+        asyncio.run(state.finish_evaluation())
+        assert asyncio.run(state.try_start_evaluation()) is True
+
+    def test_llm_gate_accounts_cost_and_stops_new_calls(self):
+        class _Resp:
+            def __init__(self, content: str, cost: float):
+                self.content = content
+                self.cost = cost
+
+        class _LLM:
+            def __init__(self):
+                self.calls = 0
+
+            async def acompletion(self, **kwargs):
+                self.calls += 1
+                return _Resp(content="ok", cost=0.6)
+
+        state = PipelineState(BudgetConfig(dollars=1.0))
+        state.configure_llm_concurrency(4)
+        llm = _LLM()
+
+        asyncio.run(
+            state.acompletion(
+                llm,
+                model="m",
+                messages=[{"role": "user", "content": "x"}],
+                timeout=1,
+            )
+        )
+        asyncio.run(
+            state.acompletion(
+                llm,
+                model="m",
+                messages=[{"role": "user", "content": "x"}],
+                timeout=1,
+            )
+        )
+
+        assert state.total_cost > 1.0
+        assert llm.calls == 2
+
+        with pytest.raises(BudgetLimitReached):
+            asyncio.run(
+                state.acompletion(
+                    llm,
+                    model="m",
+                    messages=[{"role": "user", "content": "x"}],
+                    timeout=1,
+                )
+            )
