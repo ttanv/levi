@@ -1,13 +1,10 @@
 """Init phase: diverse seed generation and archive initialization."""
 
 import asyncio
-import json
 import logging
 import random
 import time
 import types
-from dataclasses import dataclass
-from typing import Optional
 
 import numpy as np
 
@@ -75,120 +72,6 @@ def _evaluate_code(code: str, score_fn, inputs: list, fn_name: str) -> dict:
         return score_fn(fn, inputs)
     except MemoryError:
         return {"error": "MemoryError during scoring"}
-
-
-@dataclass
-class PredefinedCentroidsResult:
-    """Result from loading predefined centroids."""
-    centroids: np.ndarray
-    raw_feature_data: dict[str, list[float]]
-    bounds: Optional[dict[str, tuple[float, float]]] = None
-
-
-def _load_predefined_centroids(json_path: str, feature_names: list[str]) -> PredefinedCentroidsResult:
-    """Load predefined centroids from JSON.
-
-    Supports two formats:
-    1. New format with explicit bounds:
-       {"bounds": {"feature": [min, max], ...}, "centroids": [...]}
-    2. Legacy format (list of centroid objects):
-       [{"name": ..., "vector": {...}}, ...]
-
-    When bounds are provided, uses deterministic min-max normalization.
-    Otherwise falls back to z-score normalization based on centroid data.
-
-    Returns PredefinedCentroidsResult with centroids_array, raw_feature_data,
-    and optional bounds dict.
-    """
-    with open(json_path) as f:
-        data = json.load(f)
-
-    # Map JSON feature names to extractor feature names
-    feature_map = {
-        "max_loop_nesting": "loop_nesting_max",
-        "loop_nesting_max": "loop_nesting_max",
-        "math_operators": "math_operators",
-        "cyclomatic_complexity": "cyclomatic_complexity",
-        "ast_depth": "ast_depth",
-    }
-
-    # Check for new format with explicit bounds
-    bounds: Optional[dict[str, tuple[float, float]]] = None
-    centroid_entries: list[dict]
-
-    if isinstance(data, dict) and "bounds" in data and "centroids" in data:
-        # New format: {"bounds": {...}, "centroids": [...]}
-        raw_bounds = data["bounds"]
-        bounds = {}
-        for json_feat, (lo, hi) in raw_bounds.items():
-            mapped_feat = feature_map.get(json_feat, json_feat)
-            if mapped_feat in feature_names:
-                bounds[mapped_feat] = (float(lo), float(hi))
-        centroid_entries = data["centroids"]
-    else:
-        # Legacy format: list of centroid objects
-        centroid_entries = data
-
-    # Collect raw values per mapped feature
-    raw_feature_data: dict[str, list[float]] = {f: [] for f in feature_names}
-    for entry in centroid_entries:
-        vec = entry["vector"]
-        for json_feat, val in vec.items():
-            mapped_feat = feature_map.get(json_feat, json_feat)
-            if mapped_feat in raw_feature_data:
-                raw_feature_data[mapped_feat].append(val)
-
-    n_dims = len(feature_names)
-    centroids = []
-
-    if bounds is not None:
-        # Deterministic mode: use provided bounds for min-max normalization
-        for entry in centroid_entries:
-            vec = entry["vector"]
-            normalized = np.full(n_dims, 0.5)
-
-            for json_feat, val in vec.items():
-                mapped_feat = feature_map.get(json_feat, json_feat)
-                if mapped_feat in feature_names and mapped_feat in bounds:
-                    idx = feature_names.index(mapped_feat)
-                    lo, hi = bounds[mapped_feat]
-                    normalized[idx] = np.clip((val - lo) / (hi - lo), 0.0, 1.0)
-
-            centroids.append(normalized)
-    else:
-        # Legacy mode: z-score normalization
-        def zscore_to_01(z: float) -> float:
-            z = max(-10, min(10, z))
-            return 1.0 / (1.0 + np.exp(-z))
-
-        feature_stats = {}
-        for feat, vals in raw_feature_data.items():
-            if vals:
-                mean = np.mean(vals)
-                std = max(np.std(vals, ddof=1), 0.1)
-                feature_stats[feat] = (mean, std)
-            else:
-                feature_stats[feat] = (0.0, 1.0)
-
-        for entry in centroid_entries:
-            vec = entry["vector"]
-            normalized = np.full(n_dims, 0.5)
-
-            for json_feat, val in vec.items():
-                mapped_feat = feature_map.get(json_feat, json_feat)
-                if mapped_feat in feature_names:
-                    idx = feature_names.index(mapped_feat)
-                    mean, std = feature_stats[mapped_feat]
-                    z = (val - mean) / std
-                    normalized[idx] = zscore_to_01(z)
-
-            centroids.append(normalized)
-
-    return PredefinedCentroidsResult(
-        centroids=np.array(centroids),
-        raw_feature_data=raw_feature_data,
-        bounds=bounds,
-    )
 
 
 class Diversifier:
@@ -509,51 +392,8 @@ class Diversifier:
         seed_result: dict = None,
     ) -> None:
         """Phase 3: Build centroids and populate archive using k-means labels directly."""
-        # Check for predefined centroids file
-        if self.config.cvt.predefined_centroids_file:
-            logger.info(f"[Init Phase 3] Loading predefined centroids from {self.config.cvt.predefined_centroids_file}")
-            result = _load_predefined_centroids(
-                self.config.cvt.predefined_centroids_file,
-                extractor.features,
-            )
-
-            # Set up extractor normalization
-            if result.bounds is not None:
-                # Deterministic mode: use fixed bounds from centroids file
-                extractor.set_fixed_bounds(result.bounds)
-                logger.info(f"[Init Phase 3] Using deterministic normalization with fixed bounds")
-            else:
-                # Legacy mode: use z-score stats from centroid data
-                extractor.init_stats_from_data(result.raw_feature_data)
-                logger.info(f"[Init Phase 3] Using adaptive normalization (legacy mode)")
-
-            pool._centroids = result.centroids
-            pool._n_centroids = len(result.centroids)
-            pool._mins = np.zeros(len(extractor.features))
-            pool._maxs = np.ones(len(extractor.features))
-            pool._ranges = np.ones(len(extractor.features))
-            logger.info(f"[Init Phase 3] Loaded {len(result.centroids)} predefined centroids")
-
-            # Add all valid programs from init phases to the archive
-            n_accepted = 0
-            for prog_data in valid_programs:
-                program = Program(code=prog_data["code"], metadata={"primary_score": prog_data["score"]})
-                eval_result = EvaluationResult(
-                    scores=prog_data["result"],
-                    is_valid=True,
-                )
-                accepted, _ = pool.add(program, eval_result)
-                if accepted:
-                    n_accepted += 1
-
-            best_score = max(p["score"] for p in valid_programs) if valid_programs else 0.0
-            logger.info(f"[Init Phase 3] Done: {n_accepted} cells filled, archive size: {pool.size()}, best: {best_score:.1f}, cost: ${self.total_cost:.3f}")
-
-            extractor.set_phase('evolution')
-            return
-
-        if len(behavior_vectors) < 3:
-            logger.warning("[Init Phase 3] Not enough valid programs to build centroids")
+        if not behavior_vectors:
+            logger.warning("[Init Phase 3] No valid programs to build centroids")
             if seed_program and seed_result and "error" not in seed_result:
                 program = Program(code=seed_program, metadata={"primary_score": seed_result.get('score', 0.0)})
                 eval_result = EvaluationResult(
@@ -565,7 +405,7 @@ class Diversifier:
             extractor.set_phase('evolution')
             return
 
-        # Build centroids and get k-means labels for each program
+        # Build centroids from init-generated programs (seed + diverse seeds + variants).
         n_centroids, labels = pool.set_centroids_from_data(
             behavior_vectors,
             n_centroids=self.config.cvt.n_centroids,

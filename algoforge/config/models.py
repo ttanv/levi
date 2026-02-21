@@ -42,7 +42,6 @@ class BudgetConfig(BaseModel):
 class CVTConfig(BaseModel):
     n_centroids: int = 50
     defer_centroids: bool = True
-    predefined_centroids_file: Optional[str] = None  
 
 
 class InitConfig(BaseModel):

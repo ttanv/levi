@@ -395,8 +395,8 @@ class CVTMAPElitesPool:
         Returns:
             Tuple of (number of centroids created, labels array for each input vector)
         """
-        if len(behavior_vectors) < 3:
-            raise ValueError("Need at least 3 behavior vectors to build centroids")
+        if not behavior_vectors:
+            raise ValueError("Need at least 1 behavior vector to build centroids")
 
         data = np.array(behavior_vectors)
         actual_n_centroids = min(n_centroids, len(data))

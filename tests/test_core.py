@@ -20,7 +20,6 @@ class TestProgram:
         assert prog.code == "def solve(x): return x"
         assert prog.id is not None
         assert len(prog.id) == 36  # UUID format
-        assert prog.parents == ()
         assert prog.metadata == {}
         assert isinstance(prog.created_at, datetime)
 
@@ -29,13 +28,11 @@ class TestProgram:
         prog = Program(
             code="def solve(x): return x * 2",
             id="custom-id",
-            parents=("parent-1", "parent-2"),
             metadata={"generation": 5, "island": 2},
         )
 
         assert prog.code == "def solve(x): return x * 2"
         assert prog.id == "custom-id"
-        assert prog.parents == ("parent-1", "parent-2")
         assert prog.metadata == {"generation": 5, "island": 2}
 
     def test_program_is_immutable(self):
