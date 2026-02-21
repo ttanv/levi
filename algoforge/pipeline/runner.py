@@ -344,7 +344,7 @@ class PipelineRunner:
     def _build_result(self) -> AlgoforgeResult:
         best = self.pool.best()
         return AlgoforgeResult(
-            best_program=best.code if best else "",
+            best_program=best.content if best else "",
             best_score=self.pool.get_stats().get("best_score", 0.0),
             total_evaluations=self.state.eval_count,
             total_cost=self.state.total_cost,

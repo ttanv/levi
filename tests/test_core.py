@@ -14,10 +14,10 @@ class TestProgram:
     """Tests for Program dataclass."""
 
     def test_program_creation_minimal(self):
-        """Program can be created with just code."""
-        prog = Program(code="def solve(x): return x")
+        """Program can be created with just content."""
+        prog = Program(content="def solve(x): return x")
 
-        assert prog.code == "def solve(x): return x"
+        assert prog.content == "def solve(x): return x"
         assert prog.id is not None
         assert len(prog.id) == 36  # UUID format
         assert prog.metadata == {}
@@ -26,32 +26,32 @@ class TestProgram:
     def test_program_creation_full(self):
         """Program can be created with all fields."""
         prog = Program(
-            code="def solve(x): return x * 2",
+            content="def solve(x): return x * 2",
             id="custom-id",
             metadata={"generation": 5, "island": 2},
         )
 
-        assert prog.code == "def solve(x): return x * 2"
+        assert prog.content == "def solve(x): return x * 2"
         assert prog.id == "custom-id"
         assert prog.metadata == {"generation": 5, "island": 2}
 
     def test_program_is_immutable(self):
         """Program is frozen (immutable)."""
-        prog = Program(code="def solve(x): return x")
+        prog = Program(content="def solve(x): return x")
 
         with pytest.raises(AttributeError):
-            prog.code = "new code"
+            prog.content = "new content"
 
     def test_program_unique_ids(self):
         """Each program gets a unique ID."""
-        prog1 = Program(code="def solve(x): return x")
-        prog2 = Program(code="def solve(x): return x")
+        prog1 = Program(content="def solve(x): return x")
+        prog2 = Program(content="def solve(x): return x")
 
         assert prog1.id != prog2.id
 
     def test_program_not_hashable_due_to_mutable_fields(self):
         """Programs are not hashable because metadata dict is mutable."""
-        prog = Program(code="def solve(x): return x")
+        prog = Program(content="def solve(x): return x")
 
         # Program has mutable dict field (metadata), so it's not hashable
         # even though it's a frozen dataclass
@@ -60,7 +60,7 @@ class TestProgram:
 
     def test_program_can_be_indexed_by_id(self):
         """Programs can be indexed by their unique id in dicts."""
-        prog = Program(code="def solve(x): return x")
+        prog = Program(content="def solve(x): return x")
 
         # Use id as key instead
         d = {prog.id: prog}
@@ -149,8 +149,8 @@ class TestProgramEvaluationIntegration:
 
     def test_multiple_programs_multiple_results(self):
         """Multiple programs can have separate results."""
-        prog1 = Program(code="def solve(x): return x")
-        prog2 = Program(code="def solve(x): return x * 2")
+        prog1 = Program(content="def solve(x): return x")
+        prog2 = Program(content="def solve(x): return x * 2")
 
         result1 = EvaluationResult(scores={"score": 0.5})
         result2 = EvaluationResult(scores={"score": 0.8})

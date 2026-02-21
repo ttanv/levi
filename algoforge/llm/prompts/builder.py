@@ -68,7 +68,7 @@ class PromptBuilder:
         """Add parent programs as v1, v2, v3, etc."""
         for i, p in enumerate(parents):
             label = f"v{i + 1}"
-            content = f"Score: {p.score}\n```python\n{p.program.code}\n```"
+            content = f"Score: {p.score}\n```python\n{p.program.content}\n```"
             self._sections.append(PromptSection(label, content, priority + i))
         return self
 

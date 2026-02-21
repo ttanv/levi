@@ -19,7 +19,7 @@ class Program:
     The fundamental unit of evolution.
     """
 
-    code: str
+    content: str
     id: str = field(default_factory=_generate_id)
     metadata: MetadataDict = field(default_factory=dict)
     created_at: datetime = field(default_factory=datetime.now)
