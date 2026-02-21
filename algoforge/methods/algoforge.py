@@ -173,47 +173,13 @@ async def _run_async(config: AlgoforgeConfig, resume_snapshot: dict | None = Non
         init_score_history = []
         if resume_snapshot is not None:
             init_cost = _restore_from_snapshot(pool, extractor, resume_snapshot)
-        elif config.init.enabled:
+        else:
+            if not config.init.enabled:
+                logger.info("[AlgoForge] init.enabled=False ignored; running data-driven init")
             logger.info("[AlgoForge] Running init phase")
             diversifier = Diversifier(config, executor, start_time=run_start_time)
             init_cost, init_score_history = await diversifier.run(pool, config.seed_program, seed_result, extractor)
             logger.info(f"[AlgoForge] Init phase complete, cost: ${init_cost:.3f}")
-        else:
-            # Load predefined centroids if configured
-            if config.cvt.predefined_centroids_file:
-                from ..init.diversifier import _load_predefined_centroids
-                import numpy as np
-                logger.info(f"[AlgoForge] Loading predefined centroids from {config.cvt.predefined_centroids_file}")
-                result = _load_predefined_centroids(
-                    config.cvt.predefined_centroids_file,
-                    extractor.features,
-                )
-
-                # Set up extractor normalization
-                if result.bounds is not None:
-                    # Deterministic mode: use fixed bounds from centroids file
-                    extractor.set_fixed_bounds(result.bounds)
-                    logger.info(f"[AlgoForge] Using deterministic normalization with fixed bounds")
-                else:
-                    # Legacy mode: use z-score stats from centroid data
-                    extractor.init_stats_from_data(result.raw_feature_data)
-                    logger.info(f"[AlgoForge] Using adaptive normalization (legacy mode)")
-
-                pool._centroids = result.centroids
-                pool._n_centroids = len(result.centroids)
-                pool._mins = np.zeros(len(extractor.features))
-                pool._maxs = np.ones(len(extractor.features))
-                pool._ranges = np.ones(len(extractor.features))
-                logger.info(f"[AlgoForge] Loaded {len(result.centroids)} predefined centroids")
-
-            # Just add seed to archive
-            program = Program(code=config.seed_program)
-            eval_result = EvaluationResult(
-                scores=seed_result,
-                is_valid=True,
-            )
-            pool.add(program, eval_result)
-            extractor.set_phase('evolution')
 
         # Run main pipeline
         logger.info("[AlgoForge] Starting evolution pipeline")

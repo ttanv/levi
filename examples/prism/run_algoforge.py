@@ -87,7 +87,7 @@ config = AlgoforgeConfig(
         SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[2], weight=1.0, temperature=1.0),
         SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[2], weight=1.0, temperature=1.2),
     ],
-    cvt=CVTConfig(n_centroids=40, defer_centroids=True, predefined_centroids_file="/home/ttanveer/algoforge/examples/prism/centroids.json"),
+    cvt=CVTConfig(n_centroids=40, defer_centroids=True),
     init=InitConfig(
         enabled=True,
         n_diverse_seeds=3,
