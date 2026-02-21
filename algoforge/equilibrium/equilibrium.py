@@ -325,13 +325,7 @@ Output ONLY complete, runnable Python code in a ```python block.
             return stats
 
         stats["paradigm_generated"] = True
-
-        # Print paradigm shift code
-        print("\n" + "="*60)
-        print("[PE] PARADIGM SHIFT CODE:")
-        print("="*60)
-        print(paradigm_code)
-        print("="*60 + "\n")
+        logger.debug("[PE] Paradigm shift code generated (%d chars)", len(paradigm_code))
 
         # Step 4: Evaluate paradigm shift solution
         try:

@@ -6,6 +6,12 @@ from typing import Optional
 import httpx
 
 from .base import LLMProvider, CompletionRequest, CompletionResponse
+from ..exceptions import (
+    LLMAuthenticationError,
+    LLMConnectionError,
+    LLMResponseError,
+    LLMTimeoutError,
+)
 
 
 class OpenAICompatibleProvider(LLMProvider):
@@ -40,6 +46,9 @@ class OpenAICompatibleProvider(LLMProvider):
         return model in self._endpoints
 
     async def acompletion(self, request: CompletionRequest) -> CompletionResponse:
+        if request.model not in self._endpoints:
+            raise LLMResponseError(f"Local endpoint missing for model '{request.model}'")
+
         base_url = self._endpoints[request.model]
         url = f"{base_url}/chat/completions"
 
@@ -56,13 +65,38 @@ class OpenAICompatibleProvider(LLMProvider):
         payload.update(request.extras)
 
         client = self._get_client()
-        response = await client.post(
-            url,
-            json=payload,
-            timeout=request.timeout,
-        )
-        response.raise_for_status()
-        data = response.json()
+        try:
+            response = await client.post(
+                url,
+                json=payload,
+                timeout=request.timeout,
+            )
+        except httpx.TimeoutException as e:
+            raise LLMTimeoutError(f"[{request.model}] Local request timed out: {e}") from e
+        except httpx.NetworkError as e:
+            raise LLMConnectionError(f"[{request.model}] Local network error: {e}") from e
+        except httpx.HTTPError as e:
+            raise LLMConnectionError(f"[{request.model}] Local HTTP error: {e}") from e
+
+        if response.status_code in (401, 403):
+            raise LLMAuthenticationError(
+                f"[{request.model}] Local authentication failed ({response.status_code})"
+            )
+        if response.status_code >= 400:
+            body_preview = response.text[:300]
+            raise LLMConnectionError(
+                f"[{request.model}] Local endpoint returned {response.status_code}: {body_preview}"
+            )
+
+        try:
+            data = response.json()
+        except Exception as e:
+            raise LLMResponseError(f"[{request.model}] Invalid JSON response: {e}") from e
+
+        try:
+            content = data["choices"][0]["message"]["content"]
+        except Exception as e:
+            raise LLMResponseError(f"[{request.model}] Unexpected response schema") from e
 
         usage = data.get("usage", {})
         prompt_tokens = usage.get("prompt_tokens", 0)
@@ -70,7 +104,7 @@ class OpenAICompatibleProvider(LLMProvider):
         cost = self._calculate_cost(request.model, prompt_tokens, completion_tokens)
 
         return CompletionResponse(
-            content=data["choices"][0]["message"]["content"],
+            content=content,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             total_tokens=usage.get("total_tokens", 0),

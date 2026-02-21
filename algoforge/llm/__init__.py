@@ -1,6 +1,5 @@
 """LLM integration for AlgoForge."""
 
-from .client import LLMClient, LLMConfig, LLMResponse, ModelWeight
 from .prompts import PromptBuilder, ProgramWithScore, OutputMode
 from .unified_client import UnifiedLLMClient, UnifiedLLMClientConfig, create_unified_client
 from .context import get_llm_client, set_llm_client, clear_llm_client
@@ -14,11 +13,6 @@ from .providers import (
 )
 
 __all__ = [
-    # Legacy client (still works)
-    'LLMClient',
-    'LLMConfig',
-    'LLMResponse',
-    'ModelWeight',
     # Prompt utilities
     'PromptBuilder',
     'ProgramWithScore',
