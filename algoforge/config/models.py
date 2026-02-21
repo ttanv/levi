@@ -18,11 +18,6 @@ class LLMProviderConfig(BaseModel):
     retry_delay: float = 1.0
     retry_backoff: float = 2.0
 
-    # Batching configuration for local models (improves vLLM throughput)
-    batch_size: int = 8  # Max requests to batch together
-    batch_max_wait_ms: float = 50.0  # Max time to wait for batch to fill
-
-
 class SamplerModelPair(BaseModel):
     sampler: str
     model: str
@@ -78,13 +73,6 @@ class BehaviorConfig(BaseModel):
     model_config = {"arbitrary_types_allowed": True}
 
 
-class CheckpointConfig(BaseModel):
-    enabled: bool = False
-    interval_seconds: float = 600.0
-    interval_generations: Optional[int] = None
-    path: Optional[str] = None
-
-
 class CascadeConfig(BaseModel):
     enabled: bool = True
     quick_inputs: list[Any] = Field(default_factory=list)
@@ -135,13 +123,10 @@ class AlgoforgeConfig(BaseModel):
     init: InitConfig = Field(default_factory=InitConfig)
     meta_advice: MetaAdviceConfig = Field(default_factory=MetaAdviceConfig)
     behavior: BehaviorConfig = Field(default_factory=BehaviorConfig)
-    checkpoint: CheckpointConfig = Field(default_factory=CheckpointConfig)
     pipeline: PipelineConfig = Field(default_factory=PipelineConfig)
     cascade: CascadeConfig = Field(default_factory=CascadeConfig)
     punctuated_equilibrium: PunctuatedEquilibriumConfig = Field(default_factory=PunctuatedEquilibriumConfig)
 
-    n_islands: int = 1
-    migration_interval: Optional[int] = None
     output_dir: Optional[str] = None  # Directory for snapshots
 
     # LLM provider configuration (new way)
@@ -178,7 +163,6 @@ class AlgoforgeResult(BaseModel):
     total_cost: float
     archive_size: int
     runtime_seconds: float
-    per_sampler_stats: Optional[dict] = None
     score_history: Optional[list[float]] = None
 
     model_config = {"arbitrary_types_allowed": True}

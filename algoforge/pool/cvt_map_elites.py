@@ -792,7 +792,6 @@ class CVTMAPElitesPool:
                 "primary_score": elite.result.primary_score,
                 "behavior": elite.behavior.values,
                 "metadata": elite.program.metadata,
-                "parents": [str(p) for p in elite.program.parents] if elite.program.parents else [],
                 "created_at": elite.program.created_at.isoformat() if elite.program.created_at else None,
             }
             elites_data.append(elite_data)

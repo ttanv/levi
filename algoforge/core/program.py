@@ -21,6 +21,5 @@ class Program:
 
     code: str
     id: str = field(default_factory=_generate_id)
-    parents: tuple[str, ...] = field(default_factory=tuple)
     metadata: MetadataDict = field(default_factory=dict)
     created_at: datetime = field(default_factory=datetime.now)
