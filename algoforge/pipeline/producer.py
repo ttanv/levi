@@ -8,7 +8,7 @@ from typing import Optional
 
 from ..config import AlgoforgeConfig
 from ..pool import CVTMAPElitesPool
-from ..llm import PromptBuilder, ProgramWithScore, OutputMode, get_llm_client, LLMRetryExhaustedError
+from ..llm import PromptBuilder, ProgramWithScore, OutputMode, get_llm_client
 from ..utils import extract_code
 from .state import PipelineState, BudgetLimitReached
 
@@ -94,9 +94,6 @@ async def llm_producer(
                     timeout=300,
                 )
                 content = response.content
-            except LLMRetryExhaustedError as e:
-                logger.warning(f"[LLM-{worker_id}] [{model}] Error after retries: {e.last_error}")
-                continue
             except BudgetLimitReached:
                 stop_event.set()
                 break
