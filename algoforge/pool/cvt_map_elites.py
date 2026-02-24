@@ -820,6 +820,12 @@ class CVTMAPElitesPool:
                 "best_score": self._best_score,
                 "generation": self._generation,
                 "feature_names": self._feature_names,
+                "centroids": self._centroids.tolist() if self._centroids is not None else None,
+                "normalization": {
+                    "mins": self._mins.tolist() if self._mins is not None else None,
+                    "maxs": self._maxs.tolist() if self._maxs is not None else None,
+                    "ranges": self._ranges.tolist() if self._ranges is not None else None,
+                },
             },
             "elites": elites_data,
             "sampler_stats": sampler_stats,

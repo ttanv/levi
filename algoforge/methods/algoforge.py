@@ -9,7 +9,7 @@ import litellm
 from ..config import AlgoforgeConfig, AlgoforgeResult
 from ..core import Program, EvaluationResult
 from ..pool import CVTMAPElitesPool
-from ..behavior import BehaviorExtractor
+from ..behavior import BehaviorExtractor, FeatureVector
 from ..pipeline import PipelineRunner
 from ..pipeline.state import PipelineState
 from ..init import Diversifier
@@ -65,28 +65,53 @@ def _restore_from_snapshot(
     """
     import numpy as np
 
+    metadata = snapshot["metadata"]
     elites = snapshot.get("elites", [])
     run_state = snapshot.get("run_state", {})
     resumed_cost = run_state.get("total_cost", 0.0)
 
     logger.info(f"[Resume] Restoring {len(elites)} elites, prior cost: ${resumed_cost:.3f}")
 
-    # Generate centroids if deferred (init would normally do this)
-    if pool._centroids is None:
-        pool._centroids = pool._init_cvt_centroids()
-        pool._mins = np.zeros(pool._n_dims)
-        pool._maxs = np.ones(pool._n_dims)
-        pool._ranges = np.ones(pool._n_dims)
+    centroids_arr = np.asarray(metadata["centroids"], dtype=float)
+    if centroids_arr.ndim != 2 or centroids_arr.shape[0] <= 0 or centroids_arr.shape[1] != pool._n_dims:
+        raise RuntimeError(
+            f"Invalid centroid matrix in snapshot: expected (N,{pool._n_dims}), "
+            f"got shape {centroids_arr.shape}"
+        )
+    pool._centroids = centroids_arr
+    pool._n_centroids = centroids_arr.shape[0]
+
+    normalization = metadata["normalization"]
+    mins_arr = np.asarray(normalization["mins"], dtype=float)
+    maxs_arr = np.asarray(normalization["maxs"], dtype=float)
+    ranges_arr = np.asarray(normalization["ranges"], dtype=float)
+    if mins_arr.shape != (pool._n_dims,) or maxs_arr.shape != (pool._n_dims,) or ranges_arr.shape != (pool._n_dims,):
+        raise RuntimeError(
+            f"Invalid normalization bounds in snapshot: expected vectors of length {pool._n_dims}"
+        )
+    pool._mins = mins_arr
+    pool._maxs = maxs_arr
+    pool._ranges = ranges_arr
 
     # Restore elites into pool
     restored = 0
     for elite_data in elites:
-        program = Program(content=elite_data["code"])
+        program = Program(
+            content=elite_data["code"],
+            metadata=elite_data.get("metadata", {}),
+        )
         eval_result = EvaluationResult(
             scores=elite_data["scores"],
             is_valid=True,
         )
-        accepted, _ = pool.add(program, eval_result)
+        behavior_values = elite_data["behavior"]
+        if not isinstance(behavior_values, dict):
+            raise RuntimeError("Invalid elite behavior in snapshot (expected dict)")
+        behavior = FeatureVector({k: float(v) for k, v in behavior_values.items()})
+        accepted = bool(pool.add_at_cell(int(elite_data["cell_index"]), program, eval_result, behavior))
+        if not accepted:
+            raise RuntimeError(f"Failed to restore elite for cell {elite_data['cell_index']}")
+
         if accepted:
             restored += 1
 
