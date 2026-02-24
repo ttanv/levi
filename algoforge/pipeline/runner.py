@@ -18,6 +18,8 @@ from .consumer import eval_consumer
 
 logger = logging.getLogger(__name__)
 
+_MIN_STALL_TIMEOUT_SECONDS = 120.0
+
 
 class PipelineRunner:
     def __init__(
@@ -35,7 +37,8 @@ class PipelineRunner:
         self.pool = pool
         self.executor = executor
         self.archive_lock = asyncio.Lock()
-        self.code_queue = asyncio.Queue()
+        queue_maxsize = max(1, config.pipeline.n_eval_processes * 2)
+        self.code_queue = asyncio.Queue(maxsize=queue_maxsize)
         self.state = state or PipelineState(config.budget)
         if start_time is not None:
             self.state.start_time = start_time
@@ -144,10 +147,40 @@ class PipelineRunner:
         return self._build_result()
 
     async def _wait_for_completion(self) -> None:
+        loop = asyncio.get_running_loop()
+        stall_timeout = max(
+            _MIN_STALL_TIMEOUT_SECONDS,
+            float(self.config.pipeline.eval_timeout) * 2.0,
+        )
+        last_progress_at = loop.time()
+        last_eval_count = self.state.eval_count
+
         while True:
             if self.state.budget_exhausted:
                 break
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(0.5)
+
+            current_eval_count = self.state.eval_count
+            queue_size = self.code_queue.qsize()
+            has_pending_work = (
+                queue_size > 0
+                or self.state.llm_in_flight > 0
+                or self.state.eval_in_flight > 0
+            )
+
+            if current_eval_count != last_eval_count or has_pending_work:
+                last_eval_count = current_eval_count
+                last_progress_at = loop.time()
+                continue
+
+            idle_seconds = loop.time() - last_progress_at
+            if idle_seconds >= stall_timeout:
+                logger.warning(
+                    "[Pipeline] Stalled for %.1fs with no pending work; stopping early",
+                    idle_seconds,
+                )
+                self.stop_event.set()
+                break
 
     def _sync_best_score_from_pool(self) -> None:
         """Keep pipeline state best score aligned with archive best score."""
