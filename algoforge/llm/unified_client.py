@@ -19,23 +19,6 @@ from .exceptions import (
 logger = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# Request / Response dataclasses (moved from providers/base.py)
-# ---------------------------------------------------------------------------
-
-@dataclass
-class CompletionRequest:
-    """Request for an LLM completion."""
-
-    model: str
-    messages: list[dict[str, str]]
-    temperature: float = 0.8
-    max_tokens: int = 16384
-    stop: Optional[list[str]] = None
-    timeout: float = 300.0
-    extras: dict[str, Any] = field(default_factory=dict)
-
-
 @dataclass
 class CompletionResponse:
     """Response from an LLM completion."""

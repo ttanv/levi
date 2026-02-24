@@ -5,11 +5,10 @@ from .unified_client import (
     UnifiedLLMClient,
     UnifiedLLMClientConfig,
     create_unified_client,
-    CompletionRequest,
     CompletionResponse,
 )
 from .context import get_llm_client, set_llm_client, clear_llm_client
-from .exceptions import LLMError, LLMRetryExhaustedError
+from .exceptions import LLMError
 
 __all__ = [
     # Prompt utilities
@@ -20,7 +19,6 @@ __all__ = [
     'UnifiedLLMClient',
     'UnifiedLLMClientConfig',
     'create_unified_client',
-    'CompletionRequest',
     'CompletionResponse',
     # Context management
     'get_llm_client',
@@ -28,5 +26,4 @@ __all__ = [
     'clear_llm_client',
     # Exceptions
     'LLMError',
-    'LLMRetryExhaustedError',
 ]

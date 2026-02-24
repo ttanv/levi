@@ -13,7 +13,6 @@ from algoforge.llm.exceptions import (
     LLMTimeoutError,
 )
 from algoforge.llm.unified_client import (
-    CompletionRequest,
     CompletionResponse,
     UnifiedLLMClient,
     UnifiedLLMClientConfig,
