@@ -8,6 +8,7 @@ change separated by long periods of stasis. This module implements periodic
 
 import asyncio
 import logging
+import random
 from typing import Optional
 
 import numpy as np
@@ -260,10 +261,10 @@ Output ONLY complete, runnable Python code in a ```python block.
             logger.info(f"[PE] Cluster {cluster_id} rep: score={elite.result.primary_score:.1f}")
 
         # Step 3: Generate paradigm shift solution
-        heavy_model = self.pe_config.heavy_model
-        if not heavy_model:
-            # Default to first sampler model
-            heavy_model = self.config.sampler_model_pairs[0].model
+        heavy_models = self.pe_config.heavy_models
+        if not heavy_models:
+            heavy_models = [self.config.sampler_model_pairs[0].model]
+        heavy_model = random.choice(heavy_models)
 
         prompt = self._build_paradigm_shift_prompt(representatives, n_evaluations, budget_progress)
 

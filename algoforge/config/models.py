@@ -2,22 +2,6 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from typing import Callable, Optional, Any
 
 
-class LLMProviderConfig(BaseModel):
-    """Configuration for the LLM provider abstraction."""
-
-    # Model -> endpoint URL for local models (replaces api_bases)
-    local_endpoints: dict[str, str] = Field(default_factory=dict)
-
-    # Model info registry - same format as litellm.register_model()
-    # Used for cost calculation (local models) and passed to litellm (cloud models)
-    # Example: {"model_name": {"input_cost_per_token": 0.001, "output_cost_per_token": 0.002}}
-    model_info: dict[str, dict] = Field(default_factory=dict)
-
-    # Retry configuration
-    max_retries: int = 3
-    retry_delay: float = 1.0
-    retry_backoff: float = 2.0
-
 class SamplerModelPair(BaseModel):
     sampler: str
     model: str
@@ -84,18 +68,18 @@ class CascadeConfig(BaseModel):
 class PunctuatedEquilibriumConfig(BaseModel):
     """Configuration for Punctuated Equilibrium feature.
 
-    Periodically triggers paradigm-shift generation using a heavy model,
+    Periodically triggers paradigm-shift generation using heavy model(s),
     creating fundamentally new solutions to escape local optima.
     """
     enabled: bool = False
     interval: int = 50
-    n_clusters: int = 3  
-    n_variants: int = 5  
-    heavy_model: Optional[str] = None  
-    variant_models: Optional[list[str]] = None  
-    behavior_noise: float = 0.05  
+    n_clusters: int = 3
+    n_variants: int = 5
+    heavy_models: Optional[list[str]] = None
+    variant_models: Optional[list[str]] = None
+    behavior_noise: float = 0.05
     temperature: float = 1.0
-    reasoning_effort: Optional[str] = None  
+    reasoning_effort: Optional[str] = None
 
 
 class PipelineConfig(BaseModel):
@@ -103,10 +87,10 @@ class PipelineConfig(BaseModel):
     n_eval_processes: int = 4
     eval_timeout: float = 60.0
     temperature: float = 0.8
-    max_tokens: int = 4096
+    max_tokens: int = 16384
     n_parents: int = 1
     n_inspirations: int = 2
-    output_mode: str = "full"  
+    output_mode: str = "full"
 
 
 class AlgoforgeConfig(BaseModel):
@@ -119,7 +103,22 @@ class AlgoforgeConfig(BaseModel):
     # For prompt support, generalize to Callable[[str | Callable, list], dict].
     score_fn: Callable[[Callable, list], dict]
     budget: BudgetConfig
-    sampler_model_pairs: list[SamplerModelPair]
+
+    # Core model config — the simple API.
+    # Both accept a single string or a list of strings.
+    paradigm_models: str | list[str] = "openai/gpt-4o"
+    mutation_models: str | list[str] = "openai/gpt-4o-mini"
+
+    # Optional: for local model routing (auto-registers with litellm at startup)
+    local_endpoints: dict[str, str] = Field(default_factory=dict)
+
+    # Optional: for cost tracking on custom/local models (auto-registers with litellm).
+    # Without this, dollar-budget tracking won't work for unregistered models.
+    model_info: dict[str, dict] = Field(default_factory=dict)
+
+    # Auto-generated from mutation_models if not provided.
+    # Pass explicitly to override (e.g. for custom sampler/temperature combos).
+    sampler_model_pairs: list[SamplerModelPair] = Field(default_factory=list)
 
     # Optional with defaults
     cvt: CVTConfig = Field(default_factory=CVTConfig)
@@ -132,20 +131,47 @@ class AlgoforgeConfig(BaseModel):
 
     output_dir: Optional[str] = None  # Directory for snapshots
 
-    # LLM provider configuration (new way)
-    llm: LLMProviderConfig = Field(default_factory=LLMProviderConfig)
-
     # Prompt overrides from DSPy optimization
     prompt_overrides: dict[str, Any] = Field(default_factory=dict)
 
     model_config = {"arbitrary_types_allowed": True}
 
-    @field_validator('sampler_model_pairs')
-    @classmethod
-    def must_have_at_least_one(cls, v: list[SamplerModelPair]) -> list[SamplerModelPair]:
-        if not v:
-            raise ValueError('must have at least one sampler_model_pair')
-        return v
+    @model_validator(mode='after')
+    def _auto_wire_models(self) -> 'AlgoforgeConfig':
+        # 1. Coerce str → list[str]
+        if isinstance(self.paradigm_models, str):
+            self.paradigm_models = [self.paradigm_models]
+        if isinstance(self.mutation_models, str):
+            self.mutation_models = [self.mutation_models]
+
+        # 2. Auto-generate sampler_model_pairs if not provided
+        if not self.sampler_model_pairs:
+            pairs = []
+            for model in self.mutation_models:
+                for temp in [0.3, 0.7, 1.0, 1.2]:
+                    pairs.append(SamplerModelPair(
+                        sampler="softmax", model=model, weight=1.0, temperature=temp,
+                    ))
+            self.sampler_model_pairs = pairs
+
+        if not self.sampler_model_pairs:
+            raise ValueError('must have at least one sampler_model_pair (provide mutation_models or sampler_model_pairs)')
+
+        # 3. Auto-fill None model fields in sub-configs
+        if self.init.diversity_model is None:
+            self.init.diversity_model = self.paradigm_models[0]
+        if self.init.variant_models is None:
+            self.init.variant_models = list(self.mutation_models)
+
+        if self.meta_advice.model is None:
+            self.meta_advice.model = self.mutation_models[0]
+
+        if self.punctuated_equilibrium.heavy_models is None:
+            self.punctuated_equilibrium.heavy_models = list(self.paradigm_models)
+        if self.punctuated_equilibrium.variant_models is None:
+            self.punctuated_equilibrium.variant_models = list(self.mutation_models)
+
+        return self
 
 
 class AlgoforgeResult(BaseModel):

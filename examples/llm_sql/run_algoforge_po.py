@@ -24,7 +24,7 @@ from algoforge import (
     run, AlgoforgeConfig, BudgetConfig, SamplerModelPair,
     InitConfig, MetaAdviceConfig, PipelineConfig, CVTConfig, BehaviorConfig
 )
-from algoforge.config.models import PunctuatedEquilibriumConfig, LLMProviderConfig
+from algoforge.config.models import PunctuatedEquilibriumConfig
 
 # --- Constants ---
 OPTIMIZED_PROMPTS_FILE = Path(__file__).parent / "optimized_prompts.json"
@@ -168,17 +168,15 @@ def build_config_with_optimized_prompts(optimized: dict) -> AlgoforgeConfig:
             interval=10,
             n_clusters=3,
             n_variants=3,
-            heavy_model=PARADIGM_SHIFT_MODEL,
+            heavy_models=[PARADIGM_SHIFT_MODEL],
             variant_models=LIGHT_MODELS,
             behavior_noise=0.0,
             temperature=0.7,
             reasoning_effort="low",
         ),
         output_dir=run_dir,
-        llm=LLMProviderConfig(
-            local_endpoints=LOCAL_ENDPOINTS,
-            model_info=MODEL_INFO,
-        ),
+        local_endpoints=LOCAL_ENDPOINTS,
+        model_info=MODEL_INFO,
         prompt_overrides=prompt_overrides,
     )
 

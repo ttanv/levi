@@ -10,10 +10,8 @@ Example:
         seed_program="def solve(items): ...",
         inputs=[...],
         score_fn=lambda fn, inputs: {'score': ...},
-        sampler_model_pairs=[
-            af.SamplerModelPair(sampler="weighted", model="gpt-4o-mini", weight=0.8),
-            af.SamplerModelPair(sampler="weighted", model="gpt-4o", weight=0.2),
-        ],
+        paradigm_models="openai/gpt-4o",
+        mutation_models="openai/gpt-4o-mini",
         budget=af.BudgetConfig(dollars=10.0),
     )
 
@@ -46,6 +44,7 @@ from .config import (
     BehaviorConfig,
     CascadeConfig,
     PipelineConfig,
+    PunctuatedEquilibriumConfig,
 )
 
 # Methods
@@ -81,6 +80,7 @@ __all__ = [
     'BehaviorConfig',
     'CascadeConfig',
     'PipelineConfig',
+    'PunctuatedEquilibriumConfig',
     # Methods
     'run',
 ]
