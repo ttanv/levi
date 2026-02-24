@@ -11,6 +11,7 @@ from .models import (
     BehaviorConfig,
     CascadeConfig,
     PipelineConfig,
+    PunctuatedEquilibriumConfig,
     AlgoforgeConfig,
     AlgoforgeResult,
 )
@@ -24,6 +25,7 @@ __all__ = [
     "BehaviorConfig",
     "CascadeConfig",
     "PipelineConfig",
+    "PunctuatedEquilibriumConfig",
     "AlgoforgeConfig",
     "AlgoforgeResult",
 ]

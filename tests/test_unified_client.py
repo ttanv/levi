@@ -1,124 +1,181 @@
-"""Tests for unified LLM client routing, validation, and retry behavior."""
+"""Tests for unified LLM client."""
 
 import asyncio
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from algoforge.llm.exceptions import (
-    LLMConfigurationError,
+    LLMAuthenticationError,
     LLMConnectionError,
+    LLMRateLimitError,
     LLMResponseError,
+    LLMTimeoutError,
 )
-from algoforge.llm.providers.base import CompletionRequest, CompletionResponse, LLMProvider
 from algoforge.llm.unified_client import (
+    CompletionRequest,
+    CompletionResponse,
     UnifiedLLMClient,
     UnifiedLLMClientConfig,
+    _wrap_litellm_error,
     create_unified_client,
 )
 
 
-class ScriptedProvider(LLMProvider):
-    def __init__(self, outcomes):
-        self.outcomes = list(outcomes)
-        self.calls = 0
-
-    async def acompletion(self, request: CompletionRequest) -> CompletionResponse:
-        self.calls += 1
-        if not self.outcomes:
-            raise RuntimeError("No scripted outcome left")
-        outcome = self.outcomes.pop(0)
-        if isinstance(outcome, Exception):
-            raise outcome
-        return outcome
-
-    def completion(self, request: CompletionRequest) -> CompletionResponse:
-        return asyncio.run(self.acompletion(request))
-
-    def supports_model(self, model: str) -> bool:
-        return True
-
-
-def _ok_response(model: str) -> CompletionResponse:
-    return CompletionResponse(
-        content="ok",
-        prompt_tokens=10,
-        completion_tokens=5,
-        total_tokens=15,
-        model=model,
-        cost=0.123,
-    )
-
-
-def test_invalid_local_endpoint_url_fails_fast():
-    with pytest.raises(LLMConfigurationError, match="Invalid endpoint URL"):
-        UnifiedLLMClient(
-            UnifiedLLMClientConfig(
-                local_endpoints={"Qwen/Qwen3-30B": "localhost:8001/v1"},
-            )
+class TestCompletionResponse:
+    def test_construction(self):
+        resp = CompletionResponse(
+            content="hello",
+            prompt_tokens=10,
+            completion_tokens=5,
+            total_tokens=15,
+            model="test/model",
+            cost=0.001,
         )
+        assert resp.content == "hello"
+        assert resp.cost == 0.001
 
 
-def test_non_retryable_error_does_not_retry():
-    client = UnifiedLLMClient(UnifiedLLMClientConfig(max_retries=3, retry_delay=0.001))
-    provider = ScriptedProvider([LLMResponseError("bad schema"), _ok_response("openrouter/x")])
-    client._cloud_provider = provider  # type: ignore[attr-defined]
+class TestWrapLitellmError:
+    def test_timeout_error(self):
+        err = _wrap_litellm_error("m", Exception("Request timeout"))
+        assert isinstance(err, LLMTimeoutError)
 
-    with pytest.raises(LLMResponseError):
-        client.completion(
-            model="openrouter/x",
-            messages=[{"role": "user", "content": "hello"}],
-        )
+    def test_rate_limit_error(self):
+        err = _wrap_litellm_error("m", Exception("Rate limit exceeded"))
+        assert isinstance(err, LLMRateLimitError)
 
-    assert provider.calls == 1
+    def test_auth_error(self):
+        err = _wrap_litellm_error("m", Exception("Authentication failed"))
+        assert isinstance(err, LLMAuthenticationError)
 
+    def test_connection_error(self):
+        err = _wrap_litellm_error("m", Exception("Connection refused"))
+        assert isinstance(err, LLMConnectionError)
 
-def test_retryable_error_retries_then_succeeds():
-    client = UnifiedLLMClient(
-        UnifiedLLMClientConfig(max_retries=3, retry_delay=0.001, retry_backoff=1.0)
-    )
-    provider = ScriptedProvider(
-        [
-            LLMConnectionError("temporary network"),
-            LLMConnectionError("temporary network"),
-            _ok_response("openrouter/x"),
-        ]
-    )
-    client._cloud_provider = provider  # type: ignore[attr-defined]
-
-    response = client.completion(
-        model="openrouter/x",
-        messages=[{"role": "user", "content": "hello"}],
-    )
-
-    assert response.content == "ok"
-    assert provider.calls == 3
+    def test_generic_error(self):
+        err = _wrap_litellm_error("m", Exception("Something unknown"))
+        assert isinstance(err, LLMResponseError)
 
 
-def test_local_route_uses_local_provider():
-    client = UnifiedLLMClient(
-        UnifiedLLMClientConfig(
-            local_endpoints={"Qwen/Qwen3-30B-A3B-Instruct-2507": "http://localhost:8001/v1"},
-        )
-    )
-    local_provider = ScriptedProvider([_ok_response("Qwen/Qwen3-30B-A3B-Instruct-2507")])
-    cloud_provider = ScriptedProvider([_ok_response("openrouter/x")])
-    client._local_provider = local_provider  # type: ignore[attr-defined]
-    client._cloud_provider = cloud_provider  # type: ignore[attr-defined]
+class TestUnifiedLLMClient:
+    def test_default_config(self):
+        client = UnifiedLLMClient()
+        assert client._config.temperature == 0.8
+        assert client._config.max_tokens == 16384
+        assert client._config.timeout == 300.0
 
-    response = client.completion(
-        model="Qwen/Qwen3-30B-A3B-Instruct-2507",
-        messages=[{"role": "user", "content": "hello"}],
-    )
+    def test_custom_config(self):
+        config = UnifiedLLMClientConfig(temperature=0.5, max_tokens=4096, timeout=60.0)
+        client = UnifiedLLMClient(config)
+        assert client._config.temperature == 0.5
+        assert client._config.max_tokens == 4096
 
-    assert response.model == "Qwen/Qwen3-30B-A3B-Instruct-2507"
-    assert local_provider.calls == 1
-    assert cloud_provider.calls == 0
+    def test_cost_tracking(self):
+        client = UnifiedLLMClient()
+        assert client.total_cost == 0.0
+        client._total_cost = 1.23
+        assert client.total_cost == 1.23
+
+    def test_reset_cost(self):
+        client = UnifiedLLMClient()
+        client._total_cost = 1.23
+        returned = client.reset_cost()
+        assert returned == 1.23
+        assert client.total_cost == 0.0
+
+    def test_acompletion_calls_litellm(self):
+        """Verify acompletion routes through litellm.acompletion."""
+        client = UnifiedLLMClient()
+
+        mock_usage = MagicMock()
+        mock_usage.prompt_tokens = 10
+        mock_usage.completion_tokens = 5
+        mock_usage.total_tokens = 15
+
+        mock_choice = MagicMock()
+        mock_choice.message.content = "test response"
+
+        mock_response = MagicMock()
+        mock_response.usage = mock_usage
+        mock_response.choices = [mock_choice]
+
+        with patch("algoforge.llm.unified_client.litellm") as mock_litellm:
+            mock_litellm.acompletion = AsyncMock(return_value=mock_response)
+            mock_litellm.completion_cost.return_value = 0.005
+
+            resp = asyncio.run(client.acompletion(
+                model="test/model",
+                messages=[{"role": "user", "content": "hello"}],
+                temperature=0.7,
+            ))
+
+        assert resp.content == "test response"
+        assert resp.cost == 0.005
+        assert resp.model == "test/model"
+        assert client.total_cost == 0.005
+
+        # Verify litellm was called with correct args
+        call_kwargs = mock_litellm.acompletion.call_args[1]
+        assert call_kwargs["model"] == "test/model"
+        assert call_kwargs["temperature"] == 0.7
+
+    def test_acompletion_wraps_litellm_errors(self):
+        """Verify exceptions from litellm are wrapped."""
+        client = UnifiedLLMClient()
+
+        with patch("algoforge.llm.unified_client.litellm") as mock_litellm:
+            mock_litellm.acompletion = AsyncMock(side_effect=Exception("Connection refused"))
+
+            with pytest.raises(LLMConnectionError):
+                asyncio.run(client.acompletion(
+                    model="test/model",
+                    messages=[{"role": "user", "content": "hello"}],
+                ))
+
+    def test_acompletion_extras_passed_through(self):
+        """Verify extra kwargs are passed to litellm."""
+        client = UnifiedLLMClient()
+
+        mock_usage = MagicMock()
+        mock_usage.prompt_tokens = 10
+        mock_usage.completion_tokens = 5
+        mock_usage.total_tokens = 15
+
+        mock_choice = MagicMock()
+        mock_choice.message.content = "ok"
+
+        mock_response = MagicMock()
+        mock_response.usage = mock_usage
+        mock_response.choices = [mock_choice]
+
+        with patch("algoforge.llm.unified_client.litellm") as mock_litellm:
+            mock_litellm.acompletion = AsyncMock(return_value=mock_response)
+            mock_litellm.completion_cost.return_value = 0.0
+
+            asyncio.run(client.acompletion(
+                model="test/model",
+                messages=[{"role": "user", "content": "hello"}],
+                extra_body={"reasoning": {"enabled": False}},
+            ))
+
+        call_kwargs = mock_litellm.acompletion.call_args[1]
+        assert call_kwargs["extra_body"] == {"reasoning": {"enabled": False}}
+
+    def test_close_is_noop(self):
+        client = UnifiedLLMClient()
+        asyncio.run(client.close())  # Should not raise
 
 
-def test_factory_accepts_cloud_registry_alias():
-    client = create_unified_client(
-        cloud_registry={"google/gemini-3-flash-preview": {"input_cost_per_token": 0.1}},
-    )
-    assert client._config.model_info == {  # type: ignore[attr-defined]
-        "google/gemini-3-flash-preview": {"input_cost_per_token": 0.1}
-    }
+class TestFactory:
+    def test_create_unified_client_defaults(self):
+        client = create_unified_client()
+        assert client._config.temperature == 0.8
+        assert client._config.max_tokens == 16384
+        assert client._config.timeout == 300.0
+
+    def test_create_unified_client_custom(self):
+        client = create_unified_client(temperature=0.5, max_tokens=4096, timeout=60.0)
+        assert client._config.temperature == 0.5
+        assert client._config.max_tokens == 4096
+        assert client._config.timeout == 60.0

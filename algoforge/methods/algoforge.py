@@ -4,6 +4,8 @@ import asyncio
 import logging
 import time
 
+import litellm
+
 from ..config import AlgoforgeConfig, AlgoforgeResult
 from ..core import Program, EvaluationResult
 from ..pool import CVTMAPElitesPool
@@ -18,22 +20,25 @@ from ..llm.unified_client import UnifiedLLMClient, UnifiedLLMClientConfig
 logger = logging.getLogger(__name__)
 
 
-def _collect_referenced_models(config: AlgoforgeConfig) -> set[str]:
-    """Collect all model names referenced by runtime config."""
-    models: set[str] = {pair.model for pair in config.sampler_model_pairs}
+def _register_models_with_litellm(config: AlgoforgeConfig) -> None:
+    """Auto-register local endpoints and model info with litellm."""
+    # Register local endpoints so litellm routes to them
+    for model_name, base_url in config.local_endpoints.items():
+        registration: dict = {"litellm_params": {
+            "model": f"openai/{model_name}",
+            "api_base": base_url,
+            "api_key": "unused",
+        }}
+        # Merge model_info if available (for cost tracking)
+        if model_name in config.model_info:
+            registration.update(config.model_info[model_name])
+        litellm.register_model({model_name: registration})
 
-    if config.init.diversity_model:
-        models.add(config.init.diversity_model)
-    if config.init.variant_models:
-        models.update(config.init.variant_models)
-    if config.meta_advice.model:
-        models.add(config.meta_advice.model)
-    if config.punctuated_equilibrium.heavy_model:
-        models.add(config.punctuated_equilibrium.heavy_model)
-    if config.punctuated_equilibrium.variant_models:
-        models.update(config.punctuated_equilibrium.variant_models)
-
-    return models
+    # Register model_info for non-local models (cost tracking for custom cloud models)
+    non_local_info = {k: v for k, v in config.model_info.items()
+                      if k not in config.local_endpoints}
+    if non_local_info:
+        litellm.register_model(non_local_info)
 
 
 def _setup_logging() -> None:
@@ -115,16 +120,13 @@ async def _run_async(config: AlgoforgeConfig, resume_snapshot: dict | None = Non
     logger.info(f"[AlgoForge] Budget: {config.budget}")
     logger.info(f"[AlgoForge] Sampler-model pairs: {len(config.sampler_model_pairs)}")
 
+    # Register local endpoints and model info with litellm
+    _register_models_with_litellm(config)
+
     # Initialize unified LLM client
     llm_config = UnifiedLLMClientConfig(
-        local_endpoints=config.llm.local_endpoints,
-        model_info=config.llm.model_info,
-        known_models=_collect_referenced_models(config),
-        max_retries=config.llm.max_retries,
-        retry_delay=config.llm.retry_delay,
-        retry_backoff=config.llm.retry_backoff,
-        default_temperature=config.pipeline.temperature,
-        default_max_tokens=config.pipeline.max_tokens,
+        temperature=config.pipeline.temperature,
+        max_tokens=config.pipeline.max_tokens,
     )
     llm_client = UnifiedLLMClient(llm_config)
     set_llm_client(llm_client)
