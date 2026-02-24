@@ -45,6 +45,7 @@ from .config import (
     CascadeConfig,
     PipelineConfig,
     PunctuatedEquilibriumConfig,
+    PromptOptConfig,
 )
 
 # Methods
@@ -81,6 +82,7 @@ __all__ = [
     'CascadeConfig',
     'PipelineConfig',
     'PunctuatedEquilibriumConfig',
+    'PromptOptConfig',
     # Methods
     'run',
 ]

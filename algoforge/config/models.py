@@ -82,6 +82,19 @@ class PunctuatedEquilibriumConfig(BaseModel):
     reasoning_effort: Optional[str] = None
 
 
+class PromptOptConfig(BaseModel):
+    enabled: bool = False
+    teacher_model: Optional[str] = None   # Model for MIPROv2 instruction proposals; None = paradigm_models[0]
+    n_trials: int = 12
+    num_candidates: int = 4
+    num_threads: int = 4
+    init_temperature: float = 1.2
+    optimize_mutation: bool = True
+    optimize_paradigm_shift: bool = True  # Only runs if PE is enabled
+    cache_dir: Optional[str] = None       # None = output_dir or cwd
+    force: bool = False                   # Re-optimize even if cached
+
+
 class PipelineConfig(BaseModel):
     n_llm_workers: int = 4
     n_eval_processes: int = 4
@@ -128,6 +141,7 @@ class AlgoforgeConfig(BaseModel):
     pipeline: PipelineConfig = Field(default_factory=PipelineConfig)
     cascade: CascadeConfig = Field(default_factory=CascadeConfig)
     punctuated_equilibrium: PunctuatedEquilibriumConfig = Field(default_factory=PunctuatedEquilibriumConfig)
+    prompt_opt: PromptOptConfig = Field(default_factory=PromptOptConfig)
 
     output_dir: Optional[str] = None  # Directory for snapshots
 
@@ -170,6 +184,11 @@ class AlgoforgeConfig(BaseModel):
             self.punctuated_equilibrium.heavy_models = list(self.paradigm_models)
         if self.punctuated_equilibrium.variant_models is None:
             self.punctuated_equilibrium.variant_models = list(self.mutation_models)
+
+        if self.prompt_opt.teacher_model is None:
+            self.prompt_opt.teacher_model = self.paradigm_models[0]
+        if self.prompt_opt.cache_dir is None and self.output_dir:
+            self.prompt_opt.cache_dir = self.output_dir
 
         return self
 

@@ -123,6 +123,14 @@ async def _run_async(config: AlgoforgeConfig, resume_snapshot: dict | None = Non
     # Register local endpoints and model info with litellm
     _register_models_with_litellm(config)
 
+    # Run prompt optimization if enabled (before LLM client setup)
+    if config.prompt_opt.enabled and not config.prompt_overrides:
+        from ..prompt_opt import optimize_prompts
+        overrides, opt_cost = optimize_prompts(config)
+        config.prompt_overrides = overrides
+        state.total_cost += opt_cost
+        logger.info(f"[AlgoForge] Prompt optimization cost: ${opt_cost:.3f}")
+
     # Initialize unified LLM client
     llm_config = UnifiedLLMClientConfig(
         temperature=config.pipeline.temperature,
