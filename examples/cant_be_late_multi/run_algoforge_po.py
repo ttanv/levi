@@ -3,17 +3,12 @@
 
 import ast
 import re
-import sys
 from datetime import datetime
-from pathlib import Path
 from typing import Optional
-
-# Add algoforge to path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from problem import PROBLEM_DESCRIPTION, FUNCTION_SIGNATURE, SEED_PROGRAM, INPUTS, score_fn, DIVERSITY_SEED_PROMPT
 from algoforge import (
-    run, AlgoforgeConfig, BudgetConfig, SamplerModelPair,
+    run, AlgoforgeConfig, BudgetConfig,
     InitConfig, MetaAdviceConfig, PipelineConfig, CVTConfig, BehaviorConfig,
     PunctuatedEquilibriumConfig, PromptOptConfig,
 )
@@ -22,7 +17,6 @@ from algoforge.core import Program
 
 # --- Domain-specific behavioral feature extractors ---
 # These capture algorithmic *family* differences rather than code style/verbosity.
-
 _STATE_PATTERNS = [
     re.compile(p, re.IGNORECASE) for p in [
         r'hasattr\s*\(', r'getattr\s*\(', r'setattr\s*\(',
@@ -85,7 +79,6 @@ def _compute_decision_branch_depth(program: Program, tree: ast.AST) -> float:
     return float(_max_if_depth(tree))
 
 
-# All 5 behavioral dimensions: 3 domain-specific + 2 AST
 CANT_BE_LATE_MULTI_AST_FEATURES = [
     'state_tracking_level',
     'math_model_complexity',
@@ -101,72 +94,38 @@ CUSTOM_EXTRACTORS = {
     'decision_branch_depth': _compute_decision_branch_depth,
 }
 
-# Models
-LIGHT_MODELS = [
-    "openrouter/xiaomi/mimo-v2-flash",
-    "Qwen/Qwen3-30B-A3B-Instruct-2507",
-]
-PARADIGM_SHIFT_MODEL = "openrouter/google/gemini-3-flash-preview"
-
-LOCAL_ENDPOINTS = {
-    "Qwen/Qwen3-30B-A3B-Instruct-2507": "http://localhost:8001/v1",
-}
-
-MODEL_INFO = {
-    "xiaomi/mimo-v2-flash": {
-        "max_tokens": 16384,
-        "max_input_tokens": 262144,
-        "max_output_tokens": 16384,
-        "input_cost_per_token": 0.00000009,
-        "output_cost_per_token": 0.00000029,
-    },
-    "Qwen/Qwen3-30B-A3B-Instruct-2507": {
-        "input_cost_per_token": 0.0000001,
-        "output_cost_per_token": 0.0000004,
-    },
-    "google/gemini-3-flash-preview": {
-        "max_tokens": 65536,
-        "max_input_tokens": 1048576,
-        "max_output_tokens": 65536,
-        "input_cost_per_token": 0.0000005,
-        "output_cost_per_token": 0.000003,
-    },
-}
-
-run_dir = f"runs/{datetime.now().strftime('%Y%m%d_%H%M%S')}_po"
-
 config = AlgoforgeConfig(
     problem_description=PROBLEM_DESCRIPTION,
     function_signature=FUNCTION_SIGNATURE,
     seed_program=SEED_PROGRAM,
     inputs=INPUTS,
     score_fn=score_fn,
-    budget=BudgetConfig(dollars=5.00),
-    sampler_model_pairs=[
-        # MiMo-V2-Flash (OpenRouter)
-        SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[0], weight=1.0, temperature=0.3),
-        SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[0], weight=1.0, temperature=0.7),
-        SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[0], weight=1.0, temperature=1.0),
-        SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[0], weight=1.0, temperature=1.2),
-        # Qwen 30B (Local TPU)
-        SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[1], weight=1.0, temperature=0.3),
-        SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[1], weight=1.0, temperature=0.7),
-        SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[1], weight=1.0, temperature=1.0),
-        SamplerModelPair(sampler="softmax", model=LIGHT_MODELS[1], weight=1.0, temperature=1.2),
-        # Gemini Flash (OpenRouter) - paradigm shift model
-        SamplerModelPair(sampler="softmax", model=PARADIGM_SHIFT_MODEL, weight=1.0, temperature=0.3),
+    paradigm_models="openrouter/google/gemini-3-flash-preview",
+    mutation_models=[
+        "openrouter/xiaomi/mimo-v2-flash",
+        "Qwen/Qwen3-30B-A3B-Instruct-2507",
     ],
+    local_endpoints={"Qwen/Qwen3-30B-A3B-Instruct-2507": "http://localhost:8001/v1"},
+    model_info={
+        "xiaomi/mimo-v2-flash": {
+            "input_cost_per_token": 0.00000009,
+            "output_cost_per_token": 0.00000029,
+        },
+        "Qwen/Qwen3-30B-A3B-Instruct-2507": {
+            "input_cost_per_token": 0.0000001,
+            "output_cost_per_token": 0.0000004,
+        },
+    },
+    budget=BudgetConfig(dollars=5.00),
     cvt=CVTConfig(n_centroids=50, defer_centroids=True),
     init=InitConfig(
         enabled=True,
         n_diverse_seeds=5,
         n_variants_per_seed=20,
-        diversity_model=PARADIGM_SHIFT_MODEL,
-        variant_models=LIGHT_MODELS,
         temperature=0.8,
         diversity_prompt=DIVERSITY_SEED_PROMPT,
     ),
-    meta_advice=MetaAdviceConfig(enabled=True, interval=50, model=PARADIGM_SHIFT_MODEL),
+    meta_advice=MetaAdviceConfig(enabled=True, interval=50),
     pipeline=PipelineConfig(n_llm_workers=12, n_eval_processes=12, n_inspirations=1, output_mode="full", eval_timeout=300),
     behavior=BehaviorConfig(
         ast_features=CANT_BE_LATE_MULTI_AST_FEATURES,
@@ -179,16 +138,12 @@ config = AlgoforgeConfig(
         interval=5,
         n_clusters=3,
         n_variants=3,
-        heavy_models=[PARADIGM_SHIFT_MODEL],
-        variant_models=LIGHT_MODELS,
         behavior_noise=0.3,
         temperature=0.7,
         reasoning_effort="low",
     ),
     prompt_opt=PromptOptConfig(enabled=True),
-    output_dir=run_dir,
-    local_endpoints=LOCAL_ENDPOINTS,
-    model_info=MODEL_INFO,
+    output_dir=f"runs/{datetime.now().strftime('%Y%m%d_%H%M%S')}_po",
 )
 
 if __name__ == "__main__":
