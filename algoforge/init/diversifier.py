@@ -192,86 +192,98 @@ class Diversifier:
         # Store (code, score, full_result) tuples - include full result to avoid re-evaluation
         diverse_seeds = [(seed_program, seed_score, seed_result)]
 
+        max_retries = 3
         for i in range(n_seeds):
             if self.state is not None and self.state.budget_exhausted:
                 logger.info("[Init Phase 1] Stopping seed generation (budget exhausted)")
                 break
 
-            existing_seeds_text = "\n\n---\n\n".join([
-                f"### Seed {j+1} (Score: {score:.1f}):\n```python\n{code}\n```"
-                for j, (code, score, _) in enumerate(diverse_seeds)
-            ])
+            success = False
+            for attempt in range(max_retries):
+                if self.state is not None and self.state.budget_exhausted:
+                    break
 
-            # Use custom prompt if provided, otherwise use default
-            prompt_template = self.config.init.diversity_prompt or DIVERSITY_SEED_PROMPT
-            prompt = prompt_template.format(
-                problem_title="Algorithm Optimization",
-                problem_description=self.config.problem_description,
-                function_signature=self.config.function_signature,
-                existing_seeds=existing_seeds_text,
-            )
+                attempt_label = f"[Seed {i+1}]" if attempt == 0 else f"[Seed {i+1}, retry {attempt}]"
 
-            try:
-                llm = get_llm_client()
-                if self.state is not None:
-                    response = await self.state.acompletion(
-                        llm,
-                        model=model,
-                        messages=[{"role": "user", "content": prompt}],
-                        temperature=self.config.init.temperature,
-                        max_tokens=4096,
-                        timeout=300,
-                    )
-                else:
-                    response = await llm.acompletion(
-                        model=model,
-                        messages=[{"role": "user", "content": prompt}],
-                        temperature=self.config.init.temperature,
-                        max_tokens=4096,
-                        timeout=300,
-                    )
-                content = response.content
-                self.total_cost += response.cost
+                existing_seeds_text = "\n\n---\n\n".join([
+                    f"### Seed {j+1} (Score: {score:.1f}):\n```python\n{code}\n```"
+                    for j, (code, score, _) in enumerate(diverse_seeds)
+                ])
 
-                new_code = extract_code(content)
-                if not new_code:
-                    logger.info(f"  [Seed {i+1}] Failed to extract code")
-                    continue
-
-                reserved_eval = False
-                if self.state is not None:
-                    if not await self.state.try_start_evaluation():
-                        logger.info("[Init Phase 1] Stopping seed evaluation (budget exhausted)")
-                        break
-                    reserved_eval = True
+                # Use custom prompt if provided, otherwise use default
+                prompt_template = self.config.init.diversity_prompt or DIVERSITY_SEED_PROMPT
+                prompt = prompt_template.format(
+                    problem_title="Algorithm Optimization",
+                    problem_description=self.config.problem_description,
+                    function_signature=self.config.function_signature,
+                    existing_seeds=existing_seeds_text,
+                )
 
                 try:
-                    result = await self.executor.run(
-                        evaluate_code,
-                        new_code,
-                        self.config.score_fn,
-                        self.config.inputs,
-                        fn_name,
-                        timeout=self.config.pipeline.eval_timeout
-                    )
-
-                    if "error" not in result:
-                        new_score = result.get('score', 0.0)
-                        self._record_score(new_score, sampler="init_diversity")
-                        diverse_seeds.append((new_code, new_score, result))
-                        logger.info(f"  [Seed {i+1}] OK - score: {new_score:.1f}")
+                    llm = get_llm_client()
+                    if self.state is not None:
+                        response = await self.state.acompletion(
+                            llm,
+                            model=model,
+                            messages=[{"role": "user", "content": prompt}],
+                            temperature=self.config.init.temperature,
+                            max_tokens=4096,
+                            timeout=300,
+                        )
                     else:
-                        if self.state is not None:
-                            self.state.record_error(str(result.get("error", "unknown error")))
-                        logger.info(f"  [Seed {i+1}] Eval failed: {result['error'][:50]}")
-                finally:
-                    if reserved_eval and self.state is not None:
-                        await self.state.finish_evaluation()
-            except BudgetLimitReached:
-                logger.info("[Init Phase 1] Stopping seed generation (budget exhausted)")
-                break
-            except Exception as e:
-                logger.warning(f"  [Seed {i+1}] Error: {e}")
+                        response = await llm.acompletion(
+                            model=model,
+                            messages=[{"role": "user", "content": prompt}],
+                            temperature=self.config.init.temperature,
+                            max_tokens=4096,
+                            timeout=300,
+                        )
+                    content = response.content
+                    self.total_cost += response.cost
+
+                    new_code = extract_code(content)
+                    if not new_code:
+                        logger.info(f"  {attempt_label} Failed to extract code")
+                        continue
+
+                    reserved_eval = False
+                    if self.state is not None:
+                        if not await self.state.try_start_evaluation():
+                            logger.info("[Init Phase 1] Stopping seed evaluation (budget exhausted)")
+                            break
+                        reserved_eval = True
+
+                    try:
+                        result = await self.executor.run(
+                            evaluate_code,
+                            new_code,
+                            self.config.score_fn,
+                            self.config.inputs,
+                            fn_name,
+                            timeout=self.config.pipeline.eval_timeout
+                        )
+
+                        if "error" not in result:
+                            new_score = result.get('score', 0.0)
+                            self._record_score(new_score, sampler="init_diversity")
+                            diverse_seeds.append((new_code, new_score, result))
+                            logger.info(f"  {attempt_label} OK - score: {new_score:.1f}")
+                            success = True
+                        else:
+                            if self.state is not None:
+                                self.state.record_error(str(result.get("error", "unknown error")))
+                            logger.info(f"  {attempt_label} Eval failed: {result['error'][:50]}")
+                    finally:
+                        if reserved_eval and self.state is not None:
+                            await self.state.finish_evaluation()
+                except BudgetLimitReached:
+                    logger.info("[Init Phase 1] Stopping seed generation (budget exhausted)")
+                    break
+                except Exception as e:
+                    logger.warning(f"  {attempt_label} Error: {e}")
+
+                if success:
+                    break
 
         logger.info(f"[Init Phase 1] Generated {len(diverse_seeds)-1} new seeds (total: {len(diverse_seeds)})")
         return diverse_seeds
