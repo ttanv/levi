@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import os
 from dataclasses import dataclass, field
 from typing import Optional, Any
 
@@ -105,7 +106,53 @@ class UnifiedLLMClient:
         try:
             response = await litellm.acompletion(**kwargs)
         except Exception as e:
-            raise _wrap_litellm_error(model, e) from e
+            # Some local OpenAI-compatible servers (e.g., vLLM) expose model IDs
+            # like "Qwen/..." that need explicit provider selection in LiteLLM.
+            # Retry once with provider forced to OpenAI while preserving model ID.
+            msg = str(e)
+            if "LLM Provider NOT provided" in msg:
+                try:
+                    retry_kwargs = dict(kwargs)
+                    retry_kwargs["custom_llm_provider"] = "openai"
+                    # Prefer registered local endpoint details from litellm.register_model().
+                    local_params = (
+                        getattr(litellm, "model_cost", {})
+                        .get(model, {})
+                        .get("litellm_params", {})
+                    )
+                    if "api_base" not in retry_kwargs:
+                        resolved_base = (
+                            local_params.get("api_base")
+                            or os.getenv("OPENAI_API_BASE")
+                            or os.getenv("OPENAI_BASE_URL")
+                        )
+                        if resolved_base:
+                            retry_kwargs["api_base"] = resolved_base
+                        else:
+                            logger.warning(
+                                "[%s] No api_base found for provider fallback — "
+                                "the retry will target the default OpenAI endpoint.",
+                                model,
+                            )
+                    # OpenAI-compatible local servers (e.g., vLLM) may ignore key,
+                    # but the OpenAI client path still requires a non-empty value.
+                    if "api_key" not in retry_kwargs:
+                        retry_kwargs["api_key"] = (
+                            local_params.get("api_key")
+                            or os.getenv("OPENAI_API_KEY")
+                            or "local-no-key-required"
+                        )
+                    logger.debug(
+                        "[%s] Retrying with custom_llm_provider='openai' "
+                        "(api_base=%s)",
+                        model,
+                        retry_kwargs.get("api_base", "<default>"),
+                    )
+                    response = await litellm.acompletion(**retry_kwargs)
+                except Exception as retry_error:
+                    raise _wrap_litellm_error(model, retry_error) from retry_error
+            else:
+                raise _wrap_litellm_error(model, e) from e
 
         try:
             cost = litellm.completion_cost(completion_response=response)
