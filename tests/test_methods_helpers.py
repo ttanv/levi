@@ -78,6 +78,41 @@ class TestEvaluateCode:
         assert "error" in result
         assert "scoring failed" in result["error"]
 
+    def test_supports_score_fn_without_inputs(self):
+        observed = {}
+
+        def score_fn(fn):
+            observed["name"] = fn.__name__
+            return {"score": fn(4)}
+
+        code = "def solve(x):\n    return x + 3"
+        result = evaluate_code(code, score_fn, None, "solve")
+
+        assert result == {"score": 7}
+        assert observed["name"] == "solve"
+
+    def test_supports_score_fn_without_inputs_even_when_inputs_provided(self):
+        def score_fn(fn):
+            return {"score": fn(10)}
+
+        code = "def solve(x):\n    return x - 2"
+        result = evaluate_code(code, score_fn, [1, 2, 3], "solve")
+
+        assert result == {"score": 8}
+
+    def test_two_arg_score_fn_receives_empty_inputs_when_config_inputs_missing(self):
+        observed = {}
+
+        def score_fn(_fn, inputs):
+            observed["inputs"] = inputs
+            return {"score": float(len(inputs))}
+
+        code = "def solve(x):\n    return x"
+        result = evaluate_code(code, score_fn, None, "solve")
+
+        assert result == {"score": 0.0}
+        assert observed["inputs"] == []
+
 
 class TestRestoreFromSnapshot:
     def test_requires_snapshot_geometry(self):

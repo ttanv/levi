@@ -15,6 +15,10 @@ def _score_fn(fn, inputs):
     return {"score": sum(fn(x) for x in inputs)}
 
 
+def _score_fn_no_inputs(fn):
+    return {"score": fn(1)}
+
+
 def _minimal_config_kwargs():
     return {
         "problem_description": "Test problem",
@@ -156,3 +160,13 @@ class TestAlgoforgeConfig:
     def test_pipeline_max_tokens_default(self):
         cfg = AlgoforgeConfig(**_minimal_config_kwargs())
         assert cfg.pipeline.max_tokens == 16384
+
+    def test_inputs_can_be_omitted_when_score_fn_does_not_require_them(self):
+        cfg = AlgoforgeConfig(
+            problem_description="Test problem",
+            function_signature="def solve(x):",
+            seed_program="def solve(x):\n    return x",
+            score_fn=_score_fn_no_inputs,
+            budget=BudgetConfig(dollars=1.0),
+        )
+        assert cfg.inputs is None
