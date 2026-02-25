@@ -469,10 +469,10 @@ class Diversifier:
                 cell_to_programs[cell] = []
             cell_to_programs[cell].append(prog)
 
-        # For each cell, add a random program directly (no re-extraction)
+        # For each cell, add the best-scoring program directly (no re-extraction)
         n_accepted = 0
         for cell_idx, progs in cell_to_programs.items():
-            best_prog = random.choice(progs)
+            best_prog = max(progs, key=lambda p: p["score"])
             program = Program(content=best_prog["code"], metadata={"primary_score": best_prog["score"]})
             eval_result = EvaluationResult(
                 scores=best_prog["result"],
