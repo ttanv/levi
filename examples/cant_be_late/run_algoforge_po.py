@@ -1,29 +1,23 @@
 #!/usr/bin/env python3
-"""Run AlgoForge with Prompt Optimization for Can't Be Late Scheduling."""
+"""Run AlgoForge for Can't Be Late Scheduling."""
 
 from datetime import datetime
 
 from problem import PROBLEM_DESCRIPTION, FUNCTION_SIGNATURE, SEED_PROGRAM, INPUTS, score_fn, DIVERSITY_SEED_PROMPT
-from algoforge import (
-    run, AlgoforgeConfig, BudgetConfig,
-    InitConfig, MetaAdviceConfig, PipelineConfig, CVTConfig, BehaviorConfig,
-    PunctuatedEquilibriumConfig, PromptOptConfig,
-)
+import algoforge as af
 
-CANT_BE_LATE_AST_FEATURES = ['cyclomatic_complexity', 'comparison_count', 'math_operators', 'branch_count']
-CANT_BE_LATE_SCORE_KEYS = ['tight_deadline_score', 'loose_deadline_score']
-
-config = AlgoforgeConfig(
-    problem_description=PROBLEM_DESCRIPTION,
+result = af.evolve_code(
+    PROBLEM_DESCRIPTION,
     function_signature=FUNCTION_SIGNATURE,
     seed_program=SEED_PROGRAM,
-    inputs=INPUTS,
     score_fn=score_fn,
-    paradigm_models="openrouter/google/gemini-3-flash-preview",
-    mutation_models=[
+    inputs=INPUTS,
+    paradigm_model="openrouter/google/gemini-3-flash-preview",
+    mutation_model=[
         "openrouter/xiaomi/mimo-v2-flash",
         "Qwen/Qwen3-30B-A3B-Instruct-2507",
     ],
+    budget_dollars=5.00,
     local_endpoints={"Qwen/Qwen3-30B-A3B-Instruct-2507": "http://localhost:8001/v1"},
     model_info={
         "xiaomi/mimo-v2-flash": {
@@ -38,30 +32,24 @@ config = AlgoforgeConfig(
             "output_cost_per_token": 0.0000004,
         },
     },
-    budget=BudgetConfig(dollars=5.00),
-    cvt=CVTConfig(n_centroids=50, defer_centroids=True),
-    init=InitConfig(
-        enabled=True,
+    init=af.InitConfig(
         n_diverse_seeds=5,
         n_variants_per_seed=20,
-        temperature=0.8,
         diversity_prompt=DIVERSITY_SEED_PROMPT,
     ),
-    meta_advice=MetaAdviceConfig(enabled=True, interval=50),
-    pipeline=PipelineConfig(n_llm_workers=12, n_eval_processes=12, n_inspirations=1, output_mode="full", eval_timeout=300),
-    behavior=BehaviorConfig(ast_features=CANT_BE_LATE_AST_FEATURES, score_keys=CANT_BE_LATE_SCORE_KEYS, init_noise=0.0),
-    punctuated_equilibrium=PunctuatedEquilibriumConfig(
+    pipeline=af.PipelineConfig(n_llm_workers=12, n_eval_processes=12, n_inspirations=1, eval_timeout=300),
+    behavior=af.BehaviorConfig(
+        ast_features=['cyclomatic_complexity', 'comparison_count', 'math_operators', 'branch_count'],
+        score_keys=['tight_deadline_score', 'loose_deadline_score'],
+    ),
+    punctuated_equilibrium=af.PunctuatedEquilibriumConfig(
         enabled=True,
         interval=5,
         n_clusters=3,
         n_variants=3,
-        behavior_noise=0.0,
         temperature=0.7,
         reasoning_effort="low",
     ),
-    prompt_opt=PromptOptConfig(enabled=True),
+    prompt_opt=af.PromptOptConfig(enabled=True),
     output_dir=f"runs/{datetime.now().strftime('%Y%m%d_%H%M%S')}_po",
 )
-
-if __name__ == "__main__":
-    run(config)

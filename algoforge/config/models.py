@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from pydantic import BaseModel, Field, field_validator, model_validator
 from typing import Callable, Optional, Any
 
@@ -30,8 +32,8 @@ class CVTConfig(BaseModel):
 
 class InitConfig(BaseModel):
     enabled: bool = True
-    n_diverse_seeds: int = 5
-    n_variants_per_seed: int = 25
+    n_diverse_seeds: int = 4
+    n_variants_per_seed: int = 20
     diversity_model: Optional[str] = None
     variant_models: Optional[list[str]] = None
     temperature: float = 0.8
@@ -50,7 +52,7 @@ class BehaviorConfig(BaseModel):
         default=["loop_count", "branch_count", "math_operators", "loop_nesting_max"]
     )
     score_keys: list[str] = Field(default_factory=list)
-    init_noise: float = 0.15
+    init_noise: float = 0.0
     # Custom extractors: Callable[[Program], float]. Unlike built-in AST extractors,
     # these receive only the Program, making them usable for non-code content types.
     custom_extractors: dict[str, Callable] = Field(default_factory=dict)
@@ -71,15 +73,15 @@ class PunctuatedEquilibriumConfig(BaseModel):
     Periodically triggers paradigm-shift generation using heavy model(s),
     creating fundamentally new solutions to escape local optima.
     """
-    enabled: bool = False
-    interval: int = 50
+    enabled: bool = True
+    interval: int = 10
     n_clusters: int = 3
-    n_variants: int = 5
+    n_variants: int = 3
     heavy_models: Optional[list[str]] = None
     variant_models: Optional[list[str]] = None
-    behavior_noise: float = 0.05
-    temperature: float = 1.0
-    reasoning_effort: Optional[str] = None
+    behavior_noise: float = 0.0
+    temperature: float = 0.7
+    reasoning_effort: Optional[str] = "disabled"
 
 
 class PromptOptConfig(BaseModel):
@@ -102,7 +104,7 @@ class PipelineConfig(BaseModel):
     temperature: float = 0.8
     max_tokens: int = 16384
     n_parents: int = 1
-    n_inspirations: int = 2
+    n_inspirations: int = 1
     output_mode: str = "full"
 
 
@@ -190,6 +192,10 @@ class AlgoforgeConfig(BaseModel):
             self.prompt_opt.teacher_model = self.paradigm_models[0]
         if self.prompt_opt.cache_dir is None and self.output_dir:
             self.prompt_opt.cache_dir = self.output_dir
+
+        # 4. Auto-generate output_dir if not set
+        if self.output_dir is None:
+            self.output_dir = f"runs/{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
         return self
 

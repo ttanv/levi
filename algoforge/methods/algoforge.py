@@ -3,10 +3,11 @@
 import asyncio
 import logging
 import time
+from typing import Any, Callable
 
 import litellm
 
-from ..config import AlgoforgeConfig, AlgoforgeResult
+from ..config import AlgoforgeConfig, AlgoforgeResult, BudgetConfig
 from ..core import Program, EvaluationResult
 from ..pool import CVTMAPElitesPool
 from ..behavior import BehaviorExtractor, FeatureVector
@@ -120,17 +121,167 @@ def _restore_from_snapshot(
     return resumed_cost
 
 
-def run(config: AlgoforgeConfig, resume_snapshot: dict | None = None) -> AlgoforgeResult:
-    """
-    Run AlgoForge evolutionary optimization.
+def _build_config(
+    problem_description: str,
+    function_signature: str,
+    seed_program: str,
+    score_fn: Callable[..., dict],
+    inputs: list[Any] | None,
+    model: str | list[str] | None,
+    paradigm_model: str | list[str] | None,
+    mutation_model: str | list[str] | None,
+    budget_dollars: float | None,
+    budget_evals: int | None,
+    budget_seconds: float | None,
+    **kwargs: Any,
+) -> AlgoforgeConfig:
+    """Build AlgoforgeConfig from evolve_code() parameters."""
+    # Resolve models
+    if model is not None and (paradigm_model is not None or mutation_model is not None):
+        raise ValueError(
+            "Cannot specify both 'model' and 'paradigm_model'/'mutation_model'. "
+            "Use 'model' for a single model, or 'paradigm_model'/'mutation_model' for separate models."
+        )
 
-    This is a synchronous entry point that handles async internally.
+    if model is not None:
+        resolved_paradigm = model
+        resolved_mutation = model
+    elif paradigm_model is not None or mutation_model is not None:
+        resolved_paradigm = paradigm_model or mutation_model
+        resolved_mutation = mutation_model or paradigm_model
+    else:
+        raise ValueError(
+            "Must specify 'model' (for both), or 'paradigm_model' and/or 'mutation_model'."
+        )
+
+    # Build budget
+    if budget_dollars is None and budget_evals is None and budget_seconds is None:
+        raise ValueError(
+            "Must specify at least one budget constraint: "
+            "budget_dollars, budget_evals, or budget_seconds."
+        )
+    budget = BudgetConfig(
+        dollars=budget_dollars,
+        evaluations=budget_evals,
+        seconds=budget_seconds,
+    )
+
+    # Reject kwargs that overlap with explicit params
+    _EXPLICIT_PARAMS = {
+        "problem_description", "function_signature", "seed_program",
+        "score_fn", "inputs", "paradigm_models", "mutation_models", "budget",
+    }
+    overlap = set(kwargs) & _EXPLICIT_PARAMS
+    if overlap:
+        raise ValueError(
+            f"Use the explicit parameters instead of **kwargs for: {overlap}"
+        )
+
+    config_dict: dict[str, Any] = {
+        "problem_description": problem_description,
+        "function_signature": function_signature,
+        "seed_program": seed_program,
+        "score_fn": score_fn,
+        "paradigm_models": resolved_paradigm,
+        "mutation_models": resolved_mutation,
+        "budget": budget,
+    }
+    if inputs is not None:
+        config_dict["inputs"] = inputs
+
+    config_dict.update(kwargs)
+    return AlgoforgeConfig(**config_dict)
+
+
+def evolve_code(
+    problem_description: str,
+    *,
+    function_signature: str,
+    seed_program: str,
+    score_fn: Callable[..., dict],
+    inputs: list[Any] | None = None,
+    model: str | list[str] | None = None,
+    paradigm_model: str | list[str] | None = None,
+    mutation_model: str | list[str] | None = None,
+    budget_dollars: float | None = None,
+    budget_evals: int | None = None,
+    budget_seconds: float | None = None,
+    resume_snapshot: dict | None = None,
+    **kwargs: Any,
+) -> AlgoforgeResult:
+    """
+    Run AlgoForge evolutionary code optimization.
+
+    Simple usage::
+
+        import algoforge as af
+
+        result = af.evolve_code(
+            "Optimize bin packing to minimize wasted space",
+            function_signature="def pack(items, bin_capacity):",
+            seed_program="def pack(items, bin_capacity): ...",
+            score_fn=my_scorer,
+            model="openai/gpt-4o-mini",
+            budget_dollars=5.0,
+        )
+
+    With separate paradigm/mutation models::
+
+        result = af.evolve_code(
+            problem_description,
+            function_signature=sig,
+            seed_program=seed,
+            score_fn=scorer,
+            paradigm_model="openai/gpt-4o",
+            mutation_model="openai/gpt-4o-mini",
+            budget_dollars=10.0,
+        )
+
+    Power users can pass any AlgoforgeConfig field via **kwargs::
+
+        result = af.evolve_code(
+            ...,
+            punctuated_equilibrium=af.PunctuatedEquilibriumConfig(enabled=True),
+            pipeline=af.PipelineConfig(n_llm_workers=8),
+            output_dir="runs/experiment_1",
+        )
 
     Args:
-        config: AlgoForge configuration.
-        resume_snapshot: Optional snapshot dict (from snapshot.json) to resume from.
-                        When provided, skips init and loads elites from the snapshot.
+        problem_description: Natural language description of the optimization problem.
+        function_signature: Python function signature to optimize (e.g. "def solve(x):").
+        seed_program: Initial working implementation.
+        score_fn: Evaluation function returning a dict with at least {"score": float}.
+            Accepts either score_fn(fn) or score_fn(fn, inputs).
+        inputs: Optional test inputs passed to score_fn. Can be omitted if
+            score_fn only takes one argument.
+        model: Model for both paradigm shifts and mutations. Use litellm format
+            (e.g. "openai/gpt-4o-mini"). Mutually exclusive with paradigm_model/mutation_model.
+        paradigm_model: Model(s) for paradigm shifts (heavier, creative).
+        mutation_model: Model(s) for incremental mutations (lighter, fast).
+        budget_dollars: Maximum dollar spend.
+        budget_evals: Maximum number of evaluations.
+        budget_seconds: Maximum wall-clock seconds.
+        resume_snapshot: Optional snapshot dict to resume a previous run.
+        **kwargs: Advanced overrides — any AlgoforgeConfig field (e.g. pipeline,
+            punctuated_equilibrium, output_dir, local_endpoints).
+
+    Returns:
+        AlgoforgeResult with best_program, best_score, and run statistics.
     """
+    config = _build_config(
+        problem_description=problem_description,
+        function_signature=function_signature,
+        seed_program=seed_program,
+        score_fn=score_fn,
+        inputs=inputs,
+        model=model,
+        paradigm_model=paradigm_model,
+        mutation_model=mutation_model,
+        budget_dollars=budget_dollars,
+        budget_evals=budget_evals,
+        budget_seconds=budget_seconds,
+        **kwargs,
+    )
     return asyncio.run(_run_async(config, resume_snapshot=resume_snapshot))
 
 
