@@ -4,10 +4,21 @@
 
 ## Getting Started
 
-Install AlgoForge with `pip`
+Install core AlgoForge dependencies:
 
 ```bash
-pip install algoforge
+uv sync
 ```
 
+Install optional extras only when you need them:
 
+```bash
+# EPLB example (requires torch): examples/eplb/problem.py
+uv sync --extra example-eplb
+
+# LLM SQL example
+uv sync --extra example-llm-sql
+
+# Install all example-related dependencies at once
+uv sync --extra examples
+```
