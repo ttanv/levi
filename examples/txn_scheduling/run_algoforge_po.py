@@ -10,7 +10,7 @@ from algoforge import (
     PunctuatedEquilibriumConfig, PromptOptConfig,
 )
 
-TXN_AST_FEATURES = ['loop_nesting_max', 'comparison_count', 'call_count', 'branch_count']
+TXN_AST_FEATURES = ['loop_nesting_max', 'comparison_count', 'math_operators', 'branch_count']
 
 config = AlgoforgeConfig(
     problem_description=PROBLEM_DESCRIPTION,
@@ -38,24 +38,24 @@ config = AlgoforgeConfig(
     cvt=CVTConfig(n_centroids=50, defer_centroids=True),
     init=InitConfig(
         enabled=True,
-        n_diverse_seeds=5,
+        n_diverse_seeds=4,
         n_variants_per_seed=20,
         temperature=0.8,
         diversity_prompt=DIVERSITY_SEED_PROMPT,
     ),
     meta_advice=MetaAdviceConfig(enabled=True, interval=50),
-    pipeline=PipelineConfig(n_llm_workers=12, n_eval_processes=12, n_inspirations=1, output_mode="full", eval_timeout=300),
-    behavior=BehaviorConfig(ast_features=TXN_AST_FEATURES, score_keys=[], init_noise=0.3),
+    pipeline=PipelineConfig(n_llm_workers=1, n_eval_processes=1, n_inspirations=1, output_mode="full", eval_timeout=300),
+    behavior=BehaviorConfig(ast_features=TXN_AST_FEATURES, score_keys=[], init_noise=0.2),
     punctuated_equilibrium=PunctuatedEquilibriumConfig(
         enabled=True,
-        interval=5,
+        interval=10,
         n_clusters=3,
         n_variants=3,
-        behavior_noise=0.3,
+        behavior_noise=0.0,
         temperature=0.7,
-        reasoning_effort="low",
+        reasoning_effort="disabled",
     ),
-    prompt_opt=PromptOptConfig(enabled=True),
+    prompt_opt=PromptOptConfig(enabled=False),
     output_dir=f"runs/{datetime.now().strftime('%Y%m%d_%H%M%S')}_po",
 )
 

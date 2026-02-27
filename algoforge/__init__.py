@@ -8,8 +8,8 @@ Example:
         problem_description="Optimize bin packing",
         function_signature="def solve(items) -> list[list[int]]",
         seed_program="def solve(items): ...",
-        inputs=[...],
-        score_fn=lambda fn, inputs: {'score': ...},
+        inputs=[...],  # Optional if score_fn doesn't need external inputs
+        score_fn=lambda fn, inputs: {'score': ...},  # or: lambda fn: {'score': ...}
         paradigm_models="openai/gpt-4o",
         mutation_models="openai/gpt-4o-mini",
         budget=af.BudgetConfig(dollars=10.0),

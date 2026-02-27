@@ -111,10 +111,11 @@ class AlgoforgeConfig(BaseModel):
     problem_description: str
     function_signature: str
     seed_program: str
-    inputs: list[Any]
+    inputs: Optional[list[Any]] = None
     # v0.1: code-only. First arg is the extracted callable from exec().
-    # For prompt support, generalize to Callable[[str | Callable, list], dict].
-    score_fn: Callable[[Callable, list], dict]
+    # Supports either score_fn(fn) or score_fn(fn, inputs).
+    # For prompt support, generalize to Callable[[str | Callable, ...], dict].
+    score_fn: Callable[..., dict]
     budget: BudgetConfig
 
     # Core model config — the simple API.
