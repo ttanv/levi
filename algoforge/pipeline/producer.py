@@ -53,6 +53,10 @@ async def llm_producer(
 
         try:
             async with archive_lock:
+                if pool.size() == 0:
+                    logger.error(f"[LLM-{worker_id}] Archive is empty; stopping pipeline")
+                    stop_event.set()
+                    break
                 sampler_name, model = pool.get_weighted_sampler_config()
                 n_parents = config.pipeline.n_parents + config.pipeline.n_inspirations
                 context = {"budget_progress": state.budget_progress}

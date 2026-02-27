@@ -492,7 +492,7 @@ class CVTMAPElitesPool:
         if not evaluation_result.is_valid:
             return False, -1
 
-        behavior = self._extractor.extract(program)
+        behavior = self._extractor.extract(program, evaluation_result.scores)
         raw_behavior = behavior.values.copy()  # Store for cross-island migration
         cell_index = self._find_nearest_centroid(behavior)
         new_score = evaluation_result.primary_score
@@ -596,7 +596,7 @@ class CVTMAPElitesPool:
         if not evaluation_result.is_valid:
             return False, -1
 
-        behavior = self._extractor.extract(program)
+        behavior = self._extractor.extract(program, evaluation_result.scores)
 
         # Apply noise to normalized behavior before cell assignment
         noisy_values = {}
@@ -820,6 +820,12 @@ class CVTMAPElitesPool:
                 "best_score": self._best_score,
                 "generation": self._generation,
                 "feature_names": self._feature_names,
+                "centroids": self._centroids.tolist() if self._centroids is not None else None,
+                "normalization": {
+                    "mins": self._mins.tolist() if self._mins is not None else None,
+                    "maxs": self._maxs.tolist() if self._maxs is not None else None,
+                    "ranges": self._ranges.tolist() if self._ranges is not None else None,
+                },
             },
             "elites": elites_data,
             "sampler_stats": sampler_stats,

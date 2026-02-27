@@ -23,8 +23,10 @@ class DummyPool:
         self._mins = None
         self._maxs = None
         self._ranges = None
+        self._n_centroids = 0
         self.init_called = 0
         self.add_calls = []
+        self.add_at_cell_calls = []
 
     def _init_cvt_centroids(self):
         self.init_called += 1
@@ -33,6 +35,10 @@ class DummyPool:
     def add(self, program, eval_result):
         self.add_calls.append((program, eval_result))
         return True, 0
+
+    def add_at_cell(self, cell_index, program, eval_result, behavior):
+        self.add_at_cell_calls.append((cell_index, program, eval_result, behavior))
+        return True
 
 
 class TestEvaluateCode:
@@ -72,9 +78,44 @@ class TestEvaluateCode:
         assert "error" in result
         assert "scoring failed" in result["error"]
 
+    def test_supports_score_fn_without_inputs(self):
+        observed = {}
+
+        def score_fn(fn):
+            observed["name"] = fn.__name__
+            return {"score": fn(4)}
+
+        code = "def solve(x):\n    return x + 3"
+        result = evaluate_code(code, score_fn, None, "solve")
+
+        assert result == {"score": 7}
+        assert observed["name"] == "solve"
+
+    def test_supports_score_fn_without_inputs_even_when_inputs_provided(self):
+        def score_fn(fn):
+            return {"score": fn(10)}
+
+        code = "def solve(x):\n    return x - 2"
+        result = evaluate_code(code, score_fn, [1, 2, 3], "solve")
+
+        assert result == {"score": 8}
+
+    def test_two_arg_score_fn_receives_empty_inputs_when_config_inputs_missing(self):
+        observed = {}
+
+        def score_fn(_fn, inputs):
+            observed["inputs"] = inputs
+            return {"score": float(len(inputs))}
+
+        code = "def solve(x):\n    return x"
+        result = evaluate_code(code, score_fn, None, "solve")
+
+        assert result == {"score": 0.0}
+        assert observed["inputs"] == []
+
 
 class TestRestoreFromSnapshot:
-    def test_initializes_centroids_when_deferred_and_restores_elites(self):
+    def test_requires_snapshot_geometry(self):
         pool = DummyPool(n_dims=2, centroids=None)
         extractor = DummyExtractor()
         snapshot = {
@@ -85,28 +126,74 @@ class TestRestoreFromSnapshot:
             ],
         }
 
-        resumed_cost = _restore_from_snapshot(pool, extractor, snapshot)
+        with pytest.raises(KeyError):
+            _restore_from_snapshot(pool, extractor, snapshot)
 
-        assert resumed_cost == 3.5
-        assert pool.init_called == 1
-        assert len(pool.add_calls) == 2
-        assert isinstance(pool.add_calls[0][0], Program)
-        assert isinstance(pool.add_calls[0][1], EvaluationResult)
-        assert pool._mins.tolist() == [0.0, 0.0]
-        assert pool._maxs.tolist() == [1.0, 1.0]
-        assert pool._ranges.tolist() == [1.0, 1.0]
-        assert extractor.phase == "evolution"
-
-    def test_skips_centroid_init_when_already_present(self):
-        pool = DummyPool(n_dims=2, centroids=np.ones((3, 2)))
+    def test_restores_centroids_bounds_and_cell_behavior_when_present(self):
+        pool = DummyPool(n_dims=2, centroids=None)
         extractor = DummyExtractor()
-        snapshot = {"run_state": {"total_cost": 0.2}, "elites": []}
+        snapshot = {
+            "metadata": {
+                "centroids": [[0.1, 0.2], [0.8, 0.9]],
+                "normalization": {
+                    "mins": [0.0, 0.0],
+                    "maxs": [10.0, 20.0],
+                    "ranges": [10.0, 20.0],
+                },
+            },
+            "run_state": {"total_cost": 1.25},
+            "elites": [
+                {
+                    "cell_index": 1,
+                    "code": "def solve(x):\n    return x + 2",
+                    "scores": {"score": 5.0},
+                    "behavior": {"loop_count": 0.25, "branch_count": 0.75},
+                    "metadata": {"tag": "restored"},
+                }
+            ],
+        }
 
         resumed_cost = _restore_from_snapshot(pool, extractor, snapshot)
 
-        assert resumed_cost == 0.2
+        assert resumed_cost == 1.25
         assert pool.init_called == 0
+        assert pool._n_centroids == 2
+        assert pool._centroids.tolist() == [[0.1, 0.2], [0.8, 0.9]]
+        assert pool._mins.tolist() == [0.0, 0.0]
+        assert pool._maxs.tolist() == [10.0, 20.0]
+        assert pool._ranges.tolist() == [10.0, 20.0]
+        assert len(pool.add_at_cell_calls) == 1
+        assert len(pool.add_calls) == 0
+        assert pool.add_at_cell_calls[0][0] == 1
+        assert isinstance(pool.add_at_cell_calls[0][1], Program)
+        assert pool.add_at_cell_calls[0][1].metadata == {"tag": "restored"}
+        assert isinstance(pool.add_at_cell_calls[0][2], EvaluationResult)
         assert extractor.phase == "evolution"
+
+    def test_requires_cell_and_behavior_per_elite(self):
+        pool = DummyPool(n_dims=2, centroids=None)
+        extractor = DummyExtractor()
+        snapshot = {
+            "metadata": {
+                "centroids": [[0.1, 0.2], [0.8, 0.9]],
+                "normalization": {
+                    "mins": [0.0, 0.0],
+                    "maxs": [10.0, 20.0],
+                    "ranges": [10.0, 20.0],
+                },
+            },
+            "run_state": {"total_cost": 1.25},
+            "elites": [
+                {
+                    "code": "def solve(x):\n    return x + 2",
+                    "scores": {"score": 5.0},
+                    "metadata": {"tag": "restored"},
+                }
+            ],
+        }
+
+        with pytest.raises(KeyError):
+            _restore_from_snapshot(pool, extractor, snapshot)
 
 
 class TestExtractFnName:
