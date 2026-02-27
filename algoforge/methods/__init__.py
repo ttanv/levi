@@ -4,6 +4,6 @@ Optimization methods for AlgoForge.
 Methods compose primitives into complete optimization algorithms.
 """
 
-from .algoforge import run
+from .algoforge import evolve_code
 
-__all__ = ['run']
+__all__ = ['evolve_code']

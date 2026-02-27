@@ -185,11 +185,11 @@ EFFECTIVE_OPTIMAL = OPTIMAL + 0.10 * (BASELINE - OPTIMAL)  # Shifted to make 100
 
 # --- Score Function ---
 
-def score_fn(get_best_schedule, inputs):
+def score_fn(get_best_schedule):
     """Evaluate scheduling algorithm: returns 0-100 score based on total makespan."""
     try:
         total = 0
-        for w in inputs:
+        for w in INPUTS:
             _, schedule = get_best_schedule(w)
             if set(schedule) != set(range(w.num_txns)):
                 return {"error": "Invalid schedule: not a permutation"}

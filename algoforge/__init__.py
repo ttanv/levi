@@ -1,21 +1,29 @@
 """
 AlgoForge: Evolutionary optimization framework for algorithms.
 
-Example:
+Simple usage::
+
     import algoforge as af
 
-    config = af.AlgoforgeConfig(
-        problem_description="Optimize bin packing",
-        function_signature="def solve(items) -> list[list[int]]",
-        seed_program="def solve(items): ...",
-        inputs=[...],  # Optional if score_fn doesn't need external inputs
-        score_fn=lambda fn, inputs: {'score': ...},  # or: lambda fn: {'score': ...}
-        paradigm_models="openai/gpt-4o",
-        mutation_models="openai/gpt-4o-mini",
-        budget=af.BudgetConfig(dollars=10.0),
+    result = af.evolve_code(
+        "Optimize bin packing to minimize wasted space",
+        function_signature="def pack(items, bin_capacity):",
+        seed_program="def pack(items, bin_capacity): ...",
+        score_fn=my_scorer,
+        model="openai/gpt-4o-mini",
+        budget_dollars=5.0,
     )
 
-    result = af.run(config)
+Power users can pass any AlgoforgeConfig field as a keyword argument::
+
+    result = af.evolve_code(
+        ...,
+        paradigm_model="openai/gpt-4o",
+        mutation_model="openai/gpt-4o-mini",
+        budget_dollars=10.0,
+        punctuated_equilibrium=af.PunctuatedEquilibriumConfig(enabled=True),
+        pipeline=af.PipelineConfig(n_llm_workers=8),
+    )
 """
 
 # Core types
@@ -49,7 +57,7 @@ from .config import (
 )
 
 # Methods
-from .methods import run
+from .methods import evolve_code
 
 __version__ = "0.1.0"
 
@@ -84,5 +92,5 @@ __all__ = [
     'PunctuatedEquilibriumConfig',
     'PromptOptConfig',
     # Methods
-    'run',
+    'evolve_code',
 ]
