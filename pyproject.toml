@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.11,<3.13"
 dependencies = [
     "numpy>=2.3.5",
-    "litellm>=1.56.0",
+    "litellm>=1.81.16",
     "scikit-learn>=1.4.0",
     "colorama>=0.4.6",
     "dspy>=3.1.2",
