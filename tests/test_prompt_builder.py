@@ -6,8 +6,8 @@ PromptBuilder is used to assemble prompts for LLM mutation generation.
 
 import pytest
 
-from algoforge.core import Program, EvaluationResult
-from algoforge.llm import PromptBuilder, ProgramWithScore, OutputMode
+from levi.core import Program, EvaluationResult
+from levi.llm import PromptBuilder, ProgramWithScore, OutputMode
 
 
 class TestOutputMode:

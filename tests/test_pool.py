@@ -8,9 +8,9 @@ import pytest
 import random
 import numpy as np
 
-from algoforge.core import Program, EvaluationResult
-from algoforge.pool import CVTMAPElitesPool, SampleResult
-from algoforge.behavior import BehaviorExtractor, FeatureVector
+from levi.core import Program, EvaluationResult
+from levi.pool import CVTMAPElitesPool, SampleResult
+from levi.behavior import BehaviorExtractor, FeatureVector
 
 
 class TestSampleResult:

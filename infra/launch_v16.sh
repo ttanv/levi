@@ -3,7 +3,7 @@
 # ==========================================================
 # CONFIGURATION - Multi-Host TPU v4-16 vLLM Deployment
 # ==========================================================
-TPU_NAME="algoforge-glm"
+TPU_NAME="levi-glm"
 ZONE="us-central2-b"
 MODEL="zai-org/GLM-4.5-Air"
 HF_TOKEN="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"
