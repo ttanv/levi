@@ -50,7 +50,6 @@ Your goal is to engineer a **fundamentally different algorithmic approach** that
 ## Output
 Output ONLY complete, runnable Python code in a ```python block. No explanations before or after.
 """,
-
     "mid": """# Solution Synthesis Challenge
 
 ## Problem
@@ -94,7 +93,6 @@ The archive has been evolving and found several decent approaches. Your goal is 
 ## Output
 Output ONLY complete, runnable Python code in a ```python block. No explanations before or after.
 """,
-
     "late": """# Targeted Refinement Challenge
 
 ## Problem

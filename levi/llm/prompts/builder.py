@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Optional
 
-from ...core import Program, EvaluationResult
+from ...core import EvaluationResult, Program
 
 
 class OutputMode(Enum):
@@ -55,7 +55,7 @@ class PromptBuilder:
         self._output_mode: OutputMode = OutputMode.FULL
         self._custom_output: Optional[str] = None
 
-    def add_section(self, name: str, content: str, priority: int = 50) -> 'PromptBuilder':
+    def add_section(self, name: str, content: str, priority: int = 50) -> "PromptBuilder":
         """Add a custom section to the prompt."""
         self._sections.append(PromptSection(name, content, priority))
         return self
@@ -64,7 +64,7 @@ class PromptBuilder:
         self,
         parents: list[ProgramWithScore],
         priority: int = 50,
-    ) -> 'PromptBuilder':
+    ) -> "PromptBuilder":
         """Add parent programs as v1, v2, v3, etc."""
         for i, p in enumerate(parents):
             label = f"v{i + 1}"
@@ -72,17 +72,17 @@ class PromptBuilder:
             self._sections.append(PromptSection(label, content, priority + i))
         return self
 
-    def add_feedback(self, feedback: str, priority: int = 60) -> 'PromptBuilder':
+    def add_feedback(self, feedback: str, priority: int = 60) -> "PromptBuilder":
         """Add feedback/traces section."""
         self._sections.append(PromptSection("Feedback", feedback, priority))
         return self
 
-    def set_output_mode(self, mode: OutputMode) -> 'PromptBuilder':
+    def set_output_mode(self, mode: OutputMode) -> "PromptBuilder":
         """Set how the LLM should output changes."""
         self._output_mode = mode
         return self
 
-    def set_custom_output(self, instructions: str) -> 'PromptBuilder':
+    def set_custom_output(self, instructions: str) -> "PromptBuilder":
         """Set custom output instructions (replaces default output mode)."""
         self._custom_output = instructions
         return self
@@ -105,7 +105,7 @@ class PromptBuilder:
 
     def _output_instructions(self) -> str:
         if self._output_mode == OutputMode.FULL:
-            return '''Write an improved version of the function.
+            return """Write an improved version of the function.
 
 CRITICAL REQUIREMENTS:
 1. Your code must be COMPLETE and RUNNABLE as a standalone file
@@ -123,10 +123,10 @@ def function_name(...):
 ```
 
 DO NOT include any explanation or text outside the code block.
-DO NOT assume any imports are already available - include every import your code needs.'''
+DO NOT assume any imports are already available - include every import your code needs."""
 
         elif self._output_mode == OutputMode.DIFF:
-            return '''Output your improved code using SEARCH/REPLACE blocks.
+            return """Output your improved code using SEARCH/REPLACE blocks.
 
 FORMAT:
 <<<<<<< SEARCH
@@ -150,6 +150,6 @@ RULES:
 6. Do NOT use ```python code blocks
 
 GOOD: Replace a single function or a few lines
-BAD: Replace the entire file or 100+ lines at once'''
+BAD: Replace the entire file or 100+ lines at once"""
 
         return ""

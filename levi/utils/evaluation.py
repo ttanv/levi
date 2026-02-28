@@ -3,7 +3,8 @@
 import inspect
 import math
 import types
-from typing import Any, Callable, Optional
+from collections.abc import Callable
+from typing import Any, Optional
 
 
 def _accepts_n_positional_args(fn: Callable[..., Any], n: int) -> Optional[bool]:

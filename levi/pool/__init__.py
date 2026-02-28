@@ -1,10 +1,10 @@
 """Program pool management for Levi."""
 
-from .protocol import ProgramPool, SampleResult
 from .cvt_map_elites import CVTMAPElitesPool
+from .protocol import ProgramPool, SampleResult
 
 __all__ = [
-    'ProgramPool',
-    'SampleResult',
-    'CVTMAPElitesPool',
+    "ProgramPool",
+    "SampleResult",
+    "CVTMAPElitesPool",
 ]

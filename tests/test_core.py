@@ -4,10 +4,11 @@ Tests for core module: Program and EvaluationResult.
 These are the fundamental data structures that everything else depends on.
 """
 
-import pytest
 from datetime import datetime
 
-from levi.core import Program, EvaluationResult
+import pytest
+
+from levi.core import EvaluationResult, Program
 
 
 class TestProgram:
@@ -104,17 +105,13 @@ class TestEvaluationResult:
 
     def test_primary_score_with_score_key(self):
         """primary_score returns 'score' key when present."""
-        result = EvaluationResult(
-            scores={"score": 0.75, "accuracy": 0.8, "speed": 0.6}
-        )
+        result = EvaluationResult(scores={"score": 0.75, "accuracy": 0.8, "speed": 0.6})
 
         assert result.primary_score == 0.75
 
     def test_primary_score_without_score_key(self):
         """primary_score returns first value when no 'score' key."""
-        result = EvaluationResult(
-            scores={"accuracy": 0.8, "speed": 0.6}
-        )
+        result = EvaluationResult(scores={"accuracy": 0.8, "speed": 0.6})
 
         # Returns first value (dict order is preserved in Python 3.7+)
         assert result.primary_score == 0.8
@@ -127,9 +124,7 @@ class TestEvaluationResult:
 
     def test_invalid_factory_method(self):
         """invalid() factory creates invalid result correctly."""
-        result = EvaluationResult.invalid(
-            error="Timeout after 10s"
-        )
+        result = EvaluationResult.invalid(error="Timeout after 10s")
 
         assert result.is_valid is False
         assert result.error == "Timeout after 10s"

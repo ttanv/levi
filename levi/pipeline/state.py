@@ -20,6 +20,7 @@ class BudgetLimitReached(RuntimeError):
 # Module-level utilities (previously static methods on PipelineState)
 # ---------------------------------------------------------------------------
 
+
 def coerce_finite_float(value: object, *, default: float) -> float:
     """Best-effort numeric coercion with a safe fallback."""
     try:
@@ -42,9 +43,11 @@ def _coerce_positive_limit(value: object) -> float | None:
 # Score history
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class ScoreHistoryEntry:
     """A single entry in the score history."""
+
     eval_number: int
     score: float
     best_score: float
@@ -60,6 +63,7 @@ class ScoreHistoryEntry:
 # ---------------------------------------------------------------------------
 # BudgetTracker – budget limits, cost accounting, eval reservation
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class BudgetTracker:
@@ -105,9 +109,12 @@ class BudgetTracker:
             eval_limit = int(coerce_finite_float(self.budget.evaluations, default=0.0))
             if eval_limit <= 0:
                 return True
-            eval_used = int(coerce_finite_float(
-                self.eval_count + self.eval_in_flight, default=float("inf"),
-            ))
+            eval_used = int(
+                coerce_finite_float(
+                    self.eval_count + self.eval_in_flight,
+                    default=float("inf"),
+                )
+            )
             if eval_used >= eval_limit:
                 return True
 
@@ -142,9 +149,12 @@ class BudgetTracker:
             eval_limit = int(coerce_finite_float(self.budget.evaluations, default=0.0))
             if eval_limit <= 0:
                 return 1.0
-            eval_used = int(coerce_finite_float(
-                self.eval_count + self.eval_in_flight, default=float("inf"),
-            ))
+            eval_used = int(
+                coerce_finite_float(
+                    self.eval_count + self.eval_in_flight,
+                    default=float("inf"),
+                )
+            )
             return max(0.0, min(1.0, eval_used / eval_limit))
 
         seconds_limit = _coerce_positive_limit(self.budget.seconds)
@@ -233,6 +243,7 @@ class BudgetTracker:
 # LLMGate – concurrency control and budget enforcement for LLM calls
 # ---------------------------------------------------------------------------
 
+
 class LLMGate:
     """Concurrency and budget gate for LLM API calls.
 
@@ -309,6 +320,7 @@ class LLMGate:
 # PipelineState – thin coordinator that composes the above
 # ---------------------------------------------------------------------------
 
+
 class PipelineState:
     """Shared pipeline state for producer-consumer coordination.
 
@@ -331,8 +343,8 @@ class PipelineState:
         self.error_count: int = 0
 
         # Meta-advice tracking
-        self.current_meta_advice: str = ''
-        self.previous_meta_advice: str = ''
+        self.current_meta_advice: str = ""
+        self.previous_meta_advice: str = ""
         self.meta_advice_eval_count: int = 0
 
         # Period metrics for meta-advice generation
@@ -344,7 +356,7 @@ class PipelineState:
 
         # Score history tracking
         self.score_history: list = []
-        self.best_score_so_far: float = float('-inf')
+        self.best_score_so_far: float = float("-inf")
 
         # Punctuated Equilibrium tracking
         self.last_pe_eval_count: int = 0
@@ -487,19 +499,17 @@ class PipelineState:
         if interval <= 0:
             return False
         return (
-            self.eval_count > 0
-            and self.eval_count % interval == 0
-            and self.eval_count != self.meta_advice_eval_count
+            self.eval_count > 0 and self.eval_count % interval == 0 and self.eval_count != self.meta_advice_eval_count
         )
 
     def reset_period_metrics(self) -> dict:
         top_errors = sorted(self.all_error_counts.items(), key=lambda x: -x[1])[:10]
         metrics = {
-            'errors': self.period_errors,
-            'acceptances': self.period_acceptances,
-            'rejections': self.period_rejections,
-            'error_messages': set(self.period_error_messages),
-            'top_errors': top_errors,
+            "errors": self.period_errors,
+            "acceptances": self.period_acceptances,
+            "rejections": self.period_rejections,
+            "error_messages": set(self.period_error_messages),
+            "top_errors": top_errors,
         }
         self.period_errors = 0
         self.period_acceptances = 0

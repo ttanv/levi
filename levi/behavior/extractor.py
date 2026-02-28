@@ -2,27 +2,28 @@
 
 import ast
 import math
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable, Optional
+from typing import Optional
 
 import numpy as np
 
 from ..core import Program
 from .features import (
-    compute_code_length,
     compute_ast_depth,
-    compute_cyclomatic_complexity,
-    compute_loop_count,
-    compute_math_operators,
     compute_branch_count,
-    compute_loop_nesting_max,
-    compute_function_def_count,
-    compute_numeric_literal_count,
-    compute_comparison_count,
-    compute_subscript_count,
     compute_call_count,
+    compute_code_length,
+    compute_comparison_count,
     compute_comprehension_count,
+    compute_cyclomatic_complexity,
+    compute_function_def_count,
+    compute_loop_count,
+    compute_loop_nesting_max,
+    compute_math_operators,
+    compute_numeric_literal_count,
     compute_range_max_arg,
+    compute_subscript_count,
 )
 
 
@@ -76,7 +77,7 @@ class BehaviorExtractor:
         self.features = self.ast_features + self.score_keys
 
         # Phase control for noise
-        self._phase = 'init'
+        self._phase = "init"
 
         # Welford's online algorithm for z-score normalization (adaptive mode)
         self._count: dict[str, int] = {f: 0 for f in self.features}
@@ -202,7 +203,7 @@ class BehaviorExtractor:
                 values[feature] = self._zscore_to_01(z)
 
             # Add noise during init phase (only in adaptive mode)
-            if self._phase == 'init' and self.init_noise > 0:
+            if self._phase == "init" and self.init_noise > 0:
                 for feature in self.features:
                     noise = np.random.normal(0, self.init_noise)
                     values[feature] = float(np.clip(values[feature] + noise, 0.0, 1.0))

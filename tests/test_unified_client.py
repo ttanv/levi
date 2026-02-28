@@ -103,11 +103,13 @@ class TestUnifiedLLMClient:
             mock_litellm.acompletion = AsyncMock(return_value=mock_response)
             mock_litellm.completion_cost.return_value = 0.005
 
-            resp = asyncio.run(client.acompletion(
-                model="test/model",
-                messages=[{"role": "user", "content": "hello"}],
-                temperature=0.7,
-            ))
+            resp = asyncio.run(
+                client.acompletion(
+                    model="test/model",
+                    messages=[{"role": "user", "content": "hello"}],
+                    temperature=0.7,
+                )
+            )
 
         assert resp.content == "test response"
         assert resp.cost == 0.005
@@ -127,10 +129,12 @@ class TestUnifiedLLMClient:
             mock_litellm.acompletion = AsyncMock(side_effect=Exception("Connection refused"))
 
             with pytest.raises(LLMConnectionError):
-                asyncio.run(client.acompletion(
-                    model="test/model",
-                    messages=[{"role": "user", "content": "hello"}],
-                ))
+                asyncio.run(
+                    client.acompletion(
+                        model="test/model",
+                        messages=[{"role": "user", "content": "hello"}],
+                    )
+                )
 
     def test_acompletion_extras_passed_through(self):
         """Verify extra kwargs are passed to litellm."""
@@ -152,11 +156,13 @@ class TestUnifiedLLMClient:
             mock_litellm.acompletion = AsyncMock(return_value=mock_response)
             mock_litellm.completion_cost.return_value = 0.0
 
-            asyncio.run(client.acompletion(
-                model="test/model",
-                messages=[{"role": "user", "content": "hello"}],
-                extra_body={"reasoning": {"enabled": False}},
-            ))
+            asyncio.run(
+                client.acompletion(
+                    model="test/model",
+                    messages=[{"role": "user", "content": "hello"}],
+                    extra_body={"reasoning": {"enabled": False}},
+                )
+            )
 
         call_kwargs = mock_litellm.acompletion.call_args[1]
         assert call_kwargs["extra_body"] == {"reasoning": {"enabled": False}}

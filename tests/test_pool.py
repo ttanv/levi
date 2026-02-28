@@ -4,13 +4,12 @@ Tests for pool module: CVTMAPElitesPool.
 Tests the CVT-MAP-Elites archive with multi-strategy sampling.
 """
 
-import pytest
-import random
 import numpy as np
+import pytest
 
-from levi.core import Program, EvaluationResult
-from levi.pool import CVTMAPElitesPool, SampleResult
 from levi.behavior import BehaviorExtractor, FeatureVector
+from levi.core import EvaluationResult, Program
+from levi.pool import CVTMAPElitesPool, SampleResult
 
 
 class TestSampleResult:
@@ -49,6 +48,7 @@ class TestCVTMAPElitesPool:
     @pytest.fixture(autouse=True)
     def mock_centroid_init(self, monkeypatch):
         """Avoid sklearn KMeans in tests; keep deterministic centroid layout."""
+
         def _fake_init(self):
             rng = np.random.default_rng(42)
             return rng.uniform(0.0, 1.0, size=(self._n_centroids, self._n_dims))
@@ -58,9 +58,7 @@ class TestCVTMAPElitesPool:
     @pytest.fixture
     def extractor(self):
         """Create a basic behavior extractor."""
-        return BehaviorExtractor(
-            ast_features=["code_length", "loop_count", "cyclomatic_complexity"]
-        )
+        return BehaviorExtractor(ast_features=["code_length", "loop_count", "cyclomatic_complexity"])
 
     @pytest.fixture
     def pool(self, extractor):
@@ -156,14 +154,20 @@ class TestCVTMAPElitesPool:
         prog1 = Program(content="def solve(x): return x")
         prog2 = Program(content="def solve(x): return x")  # Same code = same behavior
 
-        pool.add(prog1, EvaluationResult(
-                        scores={"score": 0.5},
-            is_valid=True,
-        ))
-        pool.add(prog2, EvaluationResult(
-                        scores={"score": 0.8},  # Higher score
-            is_valid=True,
-        ))
+        pool.add(
+            prog1,
+            EvaluationResult(
+                scores={"score": 0.5},
+                is_valid=True,
+            ),
+        )
+        pool.add(
+            prog2,
+            EvaluationResult(
+                scores={"score": 0.8},  # Higher score
+                is_valid=True,
+            ),
+        )
 
         # Should still be 1 (replaced, not added)
         assert pool.size() == 1
@@ -177,15 +181,21 @@ class TestCVTMAPElitesPool:
         prog1 = Program(content="def solve(x): return x")
         prog2 = Program(content="def solve(x): return x")
 
-        pool.add(prog1, EvaluationResult(
-            scores={"score": 0.8},  # Higher score first
-            is_valid=True,
-        ))
+        pool.add(
+            prog1,
+            EvaluationResult(
+                scores={"score": 0.8},  # Higher score first
+                is_valid=True,
+            ),
+        )
 
-        accepted, _ = pool.add(prog2, EvaluationResult(
-            scores={"score": 0.5},  # Lower score
-            is_valid=True,
-        ))
+        accepted, _ = pool.add(
+            prog2,
+            EvaluationResult(
+                scores={"score": 0.5},  # Lower score
+                is_valid=True,
+            ),
+        )
 
         assert accepted is False
         assert pool.size() == 1
@@ -193,10 +203,13 @@ class TestCVTMAPElitesPool:
     def test_sample_returns_sample_result(self, pool):
         """sample() returns a SampleResult."""
         prog = Program(content="def solve(x): return x")
-        pool.add(prog, EvaluationResult(
-            scores={"score": 0.8},
-            is_valid=True,
-        ))
+        pool.add(
+            prog,
+            EvaluationResult(
+                scores={"score": 0.8},
+                is_valid=True,
+            ),
+        )
 
         sample = pool.sample("ucb", n_parents=1)
 
@@ -213,18 +226,21 @@ class TestCVTMAPElitesPool:
         codes = [
             "def solve(x): return x",
             "def solve(x): return x + 1",
-            '''def solve(x):
+            """def solve(x):
     for i in range(10):
         x += i
-    return x''',
+    return x""",
         ]
 
         for i, code in enumerate(codes):
             prog = Program(content=code)
-            pool.add(prog, EvaluationResult(
-                scores={"score": i * 0.3},  # Last has highest
-                is_valid=True,
-            ))
+            pool.add(
+                prog,
+                EvaluationResult(
+                    scores={"score": i * 0.3},  # Last has highest
+                    is_valid=True,
+                ),
+            )
 
         best = pool.best()
 
@@ -247,10 +263,13 @@ class TestCVTMAPElitesPool:
     def test_get_stats(self, pool):
         """get_stats() returns expected statistics."""
         prog = Program(content="def solve(x): return x")
-        pool.add(prog, EvaluationResult(
-            scores={"score": 0.8},
-            is_valid=True,
-        ))
+        pool.add(
+            prog,
+            EvaluationResult(
+                scores={"score": 0.8},
+                is_valid=True,
+            ),
+        )
         pool.on_generation_complete()
 
         stats = pool.get_stats()
@@ -272,7 +291,7 @@ class TestCVTMAPElitesPool:
             # Simple: short, no loops, low complexity
             "def solve(x): return x",
             # Complex: longer, multiple loops, high complexity
-            '''def solve(x):
+            """def solve(x):
     result = 0
     for i in range(100):
         for j in range(100):
@@ -282,15 +301,18 @@ class TestCVTMAPElitesPool:
                 result -= i + j
             else:
                 result *= 2
-    return result''',
+    return result""",
         ]
 
         for code in codes:
             prog = Program(content=code)
-            pool.add(prog, EvaluationResult(
-                scores={"score": 0.5},
-                is_valid=True,
-            ))
+            pool.add(
+                prog,
+                EvaluationResult(
+                    scores={"score": 0.5},
+                    is_valid=True,
+                ),
+            )
 
         # At least one should be accepted
         assert pool.size() >= 1
@@ -301,10 +323,13 @@ class TestCVTMAPElitesPool:
         for i in range(5):
             code = f"def solve(x): return x + {i}"
             prog = Program(content=code)
-            pool.add(prog, EvaluationResult(
-                scores={"score": i * 0.1},
-                is_valid=True,
-            ))
+            pool.add(
+                prog,
+                EvaluationResult(
+                    scores={"score": i * 0.1},
+                    is_valid=True,
+                ),
+            )
 
         # Check available samplers
         stats = pool.get_stats()
@@ -319,6 +344,7 @@ class TestPoolProtocolCompliance:
     @pytest.fixture(autouse=True)
     def mock_centroid_init(self, monkeypatch):
         """Avoid sklearn KMeans in tests; keep deterministic centroid layout."""
+
         def _fake_init(self):
             rng = np.random.default_rng(42)
             return rng.uniform(0.0, 1.0, size=(self._n_centroids, self._n_dims))
@@ -328,9 +354,7 @@ class TestPoolProtocolCompliance:
     @pytest.fixture
     def pool(self):
         """Create a pool instance."""
-        extractor = BehaviorExtractor(
-            ast_features=["code_length", "loop_count"]
-        )
+        extractor = BehaviorExtractor(ast_features=["code_length", "loop_count"])
         return CVTMAPElitesPool(
             behavior_extractor=extractor,
             n_centroids=10,

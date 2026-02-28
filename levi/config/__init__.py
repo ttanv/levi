@@ -3,18 +3,18 @@ Configuration models for Levi.
 """
 
 from .models import (
-    SamplerModelPair,
+    BehaviorConfig,
     BudgetConfig,
+    CascadeConfig,
     CVTConfig,
     InitConfig,
-    MetaAdviceConfig,
-    BehaviorConfig,
-    CascadeConfig,
-    PipelineConfig,
-    PunctuatedEquilibriumConfig,
-    PromptOptConfig,
     LeviConfig,
     LeviResult,
+    MetaAdviceConfig,
+    PipelineConfig,
+    PromptOptConfig,
+    PunctuatedEquilibriumConfig,
+    SamplerModelPair,
 )
 
 __all__ = [

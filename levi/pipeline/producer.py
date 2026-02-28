@@ -1,16 +1,16 @@
 """LLM producers: sample from archive and call LLM."""
 
 import asyncio
+import logging
 import random
 import re
-import logging
 from typing import Optional
 
 from ..config import LeviConfig
+from ..llm import OutputMode, ProgramWithScore, PromptBuilder, get_llm_client
 from ..pool import CVTMAPElitesPool
-from ..llm import PromptBuilder, ProgramWithScore, OutputMode, get_llm_client
 from ..utils import extract_code
-from .state import PipelineState, BudgetLimitReached
+from .state import BudgetLimitReached, PipelineState
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +19,7 @@ def apply_diff(original: str, diff_response: str) -> Optional[str]:
     """Apply SEARCH/REPLACE diff blocks to original code."""
     result = original
 
-    pattern = r'<<<<<<< SEARCH\s*(.*?)\s*=======\s*(.*?)\s*>>>>>>> REPLACE'
+    pattern = r"<<<<<<< SEARCH\s*(.*?)\s*=======\s*(.*?)\s*>>>>>>> REPLACE"
     matches = re.findall(pattern, diff_response, re.DOTALL)
 
     if not matches:
@@ -120,12 +120,14 @@ async def llm_producer(
             if not code:
                 continue
 
-            await code_queue.put({
-                "code": code,
-                "sampler": sampler_name,
-                "source_cell": sample.metadata.get("source_cell"),
-                "model": model,
-            })
+            await code_queue.put(
+                {
+                    "code": code,
+                    "sampler": sampler_name,
+                    "source_cell": sample.metadata.get("source_cell"),
+                    "model": model,
+                }
+            )
 
         except asyncio.CancelledError:
             break

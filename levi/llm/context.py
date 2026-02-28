@@ -1,14 +1,12 @@
 """Context management for LLM client dependency injection."""
 
 from contextvars import ContextVar
-from typing import Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
     from .unified_client import UnifiedLLMClient
 
-_llm_client: ContextVar[Optional["UnifiedLLMClient"]] = ContextVar(
-    "llm_client", default=None
-)
+_llm_client: ContextVar[Optional["UnifiedLLMClient"]] = ContextVar("llm_client", default=None)
 
 
 def get_llm_client() -> "UnifiedLLMClient":
@@ -19,9 +17,7 @@ def get_llm_client() -> "UnifiedLLMClient":
     """
     client = _llm_client.get()
     if client is None:
-        raise RuntimeError(
-            "LLM client not initialized. Call set_llm_client() first."
-        )
+        raise RuntimeError("LLM client not initialized. Call set_llm_client() first.")
     return client
 
 

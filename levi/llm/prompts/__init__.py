@@ -1,9 +1,9 @@
 """Prompt building for Levi."""
 
-from .builder import PromptBuilder, ProgramWithScore, OutputMode
+from .builder import OutputMode, ProgramWithScore, PromptBuilder
 
 __all__ = [
-    'PromptBuilder',
-    'ProgramWithScore',
-    'OutputMode',
+    "PromptBuilder",
+    "ProgramWithScore",
+    "OutputMode",
 ]

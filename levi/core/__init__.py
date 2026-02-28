@@ -1,12 +1,12 @@
 """Core types for Levi."""
 
-from .types import MetricDict, MetadataDict
-from .program import Program
 from .evaluation import EvaluationResult
+from .program import Program
+from .types import MetadataDict, MetricDict
 
 __all__ = [
-    'MetricDict',
-    'MetadataDict',
-    'Program',
-    'EvaluationResult',
+    "MetricDict",
+    "MetadataDict",
+    "Program",
+    "EvaluationResult",
 ]

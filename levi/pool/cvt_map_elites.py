@@ -11,19 +11,21 @@ Single shared archive with multiple sampling strategies:
 import math
 import random
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
+
 import numpy as np
 from sklearn.cluster import KMeans
 
-from ..core import Program, EvaluationResult
 from ..behavior import BehaviorExtractor, FeatureVector
+from ..core import EvaluationResult, Program
 from .protocol import SampleResult
 
 
 @dataclass
 class Elite:
     """An elite program occupying a cell."""
+
     program: Program
     result: EvaluationResult
     behavior: FeatureVector
@@ -33,8 +35,9 @@ class Elite:
 @dataclass
 class CellStats:
     """Statistics for a cell used by samplers."""
-    n_samples: int = 0      # Times this cell was sampled
-    n_successes: int = 0    # Times sampling led to accepted offspring
+
+    n_samples: int = 0  # Times this cell was sampled
+    n_successes: int = 0  # Times sampling led to accepted offspring
 
     def success_rate(self) -> float:
         if self.n_samples == 0:
@@ -49,7 +52,7 @@ class CellStats:
         sampling cells that actually improve the archive.
         """
         if self.n_samples == 0:
-            return float('inf')  # Unexplored cells have infinite priority
+            return float("inf")  # Unexplored cells have infinite priority
         exploitation = self.success_rate()
         exploration = c * math.sqrt(math.log(total_samples + 1) / self.n_samples)
         return exploitation + exploration
@@ -75,9 +78,7 @@ class Sampler(ABC):
             stats.n_successes += 1
 
     @abstractmethod
-    def select_cells(
-        self, elites: dict[int, Elite], n: int, context: Optional[dict] = None
-    ) -> list[int]:
+    def select_cells(self, elites: dict[int, Elite], n: int, context: Optional[dict] = None) -> list[int]:
         """Select n cells from the archive."""
         pass
 
@@ -100,9 +101,7 @@ class UCBSampler(Sampler):
         self.c = c
         self._total_samples = 0
 
-    def select_cells(
-        self, elites: dict[int, Elite], n: int, context: Optional[dict] = None
-    ) -> list[int]:
+    def select_cells(self, elites: dict[int, Elite], n: int, context: Optional[dict] = None) -> list[int]:
         if not elites:
             return []
         self._total_samples += 1
@@ -116,7 +115,7 @@ class UCBSampler(Sampler):
 
         # Sort by UCB score descending, take top n
         scores.sort(reverse=True, key=lambda x: x[0])
-        return [cell for _, cell in scores[:min(n, len(cells))]]
+        return [cell for _, cell in scores[: min(n, len(cells))]]
 
 
 class SoftmaxSampler(Sampler):
@@ -126,9 +125,7 @@ class SoftmaxSampler(Sampler):
         super().__init__("softmax")
         self.temperature = temperature
 
-    def select_cells(
-        self, elites: dict[int, Elite], n: int, context: Optional[dict] = None
-    ) -> list[int]:
+    def select_cells(self, elites: dict[int, Elite], n: int, context: Optional[dict] = None) -> list[int]:
         if not elites:
             return []
         cells = list(elites.keys())
@@ -191,9 +188,7 @@ class CyclicAnnealingSampler(Sampler):
         self._last_temperature = temperature
         return temperature
 
-    def select_cells(
-        self, elites: dict[int, Elite], n: int, context: Optional[dict] = None
-    ) -> list[int]:
+    def select_cells(self, elites: dict[int, Elite], n: int, context: Optional[dict] = None) -> list[int]:
         if not elites:
             return []
 
@@ -266,9 +261,7 @@ class SubscoreSampler(Sampler):
         self.display_name = display_name
         self.temperature = temperature
 
-    def select_cells(
-        self, elites: dict[int, Elite], n: int, context: Optional[dict] = None
-    ) -> list[int]:
+    def select_cells(self, elites: dict[int, Elite], n: int, context: Optional[dict] = None) -> list[int]:
         if not elites:
             return []
 
@@ -343,7 +336,7 @@ class CVTMAPElitesPool:
 
         # Single shared archive
         self._elites: dict[int, Elite] = {}
-        self._best_score: float = float('-inf')
+        self._best_score: float = float("-inf")
         self._generation = 0
 
         # Initialize samplers
@@ -370,13 +363,7 @@ class CVTMAPElitesPool:
         n_samples = max(10000, self._n_centroids * 10)
         samples = np.random.uniform(0, 1, size=(n_samples, n_dims))
 
-        kmeans = KMeans(
-            n_clusters=self._n_centroids,
-            init='k-means++',
-            n_init=1,
-            max_iter=100,
-            random_state=42
-        )
+        kmeans = KMeans(n_clusters=self._n_centroids, init="k-means++", n_init=1, max_iter=100, random_state=42)
         kmeans.fit(samples)
         return kmeans.cluster_centers_
 
@@ -401,13 +388,7 @@ class CVTMAPElitesPool:
         data = np.array(behavior_vectors)
         actual_n_centroids = min(n_centroids, len(data))
 
-        kmeans = KMeans(
-            n_clusters=actual_n_centroids,
-            init='k-means++',
-            n_init=3,
-            max_iter=100,
-            random_state=42
-        )
+        kmeans = KMeans(n_clusters=actual_n_centroids, init="k-means++", n_init=3, max_iter=100, random_state=42)
         kmeans.fit(data)
         self._centroids = kmeans.cluster_centers_
         self._n_centroids = actual_n_centroids
@@ -676,8 +657,12 @@ class CVTMAPElitesPool:
         return self._samplers[name]
 
     def register_sampler_model_pair(
-        self, sampler_name: str, model: str, weight: float = 1.0,
-        temperature: Optional[float] = None, n_cycles: Optional[int] = None
+        self,
+        sampler_name: str,
+        model: str,
+        weight: float = 1.0,
+        temperature: Optional[float] = None,
+        n_cycles: Optional[int] = None,
     ) -> None:
         if weight <= 0:
             raise ValueError("Weight must be positive")
@@ -733,7 +718,7 @@ class CVTMAPElitesPool:
         """
         n_removed = len(self._elites)
         self._elites.clear()
-        self._best_score = float('-inf')
+        self._best_score = float("-inf")
         return n_removed
 
     def get_top_elites(self, n: int) -> list[Elite]:
@@ -745,11 +730,7 @@ class CVTMAPElitesPool:
         if not self._elites:
             return []
 
-        sorted_elites = sorted(
-            self._elites.values(),
-            key=lambda e: e.result.primary_score,
-            reverse=True
-        )
+        sorted_elites = sorted(self._elites.values(), key=lambda e: e.result.primary_score, reverse=True)
         return sorted_elites[:n]
 
     def on_generation_complete(self) -> None:
@@ -761,15 +742,11 @@ class CVTMAPElitesPool:
             "n_centroids": self._n_centroids,
             "best_score": self._best_score,
             "generation": self._generation,
-            "samplers": {
-                name: sampler.get_stats_summary()
-                for name, sampler in self._samplers.items()
-            },
+            "samplers": {name: sampler.get_stats_summary() for name, sampler in self._samplers.items()},
         }
         if self._mins is not None:
             stats["learned_bounds"] = {
-                f: (float(self._mins[i]), float(self._maxs[i]))
-                for i, f in enumerate(self._feature_names)
+                f: (float(self._mins[i]), float(self._maxs[i])) for i, f in enumerate(self._feature_names)
             }
         return stats
 
@@ -833,8 +810,7 @@ class CVTMAPElitesPool:
 
         if self._mins is not None:
             snapshot["metadata"]["learned_bounds"] = {
-                f: {"min": float(self._mins[i]), "max": float(self._maxs[i])}
-                for i, f in enumerate(self._feature_names)
+                f: {"min": float(self._mins[i]), "max": float(self._maxs[i])} for i, f in enumerate(self._feature_names)
             }
 
         return snapshot

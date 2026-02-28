@@ -7,13 +7,13 @@ import time
 
 import numpy as np
 
-from ..config import LeviConfig
-from ..core import Program, EvaluationResult
-from ..pipeline.state import ScoreHistoryEntry, PipelineState, BudgetLimitReached
-from ..pool import CVTMAPElitesPool
 from ..behavior import BehaviorExtractor
-from ..llm import PromptBuilder, ProgramWithScore, OutputMode, get_llm_client
-from ..utils import ResilientProcessPool, extract_code, extract_fn_name, evaluate_code
+from ..config import LeviConfig
+from ..core import EvaluationResult, Program
+from ..llm import OutputMode, ProgramWithScore, PromptBuilder, get_llm_client
+from ..pipeline.state import BudgetLimitReached, PipelineState, ScoreHistoryEntry
+from ..pool import CVTMAPElitesPool
+from ..utils import ResilientProcessPool, evaluate_code, extract_code, extract_fn_name
 
 logger = logging.getLogger(__name__)
 
@@ -89,17 +89,19 @@ class Diversifier:
         self._init_eval_count += 1
         if score > self.best_score:
             self.best_score = score
-        self.score_history.append(ScoreHistoryEntry(
-            eval_number=self._init_eval_count,
-            score=score,
-            best_score=self.best_score,
-            timestamp=time.time() - self._start_time,
-            accepted=True,  # All valid init programs go into the archive
-            sampler=sampler,
-            archive_size=0,  # Not meaningful during init
-            cell_index=None,
-            cumulative_cost=self.total_cost,
-        ))
+        self.score_history.append(
+            ScoreHistoryEntry(
+                eval_number=self._init_eval_count,
+                score=score,
+                best_score=self.best_score,
+                timestamp=time.time() - self._start_time,
+                accepted=True,  # All valid init programs go into the archive
+                sampler=sampler,
+                archive_size=0,  # Not meaningful during init
+                cell_index=None,
+                cumulative_cost=self.total_cost,
+            )
+        )
 
     async def _cascade_eval(self, code: str, fn_name: str) -> dict:
         """Evaluate with cascade: quick test first, full eval only if promising."""
@@ -109,16 +111,11 @@ class Diversifier:
         cascade = self.config.cascade
         if cascade.enabled and cascade.quick_inputs:
             quick_result = await self.executor.run(
-                evaluate_code,
-                code,
-                self.config.score_fn,
-                cascade.quick_inputs,
-                fn_name,
-                timeout=cascade.quick_timeout
+                evaluate_code, code, self.config.score_fn, cascade.quick_inputs, fn_name, timeout=cascade.quick_timeout
             )
             if "error" in quick_result:
                 return quick_result
-            quick_score = quick_result.get('score', 0)
+            quick_score = quick_result.get("score", 0)
             threshold = self.best_score * cascade.min_score_ratio
             if quick_score < threshold:
                 return {"error": f"Cascade rejected: {quick_score:.1f} < {threshold:.1f}"}
@@ -129,10 +126,10 @@ class Diversifier:
             self.config.score_fn,
             self.config.inputs,
             fn_name,
-            timeout=self.config.pipeline.eval_timeout
+            timeout=self.config.pipeline.eval_timeout,
         )
         if "error" not in result:
-            score = result.get('score', 0)
+            score = result.get("score", 0)
             self._record_score(score, sampler="init_variant")
         return result
 
@@ -149,7 +146,7 @@ class Diversifier:
         Returns (total_cost, score_history) from the init phase.
         """
         fn_name = extract_fn_name(self.config.function_signature)
-        seed_score = seed_result.get('score', 0.0)
+        seed_score = seed_result.get("score", 0.0)
         self.best_score = seed_score
 
         # Record the seed itself
@@ -157,19 +154,19 @@ class Diversifier:
             self._record_score(seed_score, sampler="init_seed")
 
         # Phase 1: Generate diverse seeds
-        diverse_seeds = await self._generate_diverse_seeds(
-            seed_program, seed_score, seed_result, fn_name
-        )
+        diverse_seeds = await self._generate_diverse_seeds(seed_program, seed_score, seed_result, fn_name)
 
         # Phase 2: Generate variants
-        valid_programs, behavior_vectors = await self._generate_variants(
-            diverse_seeds, fn_name, extractor
-        )
+        valid_programs, behavior_vectors = await self._generate_variants(diverse_seeds, fn_name, extractor)
 
         # Phase 3: Build centroids and populate archive
         await self._populate_archive(
-            pool, valid_programs, behavior_vectors, extractor,
-            seed_program, seed_result  # Always pass seed as fallback
+            pool,
+            valid_programs,
+            behavior_vectors,
+            extractor,
+            seed_program,
+            seed_result,  # Always pass seed as fallback
         )
 
         if self.state is not None:
@@ -203,12 +200,14 @@ class Diversifier:
                 if self.state is not None and self.state.budget_exhausted:
                     break
 
-                attempt_label = f"[Seed {i+1}]" if attempt == 0 else f"[Seed {i+1}, retry {attempt}]"
+                attempt_label = f"[Seed {i + 1}]" if attempt == 0 else f"[Seed {i + 1}, retry {attempt}]"
 
-                existing_seeds_text = "\n\n---\n\n".join([
-                    f"### Seed {j+1} (Score: {score:.1f}):\n```python\n{code}\n```"
-                    for j, (code, score, _) in enumerate(diverse_seeds)
-                ])
+                existing_seeds_text = "\n\n---\n\n".join(
+                    [
+                        f"### Seed {j + 1} (Score: {score:.1f}):\n```python\n{code}\n```"
+                        for j, (code, score, _) in enumerate(diverse_seeds)
+                    ]
+                )
 
                 # Use custom prompt if provided, otherwise use default
                 prompt_template = self.config.init.diversity_prompt or DIVERSITY_SEED_PROMPT
@@ -260,11 +259,11 @@ class Diversifier:
                             self.config.score_fn,
                             self.config.inputs,
                             fn_name,
-                            timeout=self.config.pipeline.eval_timeout
+                            timeout=self.config.pipeline.eval_timeout,
                         )
 
                         if "error" not in result:
-                            new_score = result.get('score', 0.0)
+                            new_score = result.get("score", 0.0)
                             self._record_score(new_score, sampler="init_diversity")
                             diverse_seeds.append((new_code, new_score, result))
                             logger.info(f"  {attempt_label} OK - score: {new_score:.1f}")
@@ -285,7 +284,7 @@ class Diversifier:
                 if success:
                     break
 
-        logger.info(f"[Init Phase 1] Generated {len(diverse_seeds)-1} new seeds (total: {len(diverse_seeds)})")
+        logger.info(f"[Init Phase 1] Generated {len(diverse_seeds) - 1} new seeds (total: {len(diverse_seeds)})")
         return diverse_seeds
 
     async def _generate_variants(
@@ -306,7 +305,7 @@ class Diversifier:
         for seed_code, seed_score, _ in diverse_seeds:
             prog = Program(content=seed_code, metadata={"score": seed_score})
             eval_res = EvaluationResult(
-                scores={'score': seed_score},
+                scores={"score": seed_score},
                 is_valid=True,
             )
             all_parents.append(ProgramWithScore(prog, eval_res))
@@ -373,7 +372,10 @@ class Diversifier:
         async def eval_candidate(cand: dict) -> tuple[int, dict]:
             if self.state is not None:
                 if not await self.state.try_start_evaluation():
-                    return cand["idx"], {"code": cand["code"], "result": {"error": "Budget exhausted", "budget_stop": True}}
+                    return cand["idx"], {
+                        "code": cand["code"],
+                        "result": {"error": "Budget exhausted", "budget_stop": True},
+                    }
             try:
                 result = await self._cascade_eval(cand["code"], fn_name)
                 if self.state is not None and "error" in result:
@@ -410,27 +412,31 @@ class Diversifier:
                 if len(failure_errors) < 5 and error_msg not in [e for e, _ in failure_errors]:
                     failure_errors.append((error_msg, data["code"][:100]))
                 continue
-            score = result.get('score', 0.0)
+            score = result.get("score", 0.0)
             program = Program(content=data["code"], metadata={"primary_score": score})
             behavior = extractor.extract(program, result)
-            valid_programs.append({
-                "code": data["code"],
-                "score": score,
-                "result": result,
-                "behavior": behavior,
-            })
+            valid_programs.append(
+                {
+                    "code": data["code"],
+                    "score": score,
+                    "result": result,
+                    "behavior": behavior,
+                }
+            )
             behavior_vectors.append(np.array([behavior[f] for f in extractor.features]))
 
         # Add diverse seeds directly (already evaluated in Phase 1, no need to re-evaluate)
         for seed_code, seed_score, seed_result in diverse_seeds:
             program = Program(content=seed_code, metadata={"primary_score": seed_score})
             behavior = extractor.extract(program, seed_result)
-            valid_programs.append({
-                "code": seed_code,
-                "score": seed_score,
-                "result": seed_result,
-                "behavior": behavior,
-            })
+            valid_programs.append(
+                {
+                    "code": seed_code,
+                    "score": seed_score,
+                    "result": seed_result,
+                    "behavior": behavior,
+                }
+            )
             behavior_vectors.append(np.array([behavior[f] for f in extractor.features]))
 
         logger.info(f"[Init Phase 2] Valid programs: {len(valid_programs)}")
@@ -456,14 +462,16 @@ class Diversifier:
         if not behavior_vectors:
             logger.warning("[Init Phase 3] No valid programs to build centroids")
             if seed_program and seed_result and "error" not in seed_result:
-                program = Program(content=seed_program, metadata={"primary_score": seed_result.get('score', 0.0)})
+                program = Program(content=seed_program, metadata={"primary_score": seed_result.get("score", 0.0)})
                 eval_result = EvaluationResult(
                     scores=seed_result,
                     is_valid=True,
                 )
                 accepted, _ = pool.add(program, eval_result)
-                logger.info(f"[Init Phase 3] Added seed program as fallback (accepted={accepted}), archive size: {pool.size()}")
-            extractor.set_phase('evolution')
+                logger.info(
+                    f"[Init Phase 3] Added seed program as fallback (accepted={accepted}), archive size: {pool.size()}"
+                )
+            extractor.set_phase("evolution")
             return
 
         # Build centroids from init-generated programs (seed + diverse seeds + variants).
@@ -494,7 +502,9 @@ class Diversifier:
                 n_accepted += 1
 
         best_score = max(p["score"] for p in valid_programs) if valid_programs else 0.0
-        logger.info(f"[Init Phase 3] Done: {n_accepted} cells filled, archive size: {pool.size()}, best: {best_score:.1f}, cost: ${self.total_cost:.3f}")
+        logger.info(
+            f"[Init Phase 3] Done: {n_accepted} cells filled, archive size: {pool.size()}, best: {best_score:.1f}, cost: ${self.total_cost:.3f}"
+        )
 
         # Switch extractor to evolution phase
-        extractor.set_phase('evolution')
+        extractor.set_phase("evolution")

@@ -4,10 +4,9 @@ import pytest
 from pydantic import ValidationError
 
 from levi.config.models import (
-    LeviConfig,
     BudgetConfig,
+    LeviConfig,
     SamplerModelPair,
-    PunctuatedEquilibriumConfig,
 )
 
 

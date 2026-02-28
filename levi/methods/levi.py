@@ -3,20 +3,21 @@
 import asyncio
 import logging
 import time
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 import litellm
 
-from ..config import LeviConfig, LeviResult, BudgetConfig
-from ..core import Program, EvaluationResult
-from ..pool import CVTMAPElitesPool
 from ..behavior import BehaviorExtractor, FeatureVector
+from ..config import BudgetConfig, LeviConfig, LeviResult
+from ..core import EvaluationResult, Program
+from ..init import Diversifier
+from ..llm import clear_llm_client, set_llm_client
+from ..llm.unified_client import UnifiedLLMClient, UnifiedLLMClientConfig
 from ..pipeline import PipelineRunner
 from ..pipeline.state import PipelineState
-from ..init import Diversifier
-from ..utils import ResilientProcessPool, extract_fn_name, evaluate_code
-from ..llm import set_llm_client, clear_llm_client
-from ..llm.unified_client import UnifiedLLMClient, UnifiedLLMClientConfig
+from ..pool import CVTMAPElitesPool
+from ..utils import ResilientProcessPool, evaluate_code, extract_fn_name
 
 logger = logging.getLogger(__name__)
 
@@ -25,19 +26,20 @@ def _register_models_with_litellm(config: LeviConfig) -> None:
     """Auto-register local endpoints and model info with litellm."""
     # Register local endpoints so litellm routes to them
     for model_name, base_url in config.local_endpoints.items():
-        registration: dict = {"litellm_params": {
-            "model": f"openai/{model_name}",
-            "api_base": base_url,
-            "api_key": "unused",
-        }}
+        registration: dict = {
+            "litellm_params": {
+                "model": f"openai/{model_name}",
+                "api_base": base_url,
+                "api_key": "unused",
+            }
+        }
         # Merge model_info if available (for cost tracking)
         if model_name in config.model_info:
             registration.update(config.model_info[model_name])
         litellm.register_model({model_name: registration})
 
     # Register model_info for non-local models (cost tracking for custom cloud models)
-    non_local_info = {k: v for k, v in config.model_info.items()
-                      if k not in config.local_endpoints}
+    non_local_info = {k: v for k, v in config.model_info.items() if k not in config.local_endpoints}
     if non_local_info:
         litellm.register_model(non_local_info)
 
@@ -76,8 +78,7 @@ def _restore_from_snapshot(
     centroids_arr = np.asarray(metadata["centroids"], dtype=float)
     if centroids_arr.ndim != 2 or centroids_arr.shape[0] <= 0 or centroids_arr.shape[1] != pool._n_dims:
         raise RuntimeError(
-            f"Invalid centroid matrix in snapshot: expected (N,{pool._n_dims}), "
-            f"got shape {centroids_arr.shape}"
+            f"Invalid centroid matrix in snapshot: expected (N,{pool._n_dims}), got shape {centroids_arr.shape}"
         )
     pool._centroids = centroids_arr
     pool._n_centroids = centroids_arr.shape[0]
@@ -87,9 +88,7 @@ def _restore_from_snapshot(
     maxs_arr = np.asarray(normalization["maxs"], dtype=float)
     ranges_arr = np.asarray(normalization["ranges"], dtype=float)
     if mins_arr.shape != (pool._n_dims,) or maxs_arr.shape != (pool._n_dims,) or ranges_arr.shape != (pool._n_dims,):
-        raise RuntimeError(
-            f"Invalid normalization bounds in snapshot: expected vectors of length {pool._n_dims}"
-        )
+        raise RuntimeError(f"Invalid normalization bounds in snapshot: expected vectors of length {pool._n_dims}")
     pool._mins = mins_arr
     pool._maxs = maxs_arr
     pool._ranges = ranges_arr
@@ -116,7 +115,7 @@ def _restore_from_snapshot(
         if accepted:
             restored += 1
 
-    extractor.set_phase('evolution')
+    extractor.set_phase("evolution")
     logger.info(f"[Resume] Restored {restored}/{len(elites)} elites into pool")
     return resumed_cost
 
@@ -150,15 +149,12 @@ def _build_config(
         resolved_paradigm = paradigm_model or mutation_model
         resolved_mutation = mutation_model or paradigm_model
     else:
-        raise ValueError(
-            "Must specify 'model' (for both), or 'paradigm_model' and/or 'mutation_model'."
-        )
+        raise ValueError("Must specify 'model' (for both), or 'paradigm_model' and/or 'mutation_model'.")
 
     # Build budget
     if budget_dollars is None and budget_evals is None and budget_seconds is None:
         raise ValueError(
-            "Must specify at least one budget constraint: "
-            "budget_dollars, budget_evals, or budget_seconds."
+            "Must specify at least one budget constraint: budget_dollars, budget_evals, or budget_seconds."
         )
     budget = BudgetConfig(
         dollars=budget_dollars,
@@ -168,14 +164,18 @@ def _build_config(
 
     # Reject kwargs that overlap with explicit params
     _EXPLICIT_PARAMS = {
-        "problem_description", "function_signature", "seed_program",
-        "score_fn", "inputs", "paradigm_models", "mutation_models", "budget",
+        "problem_description",
+        "function_signature",
+        "seed_program",
+        "score_fn",
+        "inputs",
+        "paradigm_models",
+        "mutation_models",
+        "budget",
     }
     overlap = set(kwargs) & _EXPLICIT_PARAMS
     if overlap:
-        raise ValueError(
-            f"Use the explicit parameters instead of **kwargs for: {overlap}"
-        )
+        raise ValueError(f"Use the explicit parameters instead of **kwargs for: {overlap}")
 
     config_dict: dict[str, Any] = {
         "problem_description": problem_description,
@@ -302,6 +302,7 @@ async def _run_async(config: LeviConfig, resume_snapshot: dict | None = None) ->
     # Run prompt optimization if enabled (before LLM client setup)
     if config.prompt_opt.enabled and not config.prompt_overrides:
         from ..prompt_opt import optimize_prompts
+
         overrides, opt_cost = optimize_prompts(config)
         config.prompt_overrides = overrides
         state.total_cost += opt_cost
@@ -351,7 +352,7 @@ async def _run_async(config: LeviConfig, resume_snapshot: dict | None = None) ->
                 config.score_fn,
                 config.inputs,
                 fn_name,
-                timeout=config.pipeline.eval_timeout
+                timeout=config.pipeline.eval_timeout,
             )
         except Exception as e:
             logger.error(f"[Levi] Failed to evaluate seed: {e}")
@@ -363,7 +364,7 @@ async def _run_async(config: LeviConfig, resume_snapshot: dict | None = None) ->
             state.record_error(str(seed_result["error"]))
             raise RuntimeError(f"Seed program evaluation error: {seed_result['error']}")
 
-        seed_score = seed_result.get('score', 0.0)
+        seed_score = seed_result.get("score", 0.0)
         state.record_accept()
         state.record_score(
             score=seed_score,
@@ -402,8 +403,10 @@ async def _run_async(config: LeviConfig, resume_snapshot: dict | None = None) ->
         )
         result = await runner.run()
 
-        logger.info(f"[Levi] Complete - best score: {result.best_score:.1f}, "
-                    f"evals: {result.total_evaluations}, cost: ${result.total_cost:.3f}")
+        logger.info(
+            f"[Levi] Complete - best score: {result.best_score:.1f}, "
+            f"evals: {result.total_evaluations}, cost: ${result.total_cost:.3f}"
+        )
         if config.output_dir:
             logger.info(f"[Levi] Snapshot: {config.output_dir}/snapshot.json")
         code_preview = result.best_program[:500]
