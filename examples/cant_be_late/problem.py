@@ -7,6 +7,7 @@ Uses real AWS spot traces from ADRS-Leaderboard for evaluation.
 import enum
 import json
 import math
+import os
 import random
 from dataclasses import dataclass
 from pathlib import Path
@@ -51,6 +52,20 @@ class StrategyContext:
         )
 
 
+ADRS_EXAMPLE_DATA_ROOT_ENV = "ADRS_EXAMPLE_DATA_ROOT"
+
+
+def _get_adrs_example_data_root() -> Path:
+    """Return the configured ADRS example-data root directory."""
+    root = os.getenv(ADRS_EXAMPLE_DATA_ROOT_ENV)
+    if not root:
+        raise RuntimeError(
+            f"{ADRS_EXAMPLE_DATA_ROOT_ENV} is not set. "
+            "Set it to your ADRS-Leaderboard root directory."
+        )
+    return Path(root).expanduser().resolve()
+
+
 def load_trace_from_json(trace_path: str) -> Tuple[float, List[bool]]:
     """Load trace from JSON file.
 
@@ -72,33 +87,16 @@ def find_evaluator_traces() -> Optional[Path]:
     These are the traces used by evaluator_real30.py, organized as:
     data/real/ddl=search+task=48+overhead={overhead}/real/{env}/traces/random_start/
     """
-    this_dir = Path(__file__).parent
-    candidates = [
-        this_dir / "traces/real",
-        Path("/tmp/adrs_traces/real"),
-        this_dir / "../../../ADRS-Leaderboard/problems/cant_be_late/resources/cant-be-late-simulator/data/real",
-    ]
-    for path in candidates:
-        # Check for the per-overhead directory structure
-        test_dir = path / "ddl=search+task=48+overhead=0.02"
-        if test_dir.exists():
-            return path.resolve()
-    return None
+    root = _get_adrs_example_data_root()
+    path = root / "problems" / "cant_be_late" / "resources" / "cant-be-late-simulator" / "data" / "real"
+    test_dir = path / "ddl=search+task=48+overhead=0.02"
+    return path.resolve() if test_dir.exists() else None
 
 
 def find_leaderboard_traces() -> Optional[Path]:
-    this_dir = Path(__file__).parent
-    candidates = [
-        # Local traces extracted to example folder (preferred)
-        this_dir / "traces/real/ping_based/random_start_time",
-        # Legacy paths
-        this_dir / "../../../ADRS-Leaderboard/datasets/cant_be_late/real/ping_based/random_start_time",
-        Path.home() / "Documents/af/ADRS-Leaderboard/datasets/cant_be_late/real/ping_based/random_start_time",
-    ]
-    for path in candidates:
-        if path.exists():
-            return path.resolve()
-    return None
+    root = _get_adrs_example_data_root()
+    path = root / "datasets" / "cant_be_late" / "real" / "ping_based" / "random_start_time"
+    return path.resolve() if path.exists() else None
 
 
 def _select_evenly_spaced(items: list, target: int) -> list:
@@ -160,7 +158,12 @@ def generate_test_cases_from_real_traces(
     # Fallback: ping_based traces (shared across overheads)
     trace_dir = find_leaderboard_traces()
     if trace_dir is None:
-        raise RuntimeError("Could not find ADRS-Leaderboard traces.")
+        root = _get_adrs_example_data_root()
+        raise RuntimeError(
+            "Could not find cant_be_late traces under ADRS_EXAMPLE_DATA_ROOT. "
+            f"Checked:\n- {root / 'problems' / 'cant_be_late' / 'resources' / 'cant-be-late-simulator' / 'data' / 'real'}"
+            f"\n- {root / 'datasets' / 'cant_be_late' / 'real' / 'ping_based' / 'random_start_time'}"
+        )
 
     return _generate_from_ping_traces(
         trace_dir, environments, task_duration_hours,
@@ -322,11 +325,7 @@ def generate_test_cases() -> List[SimulationConfig]:
     Uses per-overhead trace directories with 30 evenly-spaced traces per
     environment. 3 overheads * 6 envs * 30 traces * 2 deadlines = 1080 cases.
     """
-    try:
-        return generate_test_cases_from_real_traces(max_traces_per_env=30)
-    except RuntimeError:
-        print("Warning: Real traces not found, using synthetic test cases")
-        return generate_synthetic_test_cases()
+    return generate_test_cases_from_real_traces(max_traces_per_env=30)
 
 
 def simulate(strategy_step, config: SimulationConfig) -> Tuple[float, bool]:

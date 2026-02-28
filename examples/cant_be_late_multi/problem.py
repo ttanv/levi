@@ -8,8 +8,7 @@ Strategies can switch between regions to find spot availability.
 import enum
 import json
 import math
-import subprocess
-import tarfile
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Tuple, Optional
@@ -101,6 +100,20 @@ FULL_TEST_SCENARIOS = [
 ]
 
 
+ADRS_EXAMPLE_DATA_ROOT_ENV = "ADRS_EXAMPLE_DATA_ROOT"
+
+
+def _get_adrs_example_data_root() -> Path:
+    """Return the configured ADRS example-data root directory."""
+    root = os.getenv(ADRS_EXAMPLE_DATA_ROOT_ENV)
+    if not root:
+        raise RuntimeError(
+            f"{ADRS_EXAMPLE_DATA_ROOT_ENV} is not set. "
+            "Set it to your ADRS-Leaderboard root directory."
+        )
+    return Path(root).expanduser().resolve()
+
+
 def load_trace_from_json(trace_path: str) -> Tuple[float, List[bool], float]:
     """Load trace from JSON file.
 
@@ -131,48 +144,19 @@ def load_trace_from_json(trace_path: str) -> Tuple[float, List[bool], float]:
 
 def find_trace_dir() -> Optional[Path]:
     """Find the converted_multi_region_aligned trace directory."""
-    this_dir = Path(__file__).parent
-    candidates = [
-        this_dir / "traces" / "converted_multi_region_aligned",
-        this_dir / "../../../ADRS-Leaderboard/problems/cant_be_late_multi/resources/cant-be-late-simulator/data/converted_multi_region_aligned",
-    ]
-    for path in candidates:
-        if path.exists():
-            return path.resolve()
-    return None
-
-
-def extract_traces_if_needed() -> Optional[Path]:
-    """Auto-extract traces from tarball if not already extracted."""
-    this_dir = Path(__file__).parent
-    local_trace_dir = this_dir / "traces" / "converted_multi_region_aligned"
-    if local_trace_dir.exists():
-        return local_trace_dir.resolve()
-
-    tarball_paths = [
-        this_dir / "../../../ADRS-Leaderboard/problems/cant_be_late_multi/resources/real_traces.tar.gz",
-    ]
-    for tarball in tarball_paths:
-        if tarball.exists():
-            print(f"Extracting traces from {tarball}...")
-            extract_to = this_dir / "traces"
-            extract_to.mkdir(parents=True, exist_ok=True)
-            with tarfile.open(str(tarball), 'r:gz') as tar:
-                tar.extractall(path=str(extract_to))
-            if local_trace_dir.exists():
-                return local_trace_dir.resolve()
-    return None
+    root = _get_adrs_example_data_root()
+    path = root / "problems" / "cant_be_late_multi" / "resources" / "cant-be-late-simulator" / "data" / "converted_multi_region_aligned"
+    return path.resolve() if path.exists() else None
 
 
 def generate_test_cases() -> List[MultiRegionSimulationConfig]:
     """Generate test cases matching ADRS evaluator.py FULL_TEST_SCENARIOS."""
     trace_dir = find_trace_dir()
     if trace_dir is None:
-        trace_dir = extract_traces_if_needed()
-    if trace_dir is None:
+        root = _get_adrs_example_data_root()
         raise RuntimeError(
-            "Could not find multi-region traces. Expected at "
-            "traces/converted_multi_region_aligned/ or ADRS-Leaderboard path."
+            "Could not find multi-region traces under ADRS_EXAMPLE_DATA_ROOT. "
+            f"Checked:\n- {root / 'problems' / 'cant_be_late_multi' / 'resources' / 'cant-be-late-simulator' / 'data' / 'converted_multi_region_aligned'}"
         )
 
     task_duration = TASK_DURATION_HOURS * 3600

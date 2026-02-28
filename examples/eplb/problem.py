@@ -18,6 +18,8 @@ NUM_GPUS = 32
 NUM_NODES = 4
 REBALANCE_INTERVAL = 100
 
+ADRS_EXAMPLE_DATA_ROOT_ENV = "ADRS_EXAMPLE_DATA_ROOT"
+
 # --- Prompts ---
 PROBLEM_DESCRIPTION = """
 # EPLB Problem
@@ -338,25 +340,20 @@ _WORKLOADS = None
 
 def _find_workload_path() -> str:
     """Find the expert-load.json file."""
-    # Try Docker path first
-    docker_path = "/datasets/eplb/expert-load.json"
-    if os.path.exists(docker_path):
-        return docker_path
+    root = os.getenv(ADRS_EXAMPLE_DATA_ROOT_ENV)
+    if not root:
+        raise FileNotFoundError(
+            f"{ADRS_EXAMPLE_DATA_ROOT_ENV} is not set. "
+            "Set it to your ADRS-Leaderboard root directory."
+        )
 
-    # Try relative to this file
-    this_dir = Path(__file__).parent
-    possible_paths = [
-        this_dir.parent.parent.parent / "ADRS-Leaderboard" / "datasets" / "eplb" / "expert-load.json",
-        this_dir.parent.parent.parent.parent / "ADRS-Leaderboard" / "datasets" / "eplb" / "expert-load.json",
-        Path.home() / "ADRS-Leaderboard" / "datasets" / "eplb" / "expert-load.json",
-    ]
-
-    for path in possible_paths:
-        if path.exists():
-            return str(path)
+    workload_path = Path(root).expanduser().resolve() / "datasets" / "eplb" / "expert-load.json"
+    if workload_path.exists():
+        return str(workload_path)
 
     raise FileNotFoundError(
-        f"expert-load.json not found. Tried: {docker_path}, {[str(p) for p in possible_paths]}"
+        "expert-load.json not found under ADRS_EXAMPLE_DATA_ROOT. "
+        f"Checked: {workload_path}"
     )
 
 
