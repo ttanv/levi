@@ -6,6 +6,7 @@ Contains prompts, seed program, and scoring function for `levi.evolve_code`.
 
 import collections
 import heapq
+import importlib
 import json
 import math
 import os
@@ -164,16 +165,34 @@ CONFIG_NAMES = [
 ]
 
 _CONTEXT_CACHE: dict[str, Any] | None = None
+ADRS_EXAMPLE_DATA_ROOT_ENV = "ADRS_EXAMPLE_DATA_ROOT"
 
 
 def _resolve_resources_dir() -> Path:
-    """Resolve ADRS Cloudcast resources directory."""
-    env_override = os.getenv("CLOUDCAST_RESOURCES")
-    if env_override:
-        return Path(env_override).expanduser().resolve()
+    """Resolve Cloudcast resources directory from ADRS_EXAMPLE_DATA_ROOT."""
+    root = os.getenv(ADRS_EXAMPLE_DATA_ROOT_ENV)
+    if not root:
+        raise FileNotFoundError(
+            f"{ADRS_EXAMPLE_DATA_ROOT_ENV} is not set. "
+            "Set it to your ADRS-Leaderboard root directory."
+        )
+    return Path(root).expanduser().resolve() / "problems" / "cloudcast" / "resources"
 
-    repo_root = Path(__file__).resolve().parents[2]
-    return repo_root.parent / "ADRS-Leaderboard" / "problems" / "cloudcast" / "resources"
+
+def _import_cloudcast_modules() -> tuple[Any, Any, Any]:
+    """Import Cloudcast resource modules after their path is on sys.path."""
+    try:
+        simulator_module = importlib.import_module("simulator")
+        utils_module = importlib.import_module("utils")
+        broadcast_module = importlib.import_module("broadcast")
+    except Exception as e:
+        raise ImportError(f"Failed to import Cloudcast modules: {e}") from e
+
+    return (
+        simulator_module.BCSimulator,
+        utils_module.make_nx_graph,
+        broadcast_module.BroadCastTopology,
+    )
 
 
 def _load_context() -> dict[str, Any]:
@@ -185,7 +204,8 @@ def _load_context() -> dict[str, Any]:
     resources_dir = _resolve_resources_dir()
     if not resources_dir.exists():
         raise FileNotFoundError(
-            "Cloudcast resources not found. Set CLOUDCAST_RESOURCES or place "
+            "Cloudcast resources not found under ADRS_EXAMPLE_DATA_ROOT. "
+            f"Set {ADRS_EXAMPLE_DATA_ROOT_ENV} correctly. Expected: "
             f"resources at: {resources_dir}"
         )
 
@@ -193,9 +213,7 @@ def _load_context() -> dict[str, Any]:
     if resources_str not in sys.path:
         sys.path.insert(0, resources_str)
 
-    from simulator import BCSimulator
-    from utils import make_nx_graph
-    from broadcast import BroadCastTopology
+    BCSimulator, make_nx_graph, BroadCastTopology = _import_cloudcast_modules()
 
     config_dir = resources_dir / "datasets" / "examples" / "config"
     cost_csv = resources_dir / "datasets" / "profiles" / "cost.csv"

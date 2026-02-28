@@ -22,3 +22,10 @@ uv sync --extra example-llm-sql
 # Install all example-related dependencies at once
 uv sync --extra examples
 ```
+
+Examples that use ADRS datasets (`eplb`, `cant_be_late`, `cant_be_late_multi`, `cloudcast`)
+read data from a single env var:
+
+```bash
+export ADRS_EXAMPLE_DATA_ROOT=/path/to/ADRS-Leaderboard
+```
