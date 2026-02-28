@@ -39,3 +39,18 @@ examples = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["levi"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP"]
+ignore = ["UP045", "E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"levi/llm/unified_client.py" = ["E402"]
+"tests/*" = ["F841"]
+
+[tool.ruff.format]
+quote-style = "double"

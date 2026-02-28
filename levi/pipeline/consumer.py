@@ -2,13 +2,14 @@
 
 import asyncio
 import logging
-from typing import Callable, Optional
+from collections.abc import Callable
+from typing import Optional
 
 from ..config import LeviConfig
-from ..core import Program, EvaluationResult
+from ..core import EvaluationResult, Program
 from ..pool import CVTMAPElitesPool
-from ..utils import ResilientProcessPool, extract_fn_name, evaluate_code, coerce_score
-from .state import PipelineState, BudgetLimitReached
+from ..utils import ResilientProcessPool, coerce_score, evaluate_code, extract_fn_name
+from .state import BudgetLimitReached, PipelineState
 
 SNAPSHOT_INTERVAL = 10  # Save snapshot every N evaluations
 
@@ -23,7 +24,7 @@ def _model_label(item: dict) -> str:
     model = _short_model(item.get("model", "unknown"))
     sampler = item.get("sampler", "")
     if "_T" in sampler:
-        return f"{model}{sampler[sampler.index('_T'):]}"
+        return f"{model}{sampler[sampler.index('_T') :]}"
     return model
 
 
@@ -80,7 +81,7 @@ async def eval_consumer(
     while not stop_event.is_set() or not code_queue.empty():
         try:
             item = await asyncio.wait_for(code_queue.get(), timeout=2.0)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             continue
         except asyncio.CancelledError:
             break
@@ -98,12 +99,12 @@ async def eval_consumer(
                         config.score_fn,
                         cascade.quick_inputs,
                         fn_name,
-                        timeout=cascade.quick_timeout
+                        timeout=cascade.quick_timeout,
                     )
                     if "error" in quick_result:
                         result = quick_result
                     else:
-                        quick_score = quick_result.get('score', 0)
+                        quick_score = quick_result.get("score", 0)
                         threshold = state.best_score_so_far * cascade.min_score_ratio
                         if quick_score < threshold:
                             result = {"cascade_rejected": True, "quick_score": quick_score, "threshold": threshold}
@@ -114,7 +115,7 @@ async def eval_consumer(
                                 config.score_fn,
                                 config.inputs,
                                 fn_name,
-                                timeout=config.pipeline.eval_timeout
+                                timeout=config.pipeline.eval_timeout,
                             )
                 else:
                     result = await executor.run(
@@ -123,7 +124,7 @@ async def eval_consumer(
                         config.score_fn,
                         config.inputs,
                         fn_name,
-                        timeout=config.pipeline.eval_timeout
+                        timeout=config.pipeline.eval_timeout,
                     )
             except TimeoutError:
                 result = {"error": "Timeout"}
@@ -217,9 +218,9 @@ def _format_metrics_for_llm(
     problem_description: str = "",
     function_signature: str = "",
 ) -> str:
-    total = metrics.get('acceptances', 0) + metrics.get('rejections', 0) + metrics.get('errors', 0)
-    error_count = metrics.get('errors', 0)
-    top_errors = metrics.get('top_errors', [])
+    total = metrics.get("acceptances", 0) + metrics.get("rejections", 0) + metrics.get("errors", 0)
+    error_count = metrics.get("errors", 0)
+    top_errors = metrics.get("top_errors", [])
 
     data = ""
     if problem_description:
@@ -230,8 +231,8 @@ def _format_metrics_for_llm(
     data += f"""## Progress: {progress_pct:.0f}% of budget consumed
 
 ## Recent Results ({total} candidates evaluated this period):
-- Acceptances: {metrics.get('acceptances', 0)}
-- Rejections: {metrics.get('rejections', 0)}
+- Acceptances: {metrics.get("acceptances", 0)}
+- Rejections: {metrics.get("rejections", 0)}
 - Errors/Failures: {error_count}"""
 
     if top_errors:
@@ -257,8 +258,7 @@ async def _generate_meta_advice(config: LeviConfig, state: PipelineState) -> Non
         progress_pct = (state.total_cost / config.budget.dollars) * 100
 
     metrics_data = _format_metrics_for_llm(
-        metrics, state.previous_meta_advice, progress_pct,
-        config.problem_description, config.function_signature
+        metrics, state.previous_meta_advice, progress_pct, config.problem_description, config.function_signature
     )
     prompt = META_ADVISOR_PROMPT.format(metrics_data=metrics_data)
 

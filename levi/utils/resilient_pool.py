@@ -6,9 +6,10 @@ import multiprocessing as mp
 import signal
 import threading
 import time
-from typing import Any, Callable, TypeVar
+from collections.abc import Callable
+from typing import Any, TypeVar
 
-T = TypeVar('T')
+T = TypeVar("T")
 
 
 def _worker_fn(fn: Callable, args: tuple, result_queue: mp.Queue) -> None:
@@ -20,7 +21,7 @@ def _worker_fn(fn: Callable, args: tuple, result_queue: mp.Queue) -> None:
 
 
 class ResilientProcessPool:
-    _instances: list['ResilientProcessPool'] = []
+    _instances: list["ResilientProcessPool"] = []
 
     def __init__(self, max_workers: int = 4):
         self.max_workers = max_workers
@@ -28,7 +29,7 @@ class ResilientProcessPool:
         self._active: dict[int, mp.Process] = {}
         self._lock = threading.Lock()
         self._shutdown = False
-        self._ctx = mp.get_context('spawn')
+        self._ctx = mp.get_context("spawn")
         ResilientProcessPool._instances.append(self)
 
     async def run(self, fn: Callable[..., T], *args: Any, timeout: float) -> T:
@@ -108,7 +109,7 @@ class ResilientProcessPool:
         except ValueError:
             pass
 
-    def __enter__(self) -> 'ResilientProcessPool':
+    def __enter__(self) -> "ResilientProcessPool":
         return self
 
     def __exit__(self, *args) -> None:
@@ -129,10 +130,11 @@ atexit.register(ResilientProcessPool._cleanup_all)
 def _handle_signals(signum, frame):
     ResilientProcessPool._cleanup_all()
     import sys
+
     sys.exit(128 + signum)
 
 
-if mp.current_process().name == 'MainProcess':
+if mp.current_process().name == "MainProcess":
     try:
         signal.signal(signal.SIGTERM, _handle_signals)
     except Exception:

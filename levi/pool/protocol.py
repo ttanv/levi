@@ -6,9 +6,9 @@ primarily by their ProgramPool implementation.
 """
 
 from dataclasses import dataclass, field
-from typing import Protocol, Optional, runtime_checkable
+from typing import Optional, Protocol, runtime_checkable
 
-from ..core import Program, EvaluationResult
+from ..core import EvaluationResult, Program
 
 
 @dataclass

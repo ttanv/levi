@@ -26,13 +26,14 @@ logger = logging.getLogger(__name__)
 # DSPy TIPS configuration
 # ---------------------------------------------------------------------------
 
+
 def _configure_dspy_tips() -> None:
     """Patch DSPy TIPS dict for brevity/open-endedness."""
     try:
         from dspy.propose.grounded_proposer import TIPS
+
         TIPS["brevity"] = (
-            "Keep the instruction concise (under 100 words). "
-            "Brevity encourages creativity and exploration."
+            "Keep the instruction concise (under 100 words). Brevity encourages creativity and exploration."
         )
         TIPS["open_ended"] = (
             "Keep instructions general and goal-focused. Describe WHAT to "
@@ -50,6 +51,7 @@ def _configure_dspy_tips() -> None:
 # ---------------------------------------------------------------------------
 # DSPy LM factory
 # ---------------------------------------------------------------------------
+
 
 def _make_dspy_lm(
     model: str,
@@ -72,6 +74,7 @@ def _make_dspy_lm(
 # ---------------------------------------------------------------------------
 # DSPy Signatures
 # ---------------------------------------------------------------------------
+
 
 class MutationSignature(dspy.Signature):
     """Generate an improved version of code.
@@ -111,14 +114,15 @@ class ParadigmShiftSignature(dspy.Signature):
 # DSPy Modules
 # ---------------------------------------------------------------------------
 
+
 class MutationModule(dspy.Module):
     def __init__(self):
         super().__init__()
         self.generate = dspy.Predict(MutationSignature)
 
-    def forward(self, problem_description, function_signature,
-                parent_code, parent_score,
-                inspiration_code, inspiration_score):
+    def forward(
+        self, problem_description, function_signature, parent_code, parent_score, inspiration_code, inspiration_score
+    ):
         return self.generate(
             problem_description=problem_description,
             function_signature=function_signature,
@@ -134,8 +138,7 @@ class ParadigmShiftModule(dspy.Module):
         super().__init__()
         self.generate = dspy.Predict(ParadigmShiftSignature)
 
-    def forward(self, problem_description, function_signature,
-                best_score, representative_solutions):
+    def forward(self, problem_description, function_signature, best_score, representative_solutions):
         return self.generate(
             problem_description=problem_description,
             function_signature=function_signature,
@@ -148,6 +151,7 @@ class ParadigmShiftModule(dspy.Module):
 # Prompt quality helpers
 # ---------------------------------------------------------------------------
 
+
 def _length_penalty(prompt: str, threshold: int = 300, max_penalty: float = 0.15) -> float:
     if len(prompt) <= threshold:
         return 0.0
@@ -158,6 +162,7 @@ def _length_penalty(prompt: str, threshold: int = 300, max_penalty: float = 0.15
 # ---------------------------------------------------------------------------
 # Metrics
 # ---------------------------------------------------------------------------
+
 
 def _mutation_metric(
     example: dspy.Example,
@@ -209,7 +214,7 @@ def _mutation_metric(
     # Length penalty on the optimized instruction (from trace context)
     if trace:
         for step in trace:
-            if hasattr(step, 'signature') and hasattr(step.signature, 'instructions'):
+            if hasattr(step, "signature") and hasattr(step.signature, "instructions"):
                 instr = str(step.signature.instructions)
                 score -= _length_penalty(instr, threshold=300, max_penalty=0.15)
                 break
@@ -244,6 +249,7 @@ def _paradigm_shift_metric(
     # Diversity: simple structural distance from reference
     try:
         import ast as _ast
+
         ref_nodes = len(list(_ast.walk(_ast.parse(reference_code))))
         new_nodes = len(list(_ast.walk(_ast.parse(code))))
         diversity = abs(new_nodes - ref_nodes) / max(ref_nodes, new_nodes, 1)
@@ -254,7 +260,7 @@ def _paradigm_shift_metric(
     # Length penalty on optimized instruction
     if trace:
         for step in trace:
-            if hasattr(step, 'signature') and hasattr(step.signature, 'instructions'):
+            if hasattr(step, "signature") and hasattr(step.signature, "instructions"):
                 instr = str(step.signature.instructions)
                 score -= _length_penalty(instr, threshold=400, max_penalty=0.10)
                 break
@@ -265,6 +271,7 @@ def _paradigm_shift_metric(
 # ---------------------------------------------------------------------------
 # Training data generation
 # ---------------------------------------------------------------------------
+
 
 def _generate_mutation_examples(
     config: LeviConfig,
@@ -288,9 +295,12 @@ def _generate_mutation_examples(
             inspiration_code=config.seed_program,
             inspiration_score=seed_score,
         ).with_inputs(
-            "problem_description", "function_signature",
-            "parent_code", "parent_score",
-            "inspiration_code", "inspiration_score",
+            "problem_description",
+            "function_signature",
+            "parent_code",
+            "parent_score",
+            "inspiration_code",
+            "inspiration_score",
         )
         examples.append(example)
     return examples
@@ -302,10 +312,7 @@ def _generate_paradigm_shift_examples(
     n_examples: int = 4,
 ) -> list[dspy.Example]:
     """Generate training examples from seed + baseline score."""
-    representative_solutions = (
-        f"### Region 1 - Seed (Score: {seed_score:.1f})\n"
-        f"```python\n{config.seed_program}\n```\n"
-    )
+    representative_solutions = f"### Region 1 - Seed (Score: {seed_score:.1f})\n```python\n{config.seed_program}\n```\n"
 
     examples = []
     for _ in range(n_examples):
@@ -315,8 +322,10 @@ def _generate_paradigm_shift_examples(
             best_score=seed_score,
             representative_solutions=representative_solutions,
         ).with_inputs(
-            "problem_description", "function_signature",
-            "best_score", "representative_solutions",
+            "problem_description",
+            "function_signature",
+            "best_score",
+            "representative_solutions",
         )
         examples.append(example)
     return examples
@@ -326,20 +335,24 @@ def _generate_paradigm_shift_examples(
 # Cache
 # ---------------------------------------------------------------------------
 
+
 def _config_hash(config: LeviConfig) -> str:
     """Deterministic hash of config fields that affect prompt optimization."""
-    payload = json.dumps({
-        "problem_description": config.problem_description,
-        "function_signature": config.function_signature,
-        "seed_program": config.seed_program,
-        "mutation_models": sorted(config.mutation_models),
-        "paradigm_models": sorted(config.paradigm_models),
-        "n_trials": config.prompt_opt.n_trials,
-        "num_candidates": config.prompt_opt.num_candidates,
-        "optimize_mutation": config.prompt_opt.optimize_mutation,
-        "optimize_paradigm_shift": config.prompt_opt.optimize_paradigm_shift,
-        "teacher_model": config.prompt_opt.teacher_model,
-    }, sort_keys=True)
+    payload = json.dumps(
+        {
+            "problem_description": config.problem_description,
+            "function_signature": config.function_signature,
+            "seed_program": config.seed_program,
+            "mutation_models": sorted(config.mutation_models),
+            "paradigm_models": sorted(config.paradigm_models),
+            "n_trials": config.prompt_opt.n_trials,
+            "num_candidates": config.prompt_opt.num_candidates,
+            "optimize_mutation": config.prompt_opt.optimize_mutation,
+            "optimize_paradigm_shift": config.prompt_opt.optimize_paradigm_shift,
+            "teacher_model": config.prompt_opt.teacher_model,
+        },
+        sort_keys=True,
+    )
     return hashlib.sha256(payload.encode()).hexdigest()[:16]
 
 
@@ -385,6 +398,7 @@ def _save_cache(overrides: dict, config: LeviConfig) -> None:
 # Cost tracking wrapper
 # ---------------------------------------------------------------------------
 
+
 class _CostTracker:
     """Accumulates litellm completion costs from DSPy calls."""
 
@@ -395,6 +409,7 @@ class _CostTracker:
     def start(self) -> None:
         try:
             import litellm
+
             self._original_request = litellm.success_callback
             litellm.success_callback = [self._on_success]
         except Exception:
@@ -403,6 +418,7 @@ class _CostTracker:
     def stop(self) -> None:
         try:
             import litellm
+
             if self._original_request is not None:
                 litellm.success_callback = self._original_request
             else:
@@ -413,6 +429,7 @@ class _CostTracker:
     def _on_success(self, kwargs, completion_response, start_time, end_time):
         try:
             from litellm import completion_cost
+
             cost = completion_cost(completion_response=completion_response)
             self.total += cost
         except Exception:
@@ -422,6 +439,7 @@ class _CostTracker:
 # ---------------------------------------------------------------------------
 # Main orchestration
 # ---------------------------------------------------------------------------
+
 
 def optimize_prompts(config: LeviConfig) -> tuple[dict, float]:
     """Run DSPy prompt optimization based on ``config.prompt_opt``.

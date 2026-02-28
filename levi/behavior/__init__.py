@@ -3,6 +3,6 @@
 from .extractor import BehaviorExtractor, FeatureVector
 
 __all__ = [
-    'BehaviorExtractor',
-    'FeatureVector',
+    "BehaviorExtractor",
+    "FeatureVector",
 ]

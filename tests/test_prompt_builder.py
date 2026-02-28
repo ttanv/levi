@@ -4,10 +4,8 @@ Tests for PromptBuilder: Flexible, composable prompt construction.
 PromptBuilder is used to assemble prompts for LLM mutation generation.
 """
 
-import pytest
-
-from levi.core import Program, EvaluationResult
-from levi.llm import PromptBuilder, ProgramWithScore, OutputMode
+from levi.core import EvaluationResult, Program
+from levi.llm import OutputMode, ProgramWithScore, PromptBuilder
 
 
 class TestOutputMode:
@@ -282,10 +280,7 @@ class TestPromptBuilder:
     def test_multiple_parents_incrementing_labels(self):
         """Multiple parents get v1, v2, v3 labels."""
         builder = PromptBuilder()
-        programs = [
-            Program(content=f"def solve(x): return x + {i}")
-            for i in range(3)
-        ]
+        programs = [Program(content=f"def solve(x): return x + {i}") for i in range(3)]
 
         parents = [ProgramWithScore(p, None) for p in programs]
         builder.add_parents(parents)
@@ -305,41 +300,40 @@ class TestPromptBuilderIntegration:
         builder = PromptBuilder()
 
         # Problem description
-        builder.add_section(
-            "Problem",
-            "Optimize a scheduling algorithm for transaction ordering.",
-            priority=10
-        )
+        builder.add_section("Problem", "Optimize a scheduling algorithm for transaction ordering.", priority=10)
 
         # Function signature
         builder.add_section(
-            "Signature",
-            "```python\ndef get_random_costs() -> tuple[float, list[list[int]], float]:\n```",
-            priority=20
+            "Signature", "```python\ndef get_random_costs() -> tuple[float, list[list[int]], float]:\n```", priority=20
         )
 
         # Parent programs
-        parent = Program(content='''def get_random_costs():
+        parent = Program(
+            content="""def get_random_costs():
     schedules = []
     for w in workloads:
         schedule = list(range(w.num_txns))
         random.shuffle(schedule)
         schedules.append(schedule)
     total = sum(w.get_opt_seq_cost(s) for w, s in zip(workloads, schedules))
-    return total, schedules, 0.0''')
+    return total, schedules, 0.0"""
+        )
 
         builder.add_parents(
-            [ProgramWithScore(parent, EvaluationResult(
-                scores={"score": 45.2},
-            ))],
-            priority=30
+            [
+                ProgramWithScore(
+                    parent,
+                    EvaluationResult(
+                        scores={"score": 45.2},
+                    ),
+                )
+            ],
+            priority=30,
         )
 
         # Task instruction
         builder.add_section(
-            "Task",
-            "Write an improved version. Try different algorithms or optimize for edge cases.",
-            priority=40
+            "Task", "Write an improved version. Try different algorithms or optimize for edge cases.", priority=40
         )
 
         prompt = builder.build()
@@ -377,11 +371,13 @@ class TestPromptBuilderIntegration:
         """Builds a prompt with execution feedback."""
         builder = PromptBuilder()
 
-        parent = Program(content='''def solve(items):
+        parent = Program(
+            content="""def solve(items):
     result = []
     for item in items:
         result.append(item * 2)
-    return result''')
+    return result"""
+        )
 
         result = EvaluationResult(
             scores={"score": 0.6},
@@ -390,9 +386,7 @@ class TestPromptBuilderIntegration:
         builder.add_section("Problem", "Optimize list processing", priority=10)
         builder.add_parents([ProgramWithScore(parent, result)], priority=20)
         builder.add_feedback(
-            "The function is slow on large inputs. "
-            "Consider using list comprehension or numpy.",
-            priority=30
+            "The function is slow on large inputs. Consider using list comprehension or numpy.", priority=30
         )
 
         prompt = builder.build()

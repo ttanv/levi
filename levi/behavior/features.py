@@ -18,11 +18,13 @@ def compute_code_length(program: Program, tree: Optional[ast.AST] = None) -> flo
 
 def compute_ast_depth(program: Program, tree: ast.AST) -> float:
     """Maximum depth of AST."""
+
     def _depth(node: ast.AST) -> int:
         children = list(ast.iter_child_nodes(node))
         if not children:
             return 1
         return 1 + max(_depth(c) for c in children)
+
     return float(_depth(tree))
 
 
@@ -45,11 +47,13 @@ def compute_loop_count(program: Program, tree: ast.AST) -> float:
 
 def compute_math_operators(program: Program, tree: ast.AST) -> float:
     """Count of mathematical operators in AST (BinOp, UnaryOp)."""
+
     def _count(node: ast.AST) -> int:
         count = 1 if isinstance(node, (ast.BinOp, ast.UnaryOp)) else 0
         for child in ast.iter_child_nodes(node):
             count += _count(child)
         return count
+
     return float(_count(tree))
 
 
@@ -61,6 +65,7 @@ def compute_branch_count(program: Program, tree: ast.AST) -> float:
 
 def compute_loop_nesting_max(program: Program, tree: ast.AST) -> float:
     """Maximum depth of nested loops."""
+
     def _depth(node: ast.AST, current: int) -> int:
         max_depth = current
         for child in ast.iter_child_nodes(node):
@@ -69,6 +74,7 @@ def compute_loop_nesting_max(program: Program, tree: ast.AST) -> float:
             else:
                 max_depth = max(max_depth, _depth(child, current))
         return max_depth
+
     return float(_depth(tree, 0))
 
 
@@ -111,8 +117,7 @@ def compute_call_count(program: Program, tree: ast.AST) -> float:
 def compute_comprehension_count(program: Program, tree: ast.AST) -> float:
     """Count of list/dict/set comprehensions and generator expressions."""
     count = sum(
-        1 for node in ast.walk(tree)
-        if isinstance(node, (ast.ListComp, ast.DictComp, ast.SetComp, ast.GeneratorExp))
+        1 for node in ast.walk(tree) if isinstance(node, (ast.ListComp, ast.DictComp, ast.SetComp, ast.GeneratorExp))
     )
     return float(count)
 
@@ -124,7 +129,7 @@ def compute_range_max_arg(program: Program, tree: ast.AST) -> float:
         if isinstance(node, ast.Call):
             # Check if it's a call to range()
             func = node.func
-            if isinstance(func, ast.Name) and func.id == 'range':
+            if isinstance(func, ast.Name) and func.id == "range":
                 # Extract numeric arguments from range()
                 for arg in node.args:
                     if isinstance(arg, ast.Constant) and isinstance(arg.value, (int, float)):

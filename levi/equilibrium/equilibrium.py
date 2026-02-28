@@ -9,19 +9,17 @@ change separated by long periods of stasis. This module implements periodic
 import asyncio
 import logging
 import random
-from typing import Optional
 
-import numpy as np
 from sklearn.cluster import KMeans
 
 from ..config import LeviConfig
-from ..core import Program, EvaluationResult
+from ..core import EvaluationResult, Program
+from ..llm import get_llm_client
+from ..pipeline.state import BudgetLimitReached, PipelineState
 from ..pool import CVTMAPElitesPool
 from ..pool.cvt_map_elites import Elite
-from ..llm import get_llm_client
-from ..utils import ResilientProcessPool, extract_code, extract_fn_name, evaluate_code, coerce_score
-from ..pipeline.state import PipelineState, BudgetLimitReached
-from .prompts import PARADIGM_SHIFT_PROMPT, PARADIGM_SHIFT_PROMPTS, VARIANT_GENERATION_PROMPT, get_budget_stage
+from ..utils import ResilientProcessPool, coerce_score, evaluate_code, extract_code, extract_fn_name
+from .prompts import PARADIGM_SHIFT_PROMPTS, VARIANT_GENERATION_PROMPT, get_budget_stage
 
 logger = logging.getLogger(__name__)
 
@@ -78,9 +76,9 @@ class PunctuatedEquilibrium:
         n_clusters = min(self.pe_config.n_clusters, len(cell_indices))
         kmeans = KMeans(
             n_clusters=n_clusters,
-            init='k-means++',
+            init="k-means++",
             n_init=3,
-            random_state=None  # Different clustering each time
+            random_state=None,  # Different clustering each time
         )
         labels = kmeans.fit_predict(occupied_centroids)
 
@@ -108,10 +106,7 @@ class PunctuatedEquilibrium:
 
         for cluster_id, cell_indices in clusters.items():
             cluster_elites = [(idx, elites[idx]) for idx in cell_indices]
-            best_idx, best_elite = max(
-                cluster_elites,
-                key=lambda x: x[1].result.primary_score
-            )
+            best_idx, best_elite = max(cluster_elites, key=lambda x: x[1].result.primary_score)
             representatives.append((cluster_id, best_elite))
 
         return representatives
@@ -138,8 +133,7 @@ class PunctuatedEquilibrium:
             score = elite.result.primary_score
             code = elite.program.content
             rep_text_parts.append(
-                f"### Region {i+1} (Cluster {cluster_id}, Score: {score:.1f})\n"
-                f"```python\n{code}\n```"
+                f"### Region {i + 1} (Cluster {cluster_id}, Score: {score:.1f})\n```python\n{code}\n```"
             )
 
         representative_solutions = "\n\n".join(rep_text_parts)
@@ -195,7 +189,7 @@ Output ONLY complete, runnable Python code in a ```python block.
             self.config.score_fn,
             self.config.inputs,
             self.fn_name,
-            timeout=self.config.pipeline.eval_timeout
+            timeout=self.config.pipeline.eval_timeout,
         )
 
     async def trigger(self, n_evaluations: int, budget_progress: float = 0.0) -> dict:
@@ -313,12 +307,14 @@ Output ONLY complete, runnable Python code in a ```python block.
         # Step 4: Evaluate paradigm shift solution
         if not can_start_pe_eval():
             logger.info("[PE] Skipping paradigm shift evaluation (budget exhausted)")
-            stats["evaluations"].append({
-                "source": "paradigm_shift",
-                "model": heavy_model,
-                "error": "Budget exhausted",
-                "archive_size": self.pool.size(),
-            })
+            stats["evaluations"].append(
+                {
+                    "source": "paradigm_shift",
+                    "model": heavy_model,
+                    "error": "Budget exhausted",
+                    "archive_size": self.pool.size(),
+                }
+            )
             return stats
 
         try:
@@ -340,10 +336,13 @@ Output ONLY complete, runnable Python code in a ```python block.
         if "error" not in result:
             stats["paradigm_score"] = score
 
-            program = Program(content=paradigm_code, metadata={
-                "source": "punctuated_equilibrium",
-                "pe_type": "paradigm_shift",
-            })
+            program = Program(
+                content=paradigm_code,
+                metadata={
+                    "source": "punctuated_equilibrium",
+                    "pe_type": "paradigm_shift",
+                },
+            )
             eval_result = EvaluationResult(
                 scores=result,
                 is_valid=True,
@@ -358,26 +357,29 @@ Output ONLY complete, runnable Python code in a ```python block.
 
             stats["paradigm_accepted"] = accepted
             stats["paradigm_cell"] = cell_idx
-            stats["evaluations"].append({
-                "source": "paradigm_shift",
-                "model": heavy_model,
-                "score": score,
-                "accepted": accepted,
-                "cell_index": cell_idx,
-                "archive_size": self.pool.size(),
-            })
+            stats["evaluations"].append(
+                {
+                    "source": "paradigm_shift",
+                    "model": heavy_model,
+                    "score": score,
+                    "accepted": accepted,
+                    "cell_index": cell_idx,
+                    "archive_size": self.pool.size(),
+                }
+            )
 
-            logger.info(f"[PE] Paradigm shift: score={score:.1f}, "
-                       f"accepted={accepted}, cell={cell_idx}")
+            logger.info(f"[PE] Paradigm shift: score={score:.1f}, accepted={accepted}, cell={cell_idx}")
         else:
-            error_message = str(result.get('error', 'unknown'))
+            error_message = str(result.get("error", "unknown"))
             logger.info(f"[PE] Paradigm shift eval error: {error_message[:100]}")
-            stats["evaluations"].append({
-                "source": "paradigm_shift",
-                "model": heavy_model,
-                "error": error_message,
-                "archive_size": self.pool.size(),
-            })
+            stats["evaluations"].append(
+                {
+                    "source": "paradigm_shift",
+                    "model": heavy_model,
+                    "error": error_message,
+                    "archive_size": self.pool.size(),
+                }
+            )
             paradigm_code = None  # Can't generate variants
 
         # Step 5: Generate variants (only if paradigm was valid)
@@ -391,9 +393,7 @@ Output ONLY complete, runnable Python code in a ```python block.
 
             logger.info(f"[PE] Generating {self.pe_config.n_variants} variants using models: {variant_models[:3]}...")
 
-            variant_prompt = self._build_variant_prompt(
-                paradigm_code, stats["paradigm_score"]
-            )
+            variant_prompt = self._build_variant_prompt(paradigm_code, stats["paradigm_score"])
 
             async def generate_variant(model: str, idx: int):
                 try:
@@ -414,17 +414,16 @@ Output ONLY complete, runnable Python code in a ```python block.
 
             # Generate variants in parallel
             tasks = [
-                generate_variant(
-                    variant_models[i % len(variant_models)], i
-                )
-                for i in range(self.pe_config.n_variants)
+                generate_variant(variant_models[i % len(variant_models)], i) for i in range(self.pe_config.n_variants)
             ]
             variant_results = await asyncio.gather(*tasks)
 
             # Evaluate and insert variants
             for vr in variant_results:
                 if "error" in vr:
-                    logger.warning(f"[PE] Variant {vr['idx']} generation failed ({vr.get('model', '?')}): {vr['error'][:100]}")
+                    logger.warning(
+                        f"[PE] Variant {vr['idx']} generation failed ({vr.get('model', '?')}): {vr['error'][:100]}"
+                    )
                     continue
 
                 stats["total_cost"] += vr["cost"]
@@ -438,12 +437,14 @@ Output ONLY complete, runnable Python code in a ```python block.
 
                 if not can_start_pe_eval():
                     logger.info(f"[PE] Skipping variant {vr['idx']} evaluation (budget exhausted)")
-                    stats["evaluations"].append({
-                        "source": "variant",
-                        "model": vr.get("model", "unknown"),
-                        "error": "Budget exhausted",
-                        "archive_size": self.pool.size(),
-                    })
+                    stats["evaluations"].append(
+                        {
+                            "source": "variant",
+                            "model": vr.get("model", "unknown"),
+                            "error": "Budget exhausted",
+                            "archive_size": self.pool.size(),
+                        }
+                    )
                     continue
 
                 try:
@@ -463,10 +464,13 @@ Output ONLY complete, runnable Python code in a ```python block.
                         result["score"] = score
 
                 if "error" not in result:
-                    program = Program(content=variant_code, metadata={
-                        "source": "punctuated_equilibrium",
-                        "pe_type": "variant",
-                    })
+                    program = Program(
+                        content=variant_code,
+                        metadata={
+                            "source": "punctuated_equilibrium",
+                            "pe_type": "variant",
+                        },
+                    )
                     eval_result = EvaluationResult(
                         scores=result,
                         is_valid=True,
@@ -482,29 +486,34 @@ Output ONLY complete, runnable Python code in a ```python block.
                     if accepted:
                         stats["variants_accepted"] += 1
                         stats["variant_cells"].append(cell_idx)
-                    stats["evaluations"].append({
-                        "source": "variant",
-                        "model": vr.get("model", "unknown"),
-                        "score": score,
-                        "accepted": accepted,
-                        "cell_index": cell_idx,
-                        "archive_size": self.pool.size(),
-                    })
+                    stats["evaluations"].append(
+                        {
+                            "source": "variant",
+                            "model": vr.get("model", "unknown"),
+                            "score": score,
+                            "accepted": accepted,
+                            "cell_index": cell_idx,
+                            "archive_size": self.pool.size(),
+                        }
+                    )
 
-                    logger.info(f"[PE] Variant {vr['idx']}: score={score:.1f}, "
-                               f"accepted={accepted}")
+                    logger.info(f"[PE] Variant {vr['idx']}: score={score:.1f}, accepted={accepted}")
                 else:
-                    error_message = str(result.get('error', 'unknown'))
+                    error_message = str(result.get("error", "unknown"))
                     logger.warning(f"[PE] Variant {vr['idx']} eval error: {error_message[:100]}")
-                    stats["evaluations"].append({
-                        "source": "variant",
-                        "model": vr.get("model", "unknown"),
-                        "error": error_message,
-                        "archive_size": self.pool.size(),
-                    })
+                    stats["evaluations"].append(
+                        {
+                            "source": "variant",
+                            "model": vr.get("model", "unknown"),
+                            "error": error_message,
+                            "archive_size": self.pool.size(),
+                        }
+                    )
 
-        logger.info(f"[PE] Complete: paradigm_accepted={stats['paradigm_accepted']}, "
-                   f"variants={stats['variants_accepted']}/{stats['variants_generated']}, "
-                   f"cost=${stats['total_cost']:.3f}")
+        logger.info(
+            f"[PE] Complete: paradigm_accepted={stats['paradigm_accepted']}, "
+            f"variants={stats['variants_accepted']}/{stats['variants_generated']}, "
+            f"cost=${stats['total_cost']:.3f}"
+        )
 
         return stats

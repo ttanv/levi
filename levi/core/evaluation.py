@@ -24,14 +24,14 @@ class EvaluationResult:
     @property
     def primary_score(self) -> float:
         """Returns the primary score ('score' key, or first available, or 0.0)."""
-        if 'score' in self.scores:
-            return self.scores['score']
+        if "score" in self.scores:
+            return self.scores["score"]
         if self.scores:
             return next(iter(self.scores.values()))
         return 0.0
 
     @classmethod
-    def invalid(cls, error: str) -> 'EvaluationResult':
+    def invalid(cls, error: str) -> "EvaluationResult":
         """Factory method for creating an invalid result."""
         return cls(
             is_valid=False,

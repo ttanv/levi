@@ -2,9 +2,9 @@
 Program: The fundamental unit of evolution.
 """
 
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
-import uuid
 
 from .types import MetadataDict
 

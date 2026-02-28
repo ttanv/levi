@@ -5,7 +5,7 @@ import pytest
 
 from levi.core import EvaluationResult, Program
 from levi.methods.levi import _restore_from_snapshot
-from levi.utils import extract_fn_name, evaluate_code
+from levi.utils import evaluate_code, extract_fn_name
 
 
 class DummyExtractor:

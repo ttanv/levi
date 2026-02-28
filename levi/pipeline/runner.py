@@ -12,9 +12,9 @@ from ..config import LeviConfig, LeviResult
 from ..equilibrium import PunctuatedEquilibrium
 from ..pool import CVTMAPElitesPool
 from ..utils import ResilientProcessPool
-from .state import PipelineState
-from .producer import llm_producer
 from .consumer import eval_consumer
+from .producer import llm_producer
+from .state import PipelineState
 
 logger = logging.getLogger(__name__)
 
@@ -70,8 +70,10 @@ class PipelineRunner:
             )
 
     async def run(self) -> LeviResult:
-        logger.info(f"[Pipeline] Starting with {self.config.pipeline.n_llm_workers} LLM workers, "
-                    f"{self.config.pipeline.n_eval_processes} eval workers")
+        logger.info(
+            f"[Pipeline] Starting with {self.config.pipeline.n_llm_workers} LLM workers, "
+            f"{self.config.pipeline.n_eval_processes} eval workers"
+        )
 
         producers = [
             asyncio.create_task(
@@ -111,7 +113,9 @@ class PipelineRunner:
         pe_task = None
         if self.pe:
             pe_task = asyncio.create_task(self._pe_monitor())
-            logger.info(f"[Pipeline] Punctuated equilibrium enabled (interval={self.config.punctuated_equilibrium.interval})")
+            logger.info(
+                f"[Pipeline] Punctuated equilibrium enabled (interval={self.config.punctuated_equilibrium.interval})"
+            )
 
         try:
             await self._wait_for_completion()
@@ -162,11 +166,7 @@ class PipelineRunner:
 
             current_eval_count = self.state.eval_count
             queue_size = self.code_queue.qsize()
-            has_pending_work = (
-                queue_size > 0
-                or self.state.llm_in_flight > 0
-                or self.state.eval_in_flight > 0
-            )
+            has_pending_work = queue_size > 0 or self.state.llm_in_flight > 0 or self.state.eval_in_flight > 0
 
             if current_eval_count != last_eval_count or has_pending_work:
                 last_eval_count = current_eval_count
@@ -210,9 +210,7 @@ class PipelineRunner:
             if "error" in eval_data:
                 error_msg = str(eval_data.get("error", "unknown error"))
                 self.state.record_error(error_msg)
-                logger.info(
-                    f"[Eval #{self.state.eval_count}] PE/{model:27s} ERROR ({source}): {error_msg[:80]}"
-                )
+                logger.info(f"[Eval #{self.state.eval_count}] PE/{model:27s} ERROR ({source}): {error_msg[:80]}")
                 continue
 
             try:
@@ -298,15 +296,18 @@ class PipelineRunner:
                     break
 
                 # Check if we should trigger PE
-                if (self.state.eval_count > 0 and
-                    self.state.eval_count % pe_config.interval == 0 and
-                    self.state.eval_count != self.state.last_pe_eval_count):
-
+                if (
+                    self.state.eval_count > 0
+                    and self.state.eval_count % pe_config.interval == 0
+                    and self.state.eval_count != self.state.last_pe_eval_count
+                ):
                     self.state.last_pe_eval_count = self.state.eval_count
                     self.state.pe_trigger_count += 1
 
-                    logger.info(f"[PE] Triggering punctuated equilibrium #{self.state.pe_trigger_count} "
-                               f"at eval {self.state.eval_count}")
+                    logger.info(
+                        f"[PE] Triggering punctuated equilibrium #{self.state.pe_trigger_count} "
+                        f"at eval {self.state.eval_count}"
+                    )
 
                     try:
                         stats = await self.pe.trigger(self.state.eval_count, self.state.budget_progress)
@@ -368,7 +369,7 @@ class PipelineRunner:
 
         # Save to file (overwrite)
         filepath = self.output_dir / "snapshot.json"
-        with open(filepath, 'w') as f:
+        with open(filepath, "w") as f:
             json.dump(snapshot, f, indent=2, default=str)
 
         if final:

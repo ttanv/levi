@@ -3,10 +3,11 @@
 import asyncio
 import logging
 import os
-from dataclasses import dataclass, field
-from typing import Optional, Any
+from dataclasses import dataclass
+from typing import Any, Optional
 
 import litellm
+
 litellm.suppress_debug_info = True
 
 from .exceptions import (
@@ -37,6 +38,7 @@ class CompletionResponse:
 # Error mapping
 # ---------------------------------------------------------------------------
 
+
 def _wrap_litellm_error(model: str, error: Exception) -> Exception:
     """Map litellm exceptions into internal LLM exception types."""
     message = str(error).lower()
@@ -57,6 +59,7 @@ def _wrap_litellm_error(model: str, error: Exception) -> Exception:
 # ---------------------------------------------------------------------------
 # Config & Client
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class UnifiedLLMClientConfig:
@@ -115,16 +118,10 @@ class UnifiedLLMClient:
                     retry_kwargs = dict(kwargs)
                     retry_kwargs["custom_llm_provider"] = "openai"
                     # Prefer registered local endpoint details from litellm.register_model().
-                    local_params = (
-                        getattr(litellm, "model_cost", {})
-                        .get(model, {})
-                        .get("litellm_params", {})
-                    )
+                    local_params = getattr(litellm, "model_cost", {}).get(model, {}).get("litellm_params", {})
                     if "api_base" not in retry_kwargs:
                         resolved_base = (
-                            local_params.get("api_base")
-                            or os.getenv("OPENAI_API_BASE")
-                            or os.getenv("OPENAI_BASE_URL")
+                            local_params.get("api_base") or os.getenv("OPENAI_API_BASE") or os.getenv("OPENAI_BASE_URL")
                         )
                         if resolved_base:
                             retry_kwargs["api_base"] = resolved_base
@@ -138,13 +135,10 @@ class UnifiedLLMClient:
                     # but the OpenAI client path still requires a non-empty value.
                     if "api_key" not in retry_kwargs:
                         retry_kwargs["api_key"] = (
-                            local_params.get("api_key")
-                            or os.getenv("OPENAI_API_KEY")
-                            or "local-no-key-required"
+                            local_params.get("api_key") or os.getenv("OPENAI_API_KEY") or "local-no-key-required"
                         )
                     logger.debug(
-                        "[%s] Retrying with custom_llm_provider='openai' "
-                        "(api_base=%s)",
+                        "[%s] Retrying with custom_llm_provider='openai' (api_base=%s)",
                         model,
                         retry_kwargs.get("api_base", "<default>"),
                     )
