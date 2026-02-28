@@ -4,7 +4,6 @@ PRISM (GPU Model Placement) Problem Definition.
 Contains problem description, prompts, scoring function, and test inputs.
 """
 
-import sys
 import time
 import concurrent.futures
 from dataclasses import dataclass
