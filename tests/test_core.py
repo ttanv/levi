@@ -7,7 +7,7 @@ These are the fundamental data structures that everything else depends on.
 import pytest
 from datetime import datetime
 
-from algoforge.core import Program, EvaluationResult
+from levi.core import Program, EvaluationResult
 
 
 class TestProgram:

@@ -2,18 +2,18 @@
 
 import asyncio
 
-from algoforge.config.models import AlgoforgeConfig, BudgetConfig
-from algoforge.pipeline.producer import llm_producer
-import algoforge.pipeline.runner as runner_module
-from algoforge.pipeline.runner import PipelineRunner
-from algoforge.pipeline.state import PipelineState
+from levi.config.models import LeviConfig, BudgetConfig
+from levi.pipeline.producer import llm_producer
+import levi.pipeline.runner as runner_module
+from levi.pipeline.runner import PipelineRunner
+from levi.pipeline.state import PipelineState
 
 
 def _score_fn(fn, inputs):
     return {"score": sum(fn(x) for x in inputs)}
 
 
-def _make_config(*, pipeline: dict | None = None) -> AlgoforgeConfig:
+def _make_config(*, pipeline: dict | None = None) -> LeviConfig:
     kwargs = {
         "problem_description": "Test problem",
         "function_signature": "def solve(x):",
@@ -24,7 +24,7 @@ def _make_config(*, pipeline: dict | None = None) -> AlgoforgeConfig:
     }
     if pipeline is not None:
         kwargs["pipeline"] = pipeline
-    return AlgoforgeConfig(**kwargs)
+    return LeviConfig(**kwargs)
 
 
 class _DummyPool:

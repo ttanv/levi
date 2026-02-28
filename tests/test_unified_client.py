@@ -5,14 +5,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from algoforge.llm.exceptions import (
+from levi.llm.exceptions import (
     LLMAuthenticationError,
     LLMConnectionError,
     LLMRateLimitError,
     LLMResponseError,
     LLMTimeoutError,
 )
-from algoforge.llm.unified_client import (
+from levi.llm.unified_client import (
     CompletionResponse,
     UnifiedLLMClient,
     UnifiedLLMClientConfig,
@@ -99,7 +99,7 @@ class TestUnifiedLLMClient:
         mock_response.usage = mock_usage
         mock_response.choices = [mock_choice]
 
-        with patch("algoforge.llm.unified_client.litellm") as mock_litellm:
+        with patch("levi.llm.unified_client.litellm") as mock_litellm:
             mock_litellm.acompletion = AsyncMock(return_value=mock_response)
             mock_litellm.completion_cost.return_value = 0.005
 
@@ -123,7 +123,7 @@ class TestUnifiedLLMClient:
         """Verify exceptions from litellm are wrapped."""
         client = UnifiedLLMClient()
 
-        with patch("algoforge.llm.unified_client.litellm") as mock_litellm:
+        with patch("levi.llm.unified_client.litellm") as mock_litellm:
             mock_litellm.acompletion = AsyncMock(side_effect=Exception("Connection refused"))
 
             with pytest.raises(LLMConnectionError):
@@ -148,7 +148,7 @@ class TestUnifiedLLMClient:
         mock_response.usage = mock_usage
         mock_response.choices = [mock_choice]
 
-        with patch("algoforge.llm.unified_client.litellm") as mock_litellm:
+        with patch("levi.llm.unified_client.litellm") as mock_litellm:
             mock_litellm.acompletion = AsyncMock(return_value=mock_response)
             mock_litellm.completion_cost.return_value = 0.0
 

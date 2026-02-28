@@ -3,9 +3,9 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "algoforge"
+name = "levi"
 version = "0.1.0"
-description = "AlgoForge: Evolutionary optimization framework for algorithms"
+description = "Levi: Evolutionary optimization framework for algorithms"
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
 dependencies = [
@@ -38,4 +38,4 @@ examples = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["algoforge"]
+packages = ["levi"]

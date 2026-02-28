@@ -3,8 +3,8 @@
 import pytest
 from pydantic import ValidationError
 
-from algoforge.config.models import (
-    AlgoforgeConfig,
+from levi.config.models import (
+    LeviConfig,
     BudgetConfig,
     SamplerModelPair,
     PunctuatedEquilibriumConfig,
@@ -40,15 +40,15 @@ class TestAutoWiring:
     """Tests for the _auto_wire_models model validator."""
 
     def test_str_paradigm_models_coerced_to_list(self):
-        cfg = AlgoforgeConfig(**_minimal_config_kwargs(), paradigm_models="openai/gpt-4o")
+        cfg = LeviConfig(**_minimal_config_kwargs(), paradigm_models="openai/gpt-4o")
         assert cfg.paradigm_models == ["openai/gpt-4o"]
 
     def test_str_mutation_models_coerced_to_list(self):
-        cfg = AlgoforgeConfig(**_minimal_config_kwargs(), mutation_models="openai/gpt-4o-mini")
+        cfg = LeviConfig(**_minimal_config_kwargs(), mutation_models="openai/gpt-4o-mini")
         assert cfg.mutation_models == ["openai/gpt-4o-mini"]
 
     def test_list_models_preserved(self):
-        cfg = AlgoforgeConfig(
+        cfg = LeviConfig(
             **_minimal_config_kwargs(),
             paradigm_models=["model-a", "model-b"],
             mutation_models=["model-c", "model-d"],
@@ -57,7 +57,7 @@ class TestAutoWiring:
         assert cfg.mutation_models == ["model-c", "model-d"]
 
     def test_auto_generates_sampler_model_pairs(self):
-        cfg = AlgoforgeConfig(
+        cfg = LeviConfig(
             **_minimal_config_kwargs(),
             mutation_models=["model-a", "model-b"],
         )
@@ -73,7 +73,7 @@ class TestAutoWiring:
         explicit_pairs = [
             SamplerModelPair(sampler="ucb", model="custom/model", weight=2.0),
         ]
-        cfg = AlgoforgeConfig(
+        cfg = LeviConfig(
             **_minimal_config_kwargs(),
             sampler_model_pairs=explicit_pairs,
         )
@@ -82,42 +82,42 @@ class TestAutoWiring:
         assert cfg.sampler_model_pairs[0].model == "custom/model"
 
     def test_init_diversity_model_auto_filled(self):
-        cfg = AlgoforgeConfig(
+        cfg = LeviConfig(
             **_minimal_config_kwargs(),
             paradigm_models=["heavy/model"],
         )
         assert cfg.init.diversity_model == "heavy/model"
 
     def test_init_variant_models_auto_filled(self):
-        cfg = AlgoforgeConfig(
+        cfg = LeviConfig(
             **_minimal_config_kwargs(),
             mutation_models=["light-a", "light-b"],
         )
         assert cfg.init.variant_models == ["light-a", "light-b"]
 
     def test_meta_advice_model_auto_filled(self):
-        cfg = AlgoforgeConfig(
+        cfg = LeviConfig(
             **_minimal_config_kwargs(),
             mutation_models=["light-a", "light-b"],
         )
         assert cfg.meta_advice.model == "light-a"
 
     def test_pe_heavy_models_auto_filled_from_all_paradigm(self):
-        cfg = AlgoforgeConfig(
+        cfg = LeviConfig(
             **_minimal_config_kwargs(),
             paradigm_models=["heavy-a", "heavy-b"],
         )
         assert cfg.punctuated_equilibrium.heavy_models == ["heavy-a", "heavy-b"]
 
     def test_pe_variant_models_auto_filled(self):
-        cfg = AlgoforgeConfig(
+        cfg = LeviConfig(
             **_minimal_config_kwargs(),
             mutation_models=["light-a", "light-b"],
         )
         assert cfg.punctuated_equilibrium.variant_models == ["light-a", "light-b"]
 
     def test_explicit_sub_config_models_not_overridden(self):
-        cfg = AlgoforgeConfig(
+        cfg = LeviConfig(
             **_minimal_config_kwargs(),
             paradigm_models="heavy/model",
             mutation_models="light/model",
@@ -130,9 +130,9 @@ class TestAutoWiring:
         assert cfg.punctuated_equilibrium.heavy_models == ["custom/heavy"]
 
 
-class TestAlgoforgeConfig:
+class TestLeviConfig:
     def test_minimal_config_works_with_defaults(self):
-        cfg = AlgoforgeConfig(**_minimal_config_kwargs())
+        cfg = LeviConfig(**_minimal_config_kwargs())
         assert cfg.paradigm_models == ["openai/gpt-4o"]
         assert cfg.mutation_models == ["openai/gpt-4o-mini"]
         assert len(cfg.sampler_model_pairs) == 4  # 1 model × 4 temps
@@ -142,14 +142,14 @@ class TestAlgoforgeConfig:
             "mutation": {"test/model": "Be concise."},
             "paradigm_shift": "Try a fundamentally different algorithm.",
         }
-        cfg = AlgoforgeConfig(
+        cfg = LeviConfig(
             **_minimal_config_kwargs(),
             prompt_overrides=overrides,
         )
         assert cfg.prompt_overrides == overrides
 
     def test_local_endpoints_and_model_info(self):
-        cfg = AlgoforgeConfig(
+        cfg = LeviConfig(
             **_minimal_config_kwargs(),
             local_endpoints={"Qwen/Qwen3-30B": "http://localhost:8001/v1"},
             model_info={"Qwen/Qwen3-30B": {"input_cost_per_token": 0.0000001}},
@@ -158,11 +158,11 @@ class TestAlgoforgeConfig:
         assert cfg.model_info == {"Qwen/Qwen3-30B": {"input_cost_per_token": 0.0000001}}
 
     def test_pipeline_max_tokens_default(self):
-        cfg = AlgoforgeConfig(**_minimal_config_kwargs())
+        cfg = LeviConfig(**_minimal_config_kwargs())
         assert cfg.pipeline.max_tokens == 16384
 
     def test_inputs_can_be_omitted_when_score_fn_does_not_require_them(self):
-        cfg = AlgoforgeConfig(
+        cfg = LeviConfig(
             problem_description="Test problem",
             function_signature="def solve(x):",
             seed_program="def solve(x):\n    return x",

@@ -3,9 +3,9 @@
 import numpy as np
 import pytest
 
-from algoforge.core import EvaluationResult, Program
-from algoforge.methods.algoforge import _restore_from_snapshot
-from algoforge.utils import extract_fn_name, evaluate_code
+from levi.core import EvaluationResult, Program
+from levi.methods.levi import _restore_from_snapshot
+from levi.utils import extract_fn_name, evaluate_code
 
 
 class DummyExtractor:

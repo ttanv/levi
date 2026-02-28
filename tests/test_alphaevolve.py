@@ -7,8 +7,8 @@ from LLM responses and DIFF application.
 
 import pytest
 
-from algoforge.utils import extract_code
-from algoforge.pipeline.producer import apply_diff
+from levi.utils import extract_code
+from levi.pipeline.producer import apply_diff
 
 
 class TestExtractCode:

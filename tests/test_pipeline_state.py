@@ -5,8 +5,8 @@ import math
 
 import pytest
 
-from algoforge.config.models import BudgetConfig
-from algoforge.pipeline.state import BudgetLimitReached, PipelineState
+from levi.config.models import BudgetConfig
+from levi.pipeline.state import BudgetLimitReached, PipelineState
 
 
 class TestPipelineStateBudget:
@@ -22,7 +22,7 @@ class TestPipelineStateBudget:
 
     def test_budget_exhausted_by_seconds(self, monkeypatch):
         state = PipelineState(BudgetConfig(seconds=10.0), start_time=100.0)
-        monkeypatch.setattr("algoforge.pipeline.state.time.time", lambda: 111.0)
+        monkeypatch.setattr("levi.pipeline.state.time.time", lambda: 111.0)
         assert state.budget_exhausted is True
 
     def test_budget_progress_uses_primary_limit_order(self, monkeypatch):
@@ -32,7 +32,7 @@ class TestPipelineStateBudget:
         )
         state.total_cost = 5.0
         state.eval_count = 90
-        monkeypatch.setattr("algoforge.pipeline.state.time.time", lambda: 280.0)
+        monkeypatch.setattr("levi.pipeline.state.time.time", lambda: 280.0)
 
         # Dollars take precedence over evaluations and time.
         assert state.budget_progress == 0.25
@@ -44,7 +44,7 @@ class TestPipelineStateBudget:
 
     def test_elapsed_seconds(self, monkeypatch):
         state = PipelineState(BudgetConfig(), start_time=10.0)
-        monkeypatch.setattr("algoforge.pipeline.state.time.time", lambda: 13.5)
+        monkeypatch.setattr("levi.pipeline.state.time.time", lambda: 13.5)
         assert state.elapsed_seconds == 3.5
 
 
@@ -97,7 +97,7 @@ class TestPipelineStateMetrics:
 
     def test_record_score_tracks_running_best(self, monkeypatch):
         state = PipelineState(BudgetConfig(), start_time=100.0)
-        monkeypatch.setattr("algoforge.pipeline.state.time.time", lambda: 130.0)
+        monkeypatch.setattr("levi.pipeline.state.time.time", lambda: 130.0)
 
         state.eval_count = 1
         state.total_cost = 0.5
