@@ -16,4 +16,5 @@ result = af.evolve_code(
     ],
     budget_dollars=13,
     local_endpoints={"Qwen/Qwen3-30B-A3B-Instruct-2507": "http://localhost:8001/v1"},
+    pipeline=af.PipelineConfig(eval_timeout=300),
 )
