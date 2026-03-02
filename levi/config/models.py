@@ -24,6 +24,7 @@ class BudgetConfig(BaseModel):
     dollars: Optional[float] = None
     evaluations: Optional[int] = None
     seconds: Optional[float] = None
+    target_score: Optional[float] = None
 
 
 class CVTConfig(BaseModel):

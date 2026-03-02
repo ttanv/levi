@@ -132,6 +132,7 @@ def _build_config(
     budget_dollars: float | None,
     budget_evals: int | None,
     budget_seconds: float | None,
+    target_score: float | None = None,
     **kwargs: Any,
 ) -> LeviConfig:
     """Build LeviConfig from evolve_code() parameters."""
@@ -160,6 +161,7 @@ def _build_config(
         dollars=budget_dollars,
         evaluations=budget_evals,
         seconds=budget_seconds,
+        target_score=target_score,
     )
 
     # Reject kwargs that overlap with explicit params
@@ -206,6 +208,7 @@ def evolve_code(
     budget_dollars: float | None = None,
     budget_evals: int | None = None,
     budget_seconds: float | None = None,
+    target_score: float | None = None,
     resume_snapshot: dict | None = None,
     **kwargs: Any,
 ) -> LeviResult:
@@ -280,6 +283,7 @@ def evolve_code(
         budget_dollars=budget_dollars,
         budget_evals=budget_evals,
         budget_seconds=budget_seconds,
+        target_score=target_score,
         **kwargs,
     )
     return asyncio.run(_run_async(config, resume_snapshot=resume_snapshot))
