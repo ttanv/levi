@@ -404,7 +404,12 @@ class PipelineState:
 
     @property
     def budget_exhausted(self) -> bool:
-        return self.budget_tracker.exhausted
+        if self.budget_tracker.exhausted:
+            return True
+        target = self.budget_tracker.budget.target_score
+        if target is not None and self.best_score_so_far >= target:
+            return True
+        return False
 
     @property
     def elapsed_seconds(self) -> float:
