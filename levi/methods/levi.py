@@ -377,7 +377,7 @@ async def _run_async(config: LeviConfig, resume_snapshot: dict | None = None) ->
             archive_size=0,
             cell_index=None,
         )
-        logger.info(f"[Levi] Seed score: {seed_score:.1f}")
+        logger.info(f"[Levi] Seed score: {seed_score:.17g}")
 
         # Resume from snapshot or run init
         init_cost = 0.0
@@ -408,7 +408,7 @@ async def _run_async(config: LeviConfig, resume_snapshot: dict | None = None) ->
         result = await runner.run()
 
         logger.info(
-            f"[Levi] Complete - best score: {result.best_score:.1f}, "
+            f"[Levi] Complete - best score: {result.best_score:.17g}, "
             f"evals: {result.total_evaluations}, cost: ${result.total_cost:.3f}"
         )
         if config.output_dir:

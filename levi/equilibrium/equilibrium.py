@@ -133,7 +133,7 @@ class PunctuatedEquilibrium:
             score = elite.result.primary_score
             code = elite.program.content
             rep_text_parts.append(
-                f"### Region {i + 1} (Cluster {cluster_id}, Score: {score:.1f})\n```python\n{code}\n```"
+                f"### Region {i + 1} (Cluster {cluster_id}, Score: {score:.17g})\n```python\n{code}\n```"
             )
 
         representative_solutions = "\n\n".join(rep_text_parts)
@@ -252,7 +252,7 @@ Output ONLY complete, runnable Python code in a ```python block.
             representatives = self._select_cluster_representatives(clusters)
 
         for cluster_id, elite in representatives:
-            logger.info(f"[PE] Cluster {cluster_id} rep: score={elite.result.primary_score:.1f}")
+            logger.info(f"[PE] Cluster {cluster_id} rep: score={elite.result.primary_score:.17g}")
 
         # Step 3: Generate paradigm shift solution
         heavy_models = self.pe_config.heavy_models
@@ -368,7 +368,7 @@ Output ONLY complete, runnable Python code in a ```python block.
                 }
             )
 
-            logger.info(f"[PE] Paradigm shift: score={score:.1f}, accepted={accepted}, cell={cell_idx}")
+            logger.info(f"[PE] Paradigm shift: score={score:.17g}, accepted={accepted}, cell={cell_idx}")
         else:
             error_message = str(result.get("error", "unknown"))
             logger.info(f"[PE] Paradigm shift eval error: {error_message[:100]}")
@@ -497,7 +497,7 @@ Output ONLY complete, runnable Python code in a ```python block.
                         }
                     )
 
-                    logger.info(f"[PE] Variant {vr['idx']}: score={score:.1f}, accepted={accepted}")
+                    logger.info(f"[PE] Variant {vr['idx']}: score={score:.17g}, accepted={accepted}")
                 else:
                     error_message = str(result.get("error", "unknown"))
                     logger.warning(f"[PE] Variant {vr['idx']} eval error: {error_message[:100]}")
