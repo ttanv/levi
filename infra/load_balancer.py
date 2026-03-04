@@ -6,7 +6,7 @@ from aiohttp import web, ClientSession, ClientTimeout
 
 BACKENDS = [
     "http://localhost:8000",
-    "http://10.130.0.9:8000",
+    "http://10.130.0.12:8000",
 ]
 
 backend_cycle = itertools.cycle(BACKENDS)
