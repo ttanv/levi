@@ -312,7 +312,7 @@ def _generate_paradigm_shift_examples(
     n_examples: int = 4,
 ) -> list[dspy.Example]:
     """Generate training examples from seed + baseline score."""
-    representative_solutions = f"### Region 1 - Seed (Score: {seed_score:.1f})\n```python\n{config.seed_program}\n```\n"
+    representative_solutions = f"### Region 1 - Seed (Score: {seed_score:.17g})\n```python\n{config.seed_program}\n```\n"
 
     examples = []
     for _ in range(n_examples):
@@ -480,7 +480,7 @@ def optimize_prompts(config: LeviConfig) -> tuple[dict, float]:
     if "error" in seed_result:
         raise RuntimeError(f"Seed program evaluation failed during prompt optimization: {seed_result['error']}")
     seed_score = seed_result.get("score", 0.0)
-    logger.info("[PromptOpt] Seed score: %.1f", seed_score)
+    logger.info("[PromptOpt] Seed score: %.17g", seed_score)
 
     overrides: dict[str, Any] = {"mutation": {}, "paradigm_shift": None}
 

@@ -166,7 +166,7 @@ VARIANT_GENERATION_PROMPT = """# Generate Variant of Paradigm Shift Solution
 {function_signature}
 ```
 
-## Base Paradigm Shift Solution (Score: {base_score:.1f})
+## Base Paradigm Shift Solution (Score: {base_score:.17g})
 ```python
 {base_code}
 ```

@@ -138,7 +138,7 @@ async def eval_consumer(
                     label = _model_label(item)
                     logger.info(
                         f"[Eval #{state.eval_count}] {label:30s} "
-                        f"CASCADE SKIP  | quick: {result['quick_score']:.1f} < {result['threshold']:.1f}"
+                        f"CASCADE SKIP  | quick: {result['quick_score']:.17g} < {result['threshold']:.17g}"
                     )
                 elif "error" not in result:
                     score, score_error = coerce_score(result)
@@ -184,7 +184,7 @@ async def eval_consumer(
                         label = _model_label(item)
                         logger.info(
                             f"[Eval #{state.eval_count}] {label:30s} {status:12s} | "
-                            f"score: {score:.1f} | best: {state.best_score_so_far:.1f} | "
+                            f"score: {score:.17g} | best: {state.best_score_so_far:.17g} | "
                             f"${state.total_cost:.3f}"
                         )
                 else:

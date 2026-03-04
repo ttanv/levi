@@ -256,7 +256,7 @@ class PipelineRunner:
 
             logger.info(
                 f"[Eval #{self.state.eval_count}] PE/{model:27s} {status:12s} | "
-                f"score: {score:.1f} | best: {self.state.best_score_so_far:.1f} | "
+                f"score: {score:.17g} | best: {self.state.best_score_so_far:.17g} | "
                 f"${self.state.total_cost:.3f}"
             )
 
@@ -273,7 +273,7 @@ class PipelineRunner:
                     f"LLM in-flight: {self.state.llm_in_flight} | "
                     f"Eval in-flight: {self.state.eval_in_flight} | "
                     f"Archive: {self.pool.size()} | "
-                    f"Best: {best_score:.1f}"
+                    f"Best: {best_score:.17g}"
                 )
             except asyncio.CancelledError:
                 raise  # Let cancellation propagate

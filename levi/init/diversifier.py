@@ -118,7 +118,7 @@ class Diversifier:
             quick_score = quick_result.get("score", 0)
             threshold = self.best_score * cascade.min_score_ratio
             if quick_score < threshold:
-                return {"error": f"Cascade rejected: {quick_score:.1f} < {threshold:.1f}"}
+                return {"error": f"Cascade rejected: {quick_score:.17g} < {threshold:.17g}"}
 
         result = await self.executor.run(
             evaluate_code,
@@ -204,7 +204,7 @@ class Diversifier:
 
                 existing_seeds_text = "\n\n---\n\n".join(
                     [
-                        f"### Seed {j + 1} (Score: {score:.1f}):\n```python\n{code}\n```"
+                        f"### Seed {j + 1} (Score: {score:.17g}):\n```python\n{code}\n```"
                         for j, (code, score, _) in enumerate(diverse_seeds)
                     ]
                 )
@@ -266,7 +266,7 @@ class Diversifier:
                             new_score = result.get("score", 0.0)
                             self._record_score(new_score, sampler="init_diversity")
                             diverse_seeds.append((new_code, new_score, result))
-                            logger.info(f"  {attempt_label} OK - score: {new_score:.1f}")
+                            logger.info(f"  {attempt_label} OK - score: {new_score:.17g}")
                             success = True
                         else:
                             if self.state is not None:
@@ -503,7 +503,7 @@ class Diversifier:
 
         best_score = max(p["score"] for p in valid_programs) if valid_programs else 0.0
         logger.info(
-            f"[Init Phase 3] Done: {n_accepted} cells filled, archive size: {pool.size()}, best: {best_score:.1f}, cost: ${self.total_cost:.3f}"
+            f"[Init Phase 3] Done: {n_accepted} cells filled, archive size: {pool.size()}, best: {best_score:.17g}, cost: ${self.total_cost:.3f}"
         )
 
         # Switch extractor to evolution phase
