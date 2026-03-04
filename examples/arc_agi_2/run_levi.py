@@ -4,6 +4,7 @@
 import argparse
 import json
 import os
+import random
 import sys
 import types
 from datetime import datetime
@@ -18,6 +19,10 @@ from problem import (
 )
 
 DEFAULT_MODEL = "openrouter/qwen/qwen3-30b-a3b-instruct-2507"
+
+QWEN_LOCAL = "Qwen/Qwen3-30B-A3B-Instruct-2507"
+QWEN_LOCAL_ENDPOINT = "http://localhost:8001/v1"
+QWEN_COST = {"input_cost_per_token": 0.0000001, "output_cost_per_token": 0.0000004}
 
 
 # ---------------------------------------------------------------------------
@@ -106,9 +111,11 @@ def get_top_n_programs(snapshot_path: Path, n: int = 2) -> list[str]:
 def evolve_task(
     task_id: str,
     task: dict,
-    model: str,
-    budget_dollars: float,
-    budget_seconds: float,
+    model: str | None,
+    paradigm_model: str | None,
+    mutation_model: str | list[str] | None,
+    budget_dollars: float | None,
+    budget_seconds: float | None,
     output_dir: Path,
 ) -> dict:
     """Run Levi evolution for a single ARC task. Returns summary dict."""
@@ -121,28 +128,54 @@ def evolve_task(
 
     task_output_dir = str(output_dir / task_id)
 
-    # Check for local endpoint
-    local_endpoint = os.environ.get("LEVI_LOCAL_ENDPOINT")
-    local_model = os.environ.get("LEVI_LOCAL_MODEL")
+    # Model routing: single model or paradigm/mutation split
+    model_kwargs: dict = {}
+    if paradigm_model or mutation_model:
+        if paradigm_model:
+            model_kwargs["paradigm_model"] = paradigm_model
+        if mutation_model:
+            model_kwargs["mutation_model"] = mutation_model
+    else:
+        model_kwargs["model"] = model or DEFAULT_MODEL
+
+    # Wire local Qwen endpoint if available
+    local_endpoints: dict[str, str] = {}
+    model_info: dict[str, dict] = {}
+
+    # Check all configured models for local Qwen
+    all_models = []
+    for v in model_kwargs.values():
+        if isinstance(v, list):
+            all_models.extend(v)
+        elif v:
+            all_models.append(v)
+
+    if QWEN_LOCAL in all_models:
+        local_endpoints[QWEN_LOCAL] = os.environ.get(
+            "LEVI_LOCAL_ENDPOINT", QWEN_LOCAL_ENDPOINT
+        )
+        model_info[QWEN_LOCAL] = QWEN_COST
 
     extra_kwargs: dict = {}
-    if local_endpoint and local_model:
-        extra_kwargs["local_endpoints"] = {local_model: local_endpoint}
-        extra_kwargs["model_info"] = {
-            local_model: {
-                "input_cost_per_token": 0.0000001,
-                "output_cost_per_token": 0.0000004,
-            },
-        }
+    if local_endpoints:
+        extra_kwargs["local_endpoints"] = local_endpoints
+    if model_info:
+        extra_kwargs["model_info"] = model_info
+
+    # Budget: only pass non-None values
+    budget_kwargs: dict = {}
+    if budget_dollars is not None:
+        budget_kwargs["budget_dollars"] = budget_dollars
+    if budget_seconds is not None:
+        budget_kwargs["budget_seconds"] = budget_seconds
 
     result = levi.evolve_code(
         problem_desc,
         function_signature=FUNCTION_SIGNATURE,
         seed_program=SEED_PROGRAM,
         score_fn=score_fn,
-        model=model,
-        budget_dollars=budget_dollars,
-        budget_seconds=budget_seconds,
+        **model_kwargs,
+        **budget_kwargs,
         target_score=100.0,
         pipeline=levi.PipelineConfig(
             n_llm_workers=8,
@@ -211,24 +244,40 @@ def main() -> None:
         "--budget-dollars",
         type=float,
         default=float(os.environ.get("LEVI_BUDGET_DOLLARS", "1.0")),
-        help="Budget per task in dollars (default: $1.00)",
+        help="Budget per task in dollars (default: $1.00, 0=no limit)",
     )
     parser.add_argument(
         "--budget-seconds",
         type=float,
         default=float(os.environ.get("LEVI_BUDGET_SECONDS", "120")),
-        help="Time limit per task in seconds (default: 120)",
+        help="Time limit per task in seconds (default: 120, 0=no limit)",
     )
     parser.add_argument(
         "--model",
-        default=os.environ.get("LEVI_MODEL", DEFAULT_MODEL),
-        help=f"Model to use (default: {DEFAULT_MODEL})",
+        default=os.environ.get("LEVI_MODEL"),
+        help="Single model for both paradigm and mutation",
+    )
+    parser.add_argument(
+        "--paradigm-model",
+        default=None,
+        help="Model for paradigm shifts (creative/heavy)",
+    )
+    parser.add_argument(
+        "--mutation-model",
+        nargs="+",
+        default=None,
+        help="Model(s) for mutations (can specify multiple)",
     )
     parser.add_argument(
         "--max-tasks",
         type=int,
         default=None,
-        help="Limit to N smallest-grid tasks",
+        help="Limit to N tasks",
+    )
+    parser.add_argument(
+        "--random",
+        action="store_true",
+        help="Randomly sample tasks instead of picking smallest",
     )
     parser.add_argument(
         "--output-dir",
@@ -236,6 +285,18 @@ def main() -> None:
         help="Output directory (default: runs/<timestamp>_arc_agi_2)",
     )
     args = parser.parse_args()
+
+    # Resolve budget: 0 means no limit
+    budget_dollars = args.budget_dollars if args.budget_dollars > 0 else None
+    budget_seconds = args.budget_seconds if args.budget_seconds > 0 else None
+    if budget_dollars is None and budget_seconds is None:
+        parser.error("At least one of --budget-dollars or --budget-seconds must be > 0")
+
+    # Resolve models
+    if args.model and (args.paradigm_model or args.mutation_model):
+        parser.error("Cannot use --model with --paradigm-model/--mutation-model")
+    if not args.model and not args.paradigm_model and not args.mutation_model:
+        args.model = DEFAULT_MODEL
 
     # Load dataset
     data_dir = resolve_data_dir(args.split)
@@ -248,6 +309,11 @@ def main() -> None:
         missing = set(args.task_ids) - set(tasks)
         if missing:
             print(f"Warning: task IDs not found: {missing}", file=sys.stderr)
+    elif args.random:
+        all_ids = list(all_tasks)
+        n = min(args.max_tasks or len(all_ids), len(all_ids))
+        selected = random.sample(all_ids, n)
+        tasks = {tid: all_tasks[tid] for tid in selected}
     else:
         # Sort by max grid size ascending (smallest/simplest first)
         sorted_ids = sorted(all_tasks, key=lambda tid: _max_grid_size(all_tasks[tid]))
@@ -282,8 +348,10 @@ def main() -> None:
                 task_id=task_id,
                 task=task,
                 model=args.model,
-                budget_dollars=args.budget_dollars,
-                budget_seconds=args.budget_seconds,
+                paradigm_model=args.paradigm_model,
+                mutation_model=args.mutation_model,
+                budget_dollars=budget_dollars,
+                budget_seconds=budget_seconds,
                 output_dir=output_dir,
             )
 
