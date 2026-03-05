@@ -4,7 +4,7 @@ import re
 from typing import Optional
 
 
-def extract_code(response: str) -> Optional[str]:
+def extract_code(response: Optional[str]) -> Optional[str]:
     """
     Extract Python code from LLM response.
 
@@ -20,6 +20,13 @@ def extract_code(response: str) -> Optional[str]:
     Returns:
         Extracted Python code, or None if no valid code found
     """
+    if response is None:
+        return None
+    if isinstance(response, bytes):
+        response = response.decode("utf-8", errors="ignore")
+    if not isinstance(response, str):
+        return None
+
     # Remove reasoning tags that some models include
     response = re.sub(r"<think>.*?</think>", "", response, flags=re.DOTALL)
     response = re.sub(r"<thinking>.*?</thinking>", "", response, flags=re.DOTALL)
