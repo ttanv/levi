@@ -158,9 +158,36 @@ class UnifiedLLMClient:
             raise LLMResponseError(f"[{model}] Missing usage field in response")
 
         try:
-            content = response.choices[0].message.content
+            choice = response.choices[0]
+            message = getattr(choice, "message", None)
+            content = getattr(message, "content", None)
         except Exception as e:
             raise LLMResponseError(f"[{model}] Invalid completion schema") from e
+
+        # Some providers/models (including OpenRouter routes) may return
+        # non-string or empty message content; normalize to a plain string.
+        if content is None:
+            content = ""
+        elif isinstance(content, list):
+            parts: list[str] = []
+            for part in content:
+                if isinstance(part, str):
+                    parts.append(part)
+                elif isinstance(part, dict):
+                    text = part.get("text") or part.get("content") or part.get("value")
+                    if isinstance(text, str):
+                        parts.append(text)
+            content = "\n".join(p for p in parts if p).strip()
+        elif isinstance(content, dict):
+            text = content.get("text") or content.get("content") or content.get("value")
+            content = text if isinstance(text, str) else ""
+        elif not isinstance(content, str):
+            content = str(content)
+
+        if not content:
+            fallback_text = getattr(choice, "text", None)
+            if isinstance(fallback_text, str):
+                content = fallback_text
 
         self._total_cost += cost
 
