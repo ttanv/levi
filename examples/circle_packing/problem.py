@@ -36,6 +36,9 @@ Return:
 
 ## Objective
 Maximize `sum_radii`.
+
+## Runtime Constraint
+Your solution must complete within **600 seconds**.
 """
 
 FUNCTION_SIGNATURE = f"""

@@ -1,38 +1,45 @@
 #!/usr/bin/env python3
-"""Run Levi on n=26 circle packing with local Qwen 30B."""
+"""Run Levi on n=26 circle packing with local Qwen + OpenRouter GPT-5."""
 
+import json
 import os
 from datetime import datetime
+from pathlib import Path
 
 import levi
 from problem import FUNCTION_SIGNATURE, PROBLEM_DESCRIPTION, SEED_PROGRAM, score_fn
 
 QWEN_MODEL = "Qwen/Qwen3-30B-A3B-Instruct-2507"
-GEMINI_FLASH_3_MODEL = "openrouter/google/gemini-3-flash-preview"
-GEMINI_FLASH_LITE_PREVIEW_MODEL = "openrouter/google/gemini-3.1-flash-lite-preview"
+PARADIGM_SHIFT_MODEL = "openrouter/google/gemini-3-flash-preview"
+RESUME_SNAPSHOT_PATH = Path("runs/20260305_193804_circle_packing/snapshot.json")
 
 
 def main() -> None:
     endpoint = os.getenv("LEVI_LOCAL_ENDPOINT", "http://localhost:8001/v1")
-    budget = 6.0
+    budget = 15.0
+    resume_snapshot = None
+    output_dir = f"runs/{datetime.now().strftime('%Y%m%d_%H%M%S')}_circle_packing"
+
+    if RESUME_SNAPSHOT_PATH.exists():
+        with open(RESUME_SNAPSHOT_PATH) as f:
+            resume_snapshot = json.load(f)
+        output_dir = str(RESUME_SNAPSHOT_PATH.parent)
+        print(f"Resuming from snapshot: {RESUME_SNAPSHOT_PATH}")
+    else:
+        print(f"Starting fresh run (snapshot not found): {RESUME_SNAPSHOT_PATH}")
 
     result = levi.evolve_code(
         PROBLEM_DESCRIPTION,
         function_signature=FUNCTION_SIGNATURE,
         seed_program=SEED_PROGRAM,
         score_fn=score_fn,
-        paradigm_model=[QWEN_MODEL, GEMINI_FLASH_3_MODEL],
-        mutation_model=[QWEN_MODEL, GEMINI_FLASH_LITE_PREVIEW_MODEL],
+        paradigm_model=PARADIGM_SHIFT_MODEL,
+        mutation_model=[QWEN_MODEL, "openrouter/xiaomi/mimo-v2-flash"],
         local_endpoints={QWEN_MODEL: endpoint},
         model_info={
             QWEN_MODEL: {
                 "input_cost_per_token": 0.0000001,
                 "output_cost_per_token": 0.0000004,
-            },
-            GEMINI_FLASH_LITE_PREVIEW_MODEL: {
-                # $0.25 / 1M input tokens, $1.50 / 1M output tokens.
-                "input_cost_per_token": 0.00000025,
-                "output_cost_per_token": 0.0000015,
             },
         },
         budget_dollars=budget,
@@ -40,7 +47,7 @@ def main() -> None:
             n_llm_workers=8,
             n_eval_processes=8,
             max_tokens=2048,
-            eval_timeout=90,
+            eval_timeout=600,
         ),
         behavior=levi.BehaviorConfig(
             ast_features=[
@@ -56,10 +63,14 @@ def main() -> None:
                 "execution_time",
             ],
         ),
-        init=levi.InitConfig(
-            diversity_model=GEMINI_FLASH_3_MODEL,
+        punctuated_equilibrium=levi.PunctuatedEquilibriumConfig(
+            reasoning_effort="low",
         ),
-        output_dir=f"runs/{datetime.now().strftime('%Y%m%d_%H%M%S')}_circle_packing",
+        init=levi.InitConfig(
+            diversity_model=PARADIGM_SHIFT_MODEL,
+        ),
+        output_dir=output_dir,
+        resume_snapshot=resume_snapshot,
     )
 
     print(f"Best score: {result.best_score:.17g}")
