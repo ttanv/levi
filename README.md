@@ -13,7 +13,13 @@ Levi is an LLM-guided evolutionary framework for discovering algorithms, heurist
 
 Existing frameworks couple performance tightly to model capability. Drop to a smaller model and results degrade sharply. Levi decouples the two by making diversity an architectural concern rather than a model concern, and by matching model capacity to task demand: cheap models for refinement, expensive models only for periodic creative leaps. Set a dollar budget and Levi spends it well.
 
-**$4.50 improves on what other frameworks need $15–30 and frontier models to achieve.** Highest scores on the [ADRS benchmark](https://ucbskyadrs.github.io/) across all frameworks. See [detailed results](https://ttanv.github.io/levi).
+**$4.50 improves on what other frameworks need $15-30 and frontier models to achieve.** Highest scores on the [ADRS benchmark](https://ucbskyadrs.github.io/) across all frameworks. See [detailed results](https://ttanv.github.io/levi).
+
+<p align="center">
+  <img src="results/comparison_plot.png" width="49%" />
+  <img src="results/cbl_plot3.png" width="49%" />
+</p>
+<p align="center"><em>Left: Levi outscores all baselines across ADRS problems. Right: near-peak performance at a fraction of the cost and evaluations.</em></p>
 
 ## Quickstart
 
@@ -116,12 +122,6 @@ result = levi.evolve_code(
 See `levi.LeviConfig` for the full list of configuration options.
 
 ## ADRS Benchmark
-
-<p align="center">
-  <img src="results/comparison_plot.png" width="49%" />
-  <img src="results/cbl_plot3.png" width="49%" />
-</p>
-<p align="center"><em>Left: Levi outscores all baselines across ADRS problems. Right: Levi reaches near-peak performance at a fraction of the cost and evaluations.</em></p>
 
 Levi holds the **highest average score (76.5)** across all seven [ADRS Leaderboard](https://ucbskyadrs.github.io/) problems, ahead of GEPA (71.9), OpenEvolve (70.6), and ShinkaEvolve (67.4). Six of the seven problems were solved on a **$4.50 budget**, 3-7x cheaper than baselines that typically spend $15-30 per problem. On controlled equal-budget comparisons, Levi reaches near-peak performance up to 12× faster in sample efficiency.
 
