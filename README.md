@@ -24,21 +24,16 @@ cd algoforge
 uv sync
 ```
 
-Set credentials for the model provider you plan to use, for example `OPENAI_API_KEY` or `OPENROUTER_API_KEY`. For self-hosted models, pass `local_endpoints` in `evolve_code(...)`.
+Run it as simply as below:
 
 ```python
-import levi
+import levi 
 
 def score_fn(pack, test_cases):
-    total_waste = 0
-    for items, bin_capacity in test_cases:
-        bins = pack(items, bin_capacity)
-        if sorted(item for b in bins for item in b) != sorted(items):
-            return {"score": 0.0}
-        if any(sum(b) > bin_capacity for b in bins):
-            return {"score": 0.0}
-        total_waste += sum(bin_capacity - sum(b) for b in bins)
-    return {"score": max(0.0, 100.0 - float(total_waste))}
+    items, capacity = test_cases[0]
+    bins = pack(items, capacity)
+    wasted = sum(capacity - sum(b) for b in bins)
+    return {"score": max(0.0, 100.0 - wasted)}
 
 inputs = [([4, 8, 1, 4, 2, 1], 10)]
 
@@ -51,10 +46,6 @@ result = levi.evolve_code(
     model="openai/gpt-4o-mini",
     budget_dollars=2.0,
 )
-
-print(result.best_program)
-print(f"Best score: {result.best_score}")
-print(f"Cost: ${result.total_cost:.2f}")
 ```
 
 ## API
@@ -101,15 +92,8 @@ result = levi.evolve_code(..., model="openai/gpt-4o-mini")
 # Separate paradigm (creative) and mutation (workhorse) models
 result = levi.evolve_code(
     ...,
-    paradigm_model="openai/gpt-4o",
-    mutation_model="openai/gpt-4o-mini",
-)
-
-# Multiple mutation models (round-robin)
-result = levi.evolve_code(
-    ...,
-    paradigm_model="openai/gpt-4o",
-    mutation_model=["openai/gpt-4o-mini", "openrouter/qwen/qwen3-30b"],
+    paradigm_model=["openai/gpt-4o"],
+    mutation_model=["openai/gpt-4o-mini"],
 )
 ```
 
@@ -136,6 +120,28 @@ result = levi.evolve_code(
 ```
 
 See `levi.LeviConfig` for the full list of configuration options.
+
+## ADRS Benchmark
+
+<p align="center">
+  <img src="results/comparison_plot.png" width="49%" />
+  <img src="results/cbl_plot3.png" width="49%" />
+</p>
+<p align="center"><em>Left: Levi outscores all baselines across ADRS problems. Right: Levi reaches near-peak performance at a fraction of the cost and evaluations.</em></p>
+
+Levi holds the **highest average score (76.5)** across all seven [ADRS Leaderboard](https://github.com/cmu-db/ADRS-Leaderboard) problems, ahead of GEPA (71.9), OpenEvolve (70.6), and ShinkaEvolve (67.4). Six of the seven problems were solved on a **$4.50 budget** — 3–7× cheaper than baselines that typically spend $15–30 per problem. On controlled equal-budget comparisons, Levi reaches near-peak performance up to 12× faster in sample efficiency.
+
+| Problem | Levi | 2nd Best | Cost |
+|---------|------|----------|------|
+| Cloudcast | **100.0** | GEPA 96.6 | $4.50 |
+| EPLB | **74.6** | GEPA 70.2 | $4.50 |
+| LLM-SQL | **78.3** | OpenEvolve 72.5 | $4.50 |
+| Prism | **87.4** | Tied | $4.50 |
+| Spot Multi-Reg | **72.4** | GEPA 62.2 | $4.50 |
+| Spot Single-Reg | **51.7** | GEPA 51.4 | $4.50 |
+| Transaction Scheduling | **71.1** | OpenEvolve 70.0 | $13.00 |
+
+See [detailed results and methodology](https://ttanv.github.io/levi).
 
 ## Circle Packing: Local Models, Real Results
 
