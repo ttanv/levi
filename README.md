@@ -100,6 +100,10 @@ result = levi.evolve_code(
 
 See `levi.LeviConfig` for the full list of configuration options.
 
+## Circle Packing: Local Models, Real Results
+
+Levi scored **2.6359+ packing density** on the n=26 circle packing benchmark on a **$15 budget**. The mutation models were a local Qwen3-30B-A3B and Xiaomi MiMo-v2-Flash, with Gemini 3 Flash handling periodic paradigm shifts — the majority of accepted mutations coming from the local Qwen. See [`examples/circle_packing`](examples/circle_packing) for the full setup.
+
 ## Examples
 
 Seven worked examples from the [ADRS Leaderboard](https://github.com/UCB-ADRS/ADRS-Leaderboard) benchmark — cloud scheduling, GPU placement, broadcast optimization, and more. See [`examples/README.md`](examples/README.md) for setup and details.
