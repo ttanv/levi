@@ -40,6 +40,7 @@ class InitConfig(BaseModel):
     variant_models: Optional[list[str]] = None
     temperature: float = 0.8
     diversity_prompt: Optional[str] = None  # Custom prompt for diverse seed generation
+    diversity_llm_kwargs: dict = Field(default_factory=dict)  # Extra kwargs passed to diversity LLM calls (e.g. reasoning_effort, max_tokens)
 
 
 class MetaAdviceConfig(BaseModel):

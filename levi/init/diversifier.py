@@ -3,7 +3,6 @@
 import asyncio
 import logging
 import random
-import time
 
 import numpy as np
 
@@ -60,52 +59,34 @@ class Diversifier:
         self,
         config: LeviConfig,
         executor: ResilientProcessPool,
-        start_time: float = 0.0,
-        state: PipelineState | None = None,
+        state: PipelineState,
     ):
         self.config = config
         self.executor = executor
         self.state = state
         self.total_cost = 0.0
         self.best_score = 0.0
-        self.score_history: list[ScoreHistoryEntry] = []
-        self._init_eval_count = 0
-        self._start_time = start_time or time.time()
+
+    async def _acompletion(self, *, model: str, messages: list, **kwargs):
+        """Route completion through state for budget tracking."""
+        llm = get_llm_client()
+        return await self.state.acompletion(llm, model=model, messages=messages, **kwargs)
 
     def _record_score(self, score: float, sampler: str) -> None:
         """Record a score from the init phase."""
-        if self.state is not None:
-            self.state.record_accept()
-            self.state.record_score(
-                score=score,
-                accepted=True,
-                sampler=sampler,
-                archive_size=0,
-                cell_index=None,
-            )
-            self.best_score = self.state.best_score_so_far
-            return
-
-        self._init_eval_count += 1
-        if score > self.best_score:
-            self.best_score = score
-        self.score_history.append(
-            ScoreHistoryEntry(
-                eval_number=self._init_eval_count,
-                score=score,
-                best_score=self.best_score,
-                timestamp=time.time() - self._start_time,
-                accepted=True,  # All valid init programs go into the archive
-                sampler=sampler,
-                archive_size=0,  # Not meaningful during init
-                cell_index=None,
-                cumulative_cost=self.total_cost,
-            )
+        self.state.record_accept()
+        self.state.record_score(
+            score=score,
+            accepted=True,
+            sampler=sampler,
+            archive_size=0,
+            cell_index=None,
         )
+        self.best_score = self.state.best_score_so_far
 
     async def _cascade_eval(self, code: str, fn_name: str) -> dict:
         """Evaluate with cascade: quick test first, full eval only if promising."""
-        if self.state is not None and self.state.budget_exhausted:
+        if self.state.budget_exhausted:
             return {"error": "Budget exhausted"}
 
         cascade = self.config.cascade
@@ -150,7 +131,7 @@ class Diversifier:
         self.best_score = seed_score
 
         # Record the seed itself
-        if self.state is None or self.state.eval_count == 0:
+        if self.state.eval_count == 0:
             self._record_score(seed_score, sampler="init_seed")
 
         # Phase 1: Generate diverse seeds
@@ -169,9 +150,7 @@ class Diversifier:
             seed_result,  # Always pass seed as fallback
         )
 
-        if self.state is not None:
-            return self.total_cost, list(self.state.score_history)
-        return self.total_cost, self.score_history
+        return self.total_cost, list(self.state.score_history)
 
     async def _generate_diverse_seeds(
         self,
@@ -191,13 +170,13 @@ class Diversifier:
 
         max_retries = 3
         for i in range(n_seeds):
-            if self.state is not None and self.state.budget_exhausted:
+            if self.state.budget_exhausted:
                 logger.info("[Init Phase 1] Stopping seed generation (budget exhausted)")
                 break
 
             success = False
             for attempt in range(max_retries):
-                if self.state is not None and self.state.budget_exhausted:
+                if self.state.budget_exhausted:
                     break
 
                 attempt_label = f"[Seed {i + 1}]" if attempt == 0 else f"[Seed {i + 1}, retry {attempt}]"
@@ -219,24 +198,17 @@ class Diversifier:
                 )
 
                 try:
-                    llm = get_llm_client()
-                    if self.state is not None:
-                        response = await self.state.acompletion(
-                            llm,
-                            model=model,
-                            messages=[{"role": "user", "content": prompt}],
-                            temperature=self.config.init.temperature,
-                            max_tokens=4096,
-                            timeout=300,
-                        )
-                    else:
-                        response = await llm.acompletion(
-                            model=model,
-                            messages=[{"role": "user", "content": prompt}],
-                            temperature=self.config.init.temperature,
-                            max_tokens=4096,
-                            timeout=300,
-                        )
+                    llm_kwargs = {
+                        "max_tokens": 16384,
+                        "timeout": 300,
+                        **self.config.init.diversity_llm_kwargs,
+                    }
+                    response = await self._acompletion(
+                        model=model,
+                        messages=[{"role": "user", "content": prompt}],
+                        temperature=self.config.init.temperature,
+                        **llm_kwargs,
+                    )
                     content = response.content
                     self.total_cost += response.cost
 
@@ -245,12 +217,9 @@ class Diversifier:
                         logger.info(f"  {attempt_label} Failed to extract code")
                         continue
 
-                    reserved_eval = False
-                    if self.state is not None:
-                        if not await self.state.try_start_evaluation():
-                            logger.info("[Init Phase 1] Stopping seed evaluation (budget exhausted)")
-                            break
-                        reserved_eval = True
+                    if not await self.state.try_start_evaluation():
+                        logger.info("[Init Phase 1] Stopping seed evaluation (budget exhausted)")
+                        break
 
                     try:
                         result = await self.executor.run(
@@ -269,12 +238,10 @@ class Diversifier:
                             logger.info(f"  {attempt_label} OK - score: {new_score:.17g}")
                             success = True
                         else:
-                            if self.state is not None:
-                                self.state.record_error(str(result.get("error", "unknown error")))
+                            self.state.record_error(str(result.get("error", "unknown error")))
                             logger.info(f"  {attempt_label} Eval failed: {result['error'][:50]}")
                     finally:
-                        if reserved_eval and self.state is not None:
-                            await self.state.finish_evaluation()
+                        await self.state.finish_evaluation()
                 except BudgetLimitReached:
                     logger.info("[Init Phase 1] Stopping seed generation (budget exhausted)")
                     break
@@ -329,24 +296,13 @@ class Diversifier:
         # Parallel LLM calls (cycle through models)
         async def generate_variant(idx: int, prompt: str, model: str) -> dict:
             try:
-                llm = get_llm_client()
-                if self.state is not None:
-                    response = await self.state.acompletion(
-                        llm,
-                        model=model,
-                        messages=[{"role": "user", "content": prompt}],
-                        temperature=self.config.init.temperature,
-                        max_tokens=4096,
-                        timeout=300,
-                    )
-                else:
-                    response = await llm.acompletion(
-                        model=model,
-                        messages=[{"role": "user", "content": prompt}],
-                        temperature=self.config.init.temperature,
-                        max_tokens=4096,
-                        timeout=300,
-                    )
+                response = await self._acompletion(
+                    model=model,
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=self.config.init.temperature,
+                    max_tokens=4096,
+                    timeout=300,
+                )
                 return {"idx": idx, "content": response.content, "cost": response.cost}
             except BudgetLimitReached:
                 return {"idx": idx, "error": "Budget exhausted"}
@@ -370,15 +326,14 @@ class Diversifier:
         logger.info(f"[Init Phase 2] Evaluating {total_candidates} candidates")
 
         async def eval_candidate(cand: dict) -> tuple[int, dict]:
-            if self.state is not None:
-                if not await self.state.try_start_evaluation():
-                    return cand["idx"], {
-                        "code": cand["code"],
-                        "result": {"error": "Budget exhausted", "budget_stop": True},
-                    }
+            if not await self.state.try_start_evaluation():
+                return cand["idx"], {
+                    "code": cand["code"],
+                    "result": {"error": "Budget exhausted", "budget_stop": True},
+                }
             try:
                 result = await self._cascade_eval(cand["code"], fn_name)
-                if self.state is not None and "error" in result:
+                if "error" in result:
                     error_msg = str(result.get("error", "unknown error"))
                     if error_msg.startswith("Cascade rejected:"):
                         self.state.record_reject()
@@ -386,12 +341,10 @@ class Diversifier:
                         self.state.record_error(error_msg)
                 return cand["idx"], {"code": cand["code"], "result": result}
             except Exception as e:
-                if self.state is not None:
-                    self.state.record_error(str(e))
+                self.state.record_error(str(e))
                 return cand["idx"], {"code": cand["code"], "result": {"error": str(e)}}
             finally:
-                if self.state is not None:
-                    await self.state.finish_evaluation()
+                await self.state.finish_evaluation()
 
         eval_tasks = [eval_candidate(c) for c in candidates]
         eval_results = await asyncio.gather(*eval_tasks)
