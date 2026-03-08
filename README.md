@@ -10,34 +10,71 @@ Levi is an LLM-guided evolutionary framework for discovering algorithms, heurist
 
 ## Why Levi
 
-Existing frameworks  couple performance tightly to model capability. Drop to a smaller model and results degrade sharply. Levi decouples the two by making diversity an architectural concern rather than a model concern, and by matching model capacity to task demand: cheap models for refinement, expensive models only for periodic creative leaps. Set a dollar budget and Levi spends it well.
+Existing frameworks couple performance tightly to model capability. Drop to a smaller model and results degrade sharply. Levi decouples the two by making diversity an architectural concern rather than a model concern, and by matching model capacity to task demand: cheap models for refinement, expensive models only for periodic creative leaps. Set a dollar budget and Levi spends it well.
 
-**$4.50 matches what other frameworks need $15–30 and frontier models to achieve.** Highest scores on the [ADRS benchmark](https://github.com/cmu-db/ADRS-Leaderboard) across all frameworks. See [detailed results](https://ttanv.github.io/levi).
+**$4.50 improves on what other frameworks need $15–30 and frontier models to achieve.** Highest scores on the [ADRS benchmark](https://github.com/cmu-db/ADRS-Leaderboard) across all frameworks. See [detailed results](https://ttanv.github.io/levi).
 
 ## Quickstart
 
+Levi is not on PyPI yet. Install it from source:
+
 ```bash
-pip install levi
-# or from source
-git clone https://github.com/ttanv/algoforge.git && cd algoforge
+git clone https://github.com/ttanv/algoforge.git
+cd algoforge
 uv sync
 ```
 
+Set credentials for the model provider you plan to use, for example `OPENAI_API_KEY` or `OPENROUTER_API_KEY`. For self-hosted models, pass `local_endpoints` in `evolve_code(...)`.
+
 ```python
 import levi
+
+def score_fn(pack, test_cases):
+    total_waste = 0
+    for items, bin_capacity in test_cases:
+        bins = pack(items, bin_capacity)
+        if sorted(item for b in bins for item in b) != sorted(items):
+            return {"score": 0.0}
+        if any(sum(b) > bin_capacity for b in bins):
+            return {"score": 0.0}
+        total_waste += sum(bin_capacity - sum(b) for b in bins)
+    return {"score": max(0.0, 100.0 - float(total_waste))}
+
+inputs = [([4, 8, 1, 4, 2, 1], 10)]
 
 result = levi.evolve_code(
     "Optimize bin packing to minimize wasted space",
     function_signature="def pack(items, bin_capacity):",
     seed_program="def pack(items, bin_capacity):\n    return [[item] for item in items]",
-    score_fn=lambda fn, _: {"score": max(0, 100 - sum(10 - sum(b) for b in fn([4,8,1,4,2,1], 10)) * 10)},
+    score_fn=score_fn,
+    inputs=inputs,
     model="openai/gpt-4o-mini",
     budget_dollars=2.0,
 )
 
-print(result.best_program.code)
+print(result.best_program)
 print(f"Best score: {result.best_score}")
+print(f"Cost: ${result.total_cost:.2f}")
 ```
+
+## API
+
+The main entry point is `levi.evolve_code(...)`.
+
+- Required arguments: `problem_description`, `function_signature`, `seed_program`, `score_fn`
+- Model selection: pass either `model=...` or `paradigm_model=...` / `mutation_model=...`
+- Budgeting: pass at least one of `budget_dollars`, `budget_evals`, or `budget_seconds`
+- Scoring: `score_fn` may be either `score_fn(fn)` or `score_fn(fn, inputs)`, and must return a dict containing `{"score": float}`
+
+`evolve_code(...)` returns a `levi.LeviResult` with:
+
+- `best_program: str`
+- `best_score: float`
+- `total_evaluations: int`
+- `total_cost: float`
+- `archive_size: int`
+- `runtime_seconds: float`
+- `score_history: list[float] | None`
 
 ## How It Works
 
@@ -76,7 +113,7 @@ result = levi.evolve_code(
 )
 ```
 
-Models are specified using [LiteLLM](https://docs.litellm.ai/docs/providers) format (`provider/model-name`).
+Hosted models should use [LiteLLM](https://docs.litellm.ai/docs/providers) identifiers such as `openai/gpt-4o-mini` or `openrouter/google/gemini-3-flash-preview`. Self-hosted models can use any stable name if you map that name through `local_endpoints`.
 
 ### Budget
 
@@ -92,7 +129,7 @@ result = levi.evolve_code(..., budget_seconds=3600)   # time cap
 result = levi.evolve_code(
     ...,
     pipeline=levi.PipelineConfig(n_llm_workers=8, n_eval_processes=8),
-    behavior=levi.BehaviorConfig(features=["cyclomatic_complexity", "branch_count"]),
+    behavior=levi.BehaviorConfig(ast_features=["cyclomatic_complexity", "branch_count"]),
     punctuated_equilibrium=levi.PunctuatedEquilibriumConfig(enabled=True, interval=5),
     prompt_opt=levi.PromptOptConfig(enabled=True),
 )
@@ -102,6 +139,8 @@ See `levi.LeviConfig` for the full list of configuration options.
 
 ## Examples
 
-Seven worked examples from the [ADRS Leaderboard](https://github.com/UCB-ADRS/ADRS-Leaderboard) benchmark — cloud scheduling, GPU placement, broadcast optimization, and more. See [`examples/README.md`](examples/README.md) for setup and details.
+Examples live under [`examples/README.md`](examples/README.md):
 
+- `examples/circle_packing/` is a self-contained optimization example
+- `examples/ADRS/` contains seven worked [ADRS Leaderboard](https://github.com/cmu-db/ADRS-Leaderboard) problems covering cloud scheduling, GPU placement, broadcast optimization, and more
 
