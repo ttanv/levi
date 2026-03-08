@@ -145,6 +145,10 @@ See [detailed results and methodology](https://ttanv.github.io/levi).
 
 ## Circle Packing: Local Models, Real Results
 
+<p align="center">
+  <img src="results/circle_packing_best.png" width="50%" />
+</p>
+
 LEVI scored **2.6359+ packing density** on the n=26 circle packing benchmark on a **$15 budget**. The mutation models were a local Qwen3-30B-A3B and Xiaomi MiMo-v2-Flash, with Gemini 3 Flash handling periodic paradigm shifts, with the majority of accepted mutations coming from the local Qwen. See [`examples/circle_packing`](examples/circle_packing) for the full setup.
 
 ## Examples
