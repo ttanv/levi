@@ -1,29 +1,35 @@
-# Levi
+<p align="center">
+  <img src="results/levi_logo.png" width="200" alt="LEVI">
+</p>
 
-**Better LLM Optimization for the Price of a Cup of Coffee**
+<p align="center"><strong>Better LLM Optimization for the Price of a Cup of Coffee</strong></p>
 
-[![CI](https://github.com/ttanv/algoforge/actions/workflows/ci.yml/badge.svg)](https://github.com/ttanv/algoforge/actions/workflows/ci.yml)
-[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Blog](https://img.shields.io/badge/blog-How%20It%20Works-orange)](https://ttanv.github.io/levi)
+<p align="center">
+  <a href="https://github.com/ttanv/algoforge/actions/workflows/ci.yml"><img src="https://github.com/ttanv/algoforge/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.11%2B-blue.svg" alt="Python 3.11+"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License: MIT"></a>
+  <a href="https://ttanv.github.io/levi"><img src="https://img.shields.io/badge/blog-How%20It%20Works-orange" alt="Blog"></a>
+</p>
 
-Levi is an LLM-guided evolutionary framework for discovering algorithms, heuristics, and optimized code. Point it at a scoring function and a seed program, set a dollar budget, and walk away.
+---
 
-## Why Levi
+LEVI is an LLM-guided evolutionary framework for discovering algorithms, heuristics, and optimized code. Point it at a scoring function and a seed program, set a dollar budget, and walk away.
 
-Existing frameworks couple performance tightly to model capability. Drop to a smaller model and results degrade sharply. Levi decouples the two by making diversity an architectural concern rather than a model concern, and by matching model capacity to task demand: cheap models for refinement, expensive models only for periodic creative leaps. Set a dollar budget and Levi spends it well.
+## Why LEVI
+
+Existing frameworks couple performance tightly to model capability. Drop to a smaller model and results degrade sharply. LEVI decouples the two by making diversity an architectural concern rather than a model concern, and by matching model capacity to task demand: cheap models for refinement, expensive models only for periodic creative leaps. Set a dollar budget and LEVI spends it well.
 
 **$4.50 improves on what other frameworks need $15-30 and frontier models to achieve.** Highest scores on the [ADRS benchmark](https://ucbskyadrs.github.io/) across all frameworks. See [detailed results](https://ttanv.github.io/levi).
 
 <p align="center">
-  <img src="results/comparison_plot.png" width="49%" />
-  <img src="results/cbl_plot3.png" width="49%" />
+  <img src="results/txn_scheduling.png" width="49%" />
+  <img src="results/cant_be_late.png" width="49%" />
 </p>
-<p align="center"><em>Left: Levi outscores all baselines across ADRS problems. Right: near-peak performance at a fraction of the cost and evaluations.</em></p>
+<p align="center"><em>LEVI converges faster and scores higher than baselines on controlled equal-budget comparisons (ADRS problems, same model, 750 evals).</em></p>
 
 ## Quickstart
 
-Levi is not on PyPI yet. Install it from source:
+LEVI is not on PyPI yet. Install it from source:
 
 ```bash
 git clone https://github.com/ttanv/algoforge.git
@@ -74,10 +80,10 @@ The main entry point is `levi.evolve_code(...)`.
 
 ## How It Works
 
-1. **Seed & score.** You provide a starting program and a scoring function. Levi generates diverse variants to populate a behavioral archive.
+1. **Seed & score.** You provide a starting program and a scoring function. LEVI generates diverse variants to populate a behavioral archive.
 2. **Evolve.** Cheap models mutate and refine solutions in parallel. A behavioral archive keeps structurally different strategies alive, preventing convergence.
 3. **Paradigm shifts.** Periodically, a stronger model proposes entirely new algorithmic approaches based on the archive's best ideas.
-4. **Budget stops.** Levi tracks spend in real time and stops when your dollar, evaluation, or time cap is hit.
+4. **Budget stops.** LEVI tracks spend in real time and stops when your dollar, evaluation, or time cap is hit.
 
 Read the [full writeup](https://ttanv.github.io/levi) for architecture details and ablations.
 
@@ -123,23 +129,23 @@ See `levi.LeviConfig` for the full list of configuration options.
 
 ## ADRS Benchmark
 
-Levi holds the **highest average score (76.5)** across all seven [ADRS Leaderboard](https://ucbskyadrs.github.io/) problems, ahead of GEPA (71.9), OpenEvolve (70.6), and ShinkaEvolve (67.4). Six of the seven problems were solved on a **$4.50 budget**, 3-7x cheaper than baselines that typically spend $15-30 per problem. On controlled equal-budget comparisons, Levi reaches near-peak performance up to 12× faster in sample efficiency.
+LEVI holds the **highest average score (76.5)** across all seven [ADRS Leaderboard](https://ucbskyadrs.github.io/) problems, ahead of GEPA (71.9), OpenEvolve (70.6), and ShinkaEvolve (67.4). Six of the seven problems were solved on a **$4.50 budget**, 3-7x cheaper than baselines that typically spend $15-30 per problem. On controlled equal-budget comparisons, LEVI reaches near-peak performance up to 12× faster in sample efficiency.
 
-| Problem | Levi | 2nd Best | Cost |
-|---------|------|----------|------|
-| Cloudcast | **100.0** | GEPA 96.6 | $4.50 |
-| EPLB | **74.6** | GEPA 70.2 | $4.50 |
-| LLM-SQL | **78.3** | OpenEvolve 72.5 | $4.50 |
-| Prism | **87.4** | Tied | $4.50 |
-| Spot Multi-Reg | **72.4** | GEPA 62.2 | $4.50 |
-| Spot Single-Reg | **51.7** | GEPA 51.4 | $4.50 |
-| Transaction Scheduling | **71.1** | OpenEvolve 70.0 | $13.00 |
+| Problem | LEVI | 2nd Best | Saving (over 2nd best) |
+|---------|------|----------|-----------------------|
+| Spot Single-Reg | **51.7** | GEPA 51.4 | 6.7x cheaper |
+| Spot Multi-Reg | **72.4** | GEPA 62.2 | 5.6x cheaper |
+| LLM-SQL | **78.3** | OpenEvolve 72.5 | 4.4x cheaper |
+| Cloudcast | **100.0** | GEPA 96.6 | 3.3x cheaper |
+| Prism | **87.4** | Tied | 3.3x cheaper |
+| EPLB | **74.6** | GEPA 70.2 | 3.3x cheaper |
+| Txn Scheduling | **71.1** | OpenEvolve 70.0 | 1.5x cheaper |
 
 See [detailed results and methodology](https://ttanv.github.io/levi).
 
 ## Circle Packing: Local Models, Real Results
 
-Levi scored **2.6359+ packing density** on the n=26 circle packing benchmark on a **$15 budget**. The mutation models were a local Qwen3-30B-A3B and Xiaomi MiMo-v2-Flash, with Gemini 3 Flash handling periodic paradigm shifts, with the majority of accepted mutations coming from the local Qwen. See [`examples/circle_packing`](examples/circle_packing) for the full setup.
+LEVI scored **2.6359+ packing density** on the n=26 circle packing benchmark on a **$15 budget**. The mutation models were a local Qwen3-30B-A3B and Xiaomi MiMo-v2-Flash, with Gemini 3 Flash handling periodic paradigm shifts, with the majority of accepted mutations coming from the local Qwen. See [`examples/circle_packing`](examples/circle_packing) for the full setup.
 
 ## Examples
 
