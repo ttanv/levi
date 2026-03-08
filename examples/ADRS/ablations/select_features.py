@@ -22,19 +22,19 @@ import numpy as np
 # Add txn_scheduling to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "txn_scheduling"))
 
-from algoforge import (
-    AlgoforgeConfig, BudgetConfig,
+from levi import (
+    LeviConfig, BudgetConfig,
     InitConfig, MetaAdviceConfig, PipelineConfig, CVTConfig, BehaviorConfig,
     PunctuatedEquilibriumConfig, PromptOptConfig,
 )
-from algoforge.behavior.extractor import BehaviorExtractor
-from algoforge.core import Program
-from algoforge.init.diversifier import Diversifier
-from algoforge.utils import ResilientProcessPool, evaluate_code, extract_fn_name
-from algoforge.pipeline.state import PipelineState
-from algoforge.llm import set_llm_client, clear_llm_client, UnifiedLLMClient
-from algoforge.llm.unified_client import UnifiedLLMClientConfig
-from algoforge.methods.algoforge import _register_models_with_litellm
+from levi.behavior.extractor import BehaviorExtractor
+from levi.core import Program
+from levi.init.diversifier import Diversifier
+from levi.utils import ResilientProcessPool, evaluate_code, extract_fn_name
+from levi.pipeline.state import PipelineState
+from levi.llm import set_llm_client, clear_llm_client, UnifiedLLMClient
+from levi.llm.unified_client import UnifiedLLMClientConfig
+from levi.methods.levi import _register_models_with_litellm
 
 import problem
 
@@ -77,7 +77,7 @@ async def run_init_phases():
     """Run init phases 1 & 2, return list of (code, score, result) tuples."""
     fn_name = extract_fn_name(problem.FUNCTION_SIGNATURE)
 
-    config = AlgoforgeConfig(
+    config = LeviConfig(
         problem_description=problem.PROBLEM_DESCRIPTION,
         function_signature=problem.FUNCTION_SIGNATURE,
         seed_program=problem.SEED_PROGRAM,
