@@ -65,7 +65,12 @@ class BehaviorExtractor:
         init_noise: float = 0.15,
         custom_extractors: Optional[dict[str, Callable[[Program], float]]] = None,
     ) -> None:
-        self.ast_features = ast_features or ["loop_count", "branch_count", "math_operators", "loop_nesting_max"]
+        self.ast_features = ast_features or [
+            "math_operators",
+            "loop_nesting_max",
+            "comprehension_count",
+            "range_max_arg",
+        ]
         self.score_keys = score_keys or []
         self.init_noise = init_noise
         # Custom extractors take (Program,) only — no AST dependency.
