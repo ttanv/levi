@@ -1,5 +1,9 @@
 <p align="center">
-  <img src="results/levi_logo.png" width="25%" alt="LEVI">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="results/levi_logo.png" />
+    <source media="(prefers-color-scheme: light)" srcset="results/levi_logo_light.png" />
+    <img src="results/levi_logo.png" width="25%" alt="LEVI" />
+  </picture>
 </p>
 
 <p align="center"><strong>Better LLM Optimization for the Price of a Cup of Coffee</strong></p>
