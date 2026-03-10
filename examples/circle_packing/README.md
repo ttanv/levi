@@ -15,6 +15,9 @@ def run_packing() -> tuple[np.ndarray, np.ndarray, float]:
 The evaluator enforces boundary and non-overlap constraints. Invalid packings
 get score `0`.
 
+If you installed LEVI with `pip` instead of `uv`, replace `uv run --no-sync python run.py`
+below with `python run.py`.
+
 ## Run
 
 ```bash
