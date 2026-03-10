@@ -19,14 +19,14 @@ get score `0`.
 
 ```bash
 cd examples/circle_packing
-uv run --no-sync python run_levi.py
+uv run --no-sync python run.py
 ```
 
 Quick smoke test:
 
 ```bash
 cd examples/circle_packing
-LEVI_BUDGET_DOLLARS=0.05 uv run --no-sync python run_levi.py
+LEVI_BUDGET_DOLLARS=0.05 uv run --no-sync python run.py
 ```
 
 Optional overrides:
@@ -34,7 +34,7 @@ Optional overrides:
 ```bash
 export LEVI_BUDGET_DOLLARS=3.0
 export LEVI_LOCAL_ENDPOINT=http://localhost:8001/v1
-uv run --no-sync python run_levi.py
+uv run --no-sync python run.py
 ```
 
 Default model is ADRS-style local Qwen:

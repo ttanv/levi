@@ -155,6 +155,7 @@ LEVI scored **2.6359+ packing density** on the n=26 circle packing benchmark on 
 ## Examples
 
 Examples live under [`examples/README.md`](examples/README.md):
+Each example directory uses `run.py` as its entrypoint.
 
 - `examples/circle_packing/` is a self-contained optimization example
 - `examples/ADRS/` contains seven worked [ADRS Leaderboard](https://ucbskyadrs.github.io/) problems covering cloud scheduling, GPU placement, broadcast optimization, and more

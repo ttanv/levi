@@ -19,17 +19,23 @@ uv sync --extra example-eplb    # just EPLB (requires torch)
 uv sync --extra example-llm-sql # just LLM SQL (requires pandas)
 ```
 
+Each problem directory uses the same entrypoint:
+
+```bash
+uv run --no-sync python run.py
+```
+
 ## Problems
 
 | Example | Problem | Budget | Run |
 |---------|---------|--------|-----|
-| `cant_be_late/` | Schedule spot vs on-demand cloud instances to minimize cost under deadlines | $4.50 | `python run_levi_po.py` |
-| `cant_be_late_multi/` | Same as above, but strategies can switch between regions | $5.00 | `python run_levi_po.py` |
-| `cloudcast/` | Optimize broadcast topology across AWS, Azure, and GCP | $3.00 | `python run.py` |
-| `eplb/` | Place 64 MoE experts across 288 GPU slots to minimize KV cache pressure | $4.50 | `python run_levi_po.py` |
-| `llm_sql/` | Reorder CSV columns to maximize prefix hit rate for LLM queries | $4.50 | `python run_levi_po.py` |
-| `prism/` | Assign ML models to GPUs to minimize max KV cache pressure | $4.50 | `python run_levi.py` |
-| `txn_scheduling/` | Order 100 transactions to minimize database makespan | $13.00 | `python run_levi_po.py` |
+| `cant_be_late/` | Schedule spot vs on-demand cloud instances to minimize cost under deadlines | $4.50 | `uv run --no-sync python run.py` |
+| `cant_be_late_multi/` | Same as above, but strategies can switch between regions | $5.00 | `uv run --no-sync python run.py` |
+| `cloudcast/` | Optimize broadcast topology across AWS, Azure, and GCP | $3.00 | `uv run --no-sync python run.py` |
+| `eplb/` | Place 64 MoE experts across 288 GPU slots to minimize KV cache pressure | $4.50 | `uv run --no-sync python run.py` |
+| `llm_sql/` | Reorder CSV columns to maximize prefix hit rate for LLM queries | $4.50 | `uv run --no-sync python run.py` |
+| `prism/` | Assign ML models to GPUs to minimize max KV cache pressure | $4.50 | `uv run --no-sync python run.py` |
+| `txn_scheduling/` | Order 100 transactions to minimize database makespan | $13.00 | `uv run --no-sync python run.py` |
 
 ## Model Configuration
 
