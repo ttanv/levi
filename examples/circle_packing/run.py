@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""Run Levi on n=26 circle packing with local Qwen + OpenRouter GPT-5."""
+"""Run Levi on n=26 circle packing."""
 
 import levi
 from problem import FUNCTION_SIGNATURE, PROBLEM_DESCRIPTION, SEED_PROGRAM, score_fn
 
 
-budget = 15.0
 result = levi.evolve_code(
     PROBLEM_DESCRIPTION,
     function_signature=FUNCTION_SIGNATURE,
@@ -13,7 +12,7 @@ result = levi.evolve_code(
     score_fn=score_fn,
     paradigm_model="openrouter/google/gemini-3-flash-preview",
     mutation_model=["Qwen/Qwen3-30B-A3B-Instruct-2507", "openrouter/xiaomi/mimo-v2-flash"],
-    local_endpoints={"Qwen/Qwen3-30B-A3B-Instruct-2507": "http://localhost:8001/v1"},
+    local_endpoints={"Qwen/Qwen3-30B-A3B-Instruct-2507": "http://localhost:8000/v1"},
     budget_dollars=15,
     pipeline=levi.PipelineConfig(
         n_llm_workers=8,
@@ -28,7 +27,6 @@ result = levi.evolve_code(
             "execution_time",
         ],
     ),
-    punctuated_equilibrium=levi.PunctuatedEquilibriumConfig(reasoning_effort="low"),
 )
 
 print(f"Best score: {result.best_score:.17g}")

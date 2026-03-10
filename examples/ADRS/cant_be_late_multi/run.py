@@ -94,9 +94,9 @@ result = levi.evolve_code(
         "Qwen/Qwen3-30B-A3B-Instruct-2507",
     ],
     budget_dollars=5.00,
-    local_endpoints={"Qwen/Qwen3-30B-A3B-Instruct-2507": "http://localhost:8001/v1"},
+    local_endpoints={"Qwen/Qwen3-30B-A3B-Instruct-2507": "http://localhost:8000/v1"},
     model_info={
-        "xiaomi/mimo-v2-flash": {
+        "openrouter/xiaomi/mimo-v2-flash": {
             "input_cost_per_token": 0.00000009,
             "output_cost_per_token": 0.00000029,
         },
@@ -128,9 +128,9 @@ result = levi.evolve_code(
         n_clusters=3,
         n_variants=3,
         behavior_noise=0.3,
-        temperature=0.7,
-        reasoning_effort="low",
     ),
     prompt_opt=levi.PromptOptConfig(enabled=True),
     output_dir=f"runs/{datetime.now().strftime('%Y%m%d_%H%M%S')}_po",
 )
+
+print(f"Best score: {result.best_score:.17g}")

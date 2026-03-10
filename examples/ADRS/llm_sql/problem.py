@@ -11,7 +11,13 @@ Matches ADRS-Leaderboard evaluator.py:
 """
 
 from pathlib import Path
+import sys
 import pandas as pd
+
+THIS_DIR = Path(__file__).resolve().parent
+if str(THIS_DIR) not in sys.path:
+    sys.path.insert(0, str(THIS_DIR))
+
 from utils import evaluate_df_prefix_hit_cnt
 
 # --- Prompts ---
@@ -253,11 +259,36 @@ def load_datasets(sample_size: int = None):
     return datasets
 
 
+class LazyDatasets:
+    """Lazily load heavy CSV inputs on first use."""
+
+    def __init__(self, sample_size: int | None = None):
+        self._sample_size = sample_size
+        self._datasets = None
+
+    def _load(self):
+        if self._datasets is None:
+            self._datasets = load_datasets(sample_size=self._sample_size)
+        return self._datasets
+
+    def __iter__(self):
+        return iter(self._load())
+
+    def __len__(self):
+        return len(self._load())
+
+    def __getitem__(self, item):
+        return self._load()[item]
+
+    def __repr__(self):
+        return repr(self._load())
+
+
 # Full datasets for final evaluation
-INPUTS = load_datasets()
+INPUTS = LazyDatasets()
 
 # Sampled datasets (1.5K rows each) for quick cascade evaluation
-INPUTS_SAMPLED = load_datasets(sample_size=1500)
+INPUTS_SAMPLED = LazyDatasets(sample_size=1500)
 
 
 # --- Baseline Calculation ---

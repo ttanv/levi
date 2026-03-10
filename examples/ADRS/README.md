@@ -34,22 +34,26 @@ If you installed with `pip` instead of `uv`, use `python run.py`.
 
 ## Problems
 
-| Example | Problem | Budget | Run |
-|---------|---------|--------|-----|
-| `cant_be_late/` | Schedule spot vs on-demand cloud instances to minimize cost under deadlines | $4.50 | `uv run --no-sync python run.py` |
-| `cant_be_late_multi/` | Same as above, but strategies can switch between regions | $5.00 | `uv run --no-sync python run.py` |
-| `cloudcast/` | Optimize broadcast topology across AWS, Azure, and GCP | $3.00 | `uv run --no-sync python run.py` |
-| `eplb/` | Place 64 MoE experts across 288 GPU slots to minimize KV cache pressure | $4.50 | `uv run --no-sync python run.py` |
-| `llm_sql/` | Reorder CSV columns to maximize prefix hit rate for LLM queries | $4.50 | `uv run --no-sync python run.py` |
-| `prism/` | Assign ML models to GPUs to minimize max KV cache pressure | $4.50 | `uv run --no-sync python run.py` |
-| `txn_scheduling/` | Order 100 transactions to minimize database makespan | $13.00 | `uv run --no-sync python run.py` |
+| Example | Problem | Published Budget | ADRS Data Needed |
+|---------|---------|------------------|------------------|
+| `cant_be_late/` | Schedule spot vs on-demand cloud instances to minimize cost under deadlines | $4.50 | Yes |
+| `cant_be_late_multi/` | Same as above, but strategies can switch between regions | $5.00 | Yes |
+| `cloudcast/` | Optimize broadcast topology across AWS, Azure, and GCP | $3.00 | Yes |
+| `eplb/` | Place 64 MoE experts across 288 GPU slots to minimize KV cache pressure | $4.50 | Yes |
+| `llm_sql/` | Reorder CSV columns to maximize prefix hit rate for LLM queries | $4.50 | No |
+| `prism/` | Assign ML models to GPUs to minimize max KV cache pressure | $4.50 | No |
+| `txn_scheduling/` | Order 100 transactions to minimize database makespan | $13.00 | No |
 
 ## Model Configuration
 
-All examples use [LiteLLM](https://docs.litellm.ai/docs/providers) model identifiers. The typical setup separates paradigm models (for creative exploration) from mutation models (for cheap, fast iteration):
+All examples use [LiteLLM](https://docs.litellm.ai/docs/providers) model identifiers. The published configs separate paradigm models (for creative exploration) from mutation models (for cheap, fast iteration):
 
 - **Paradigm**: `openrouter/google/gemini-3-flash-preview`
-- **Mutation**: `openrouter/xiaomi/mimo-v2-flash`, local Qwen 30B at `http://localhost:8001/v1`
+- **Mutation**: `openrouter/xiaomi/mimo-v2-flash`, local Qwen 30B
+
+The examples that use the local Qwen model assume `http://localhost:8000/v1`.
+If your local server uses a different port or you want smaller budgets for a
+smoke run, edit the corresponding lines in each `run.py`.
 
 Set your API keys before running:
 

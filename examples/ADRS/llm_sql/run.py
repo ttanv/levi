@@ -18,7 +18,7 @@ result = levi.evolve_code(
         "Qwen/Qwen3-30B-A3B-Instruct-2507",
     ],
     budget_dollars=4.50,
-    local_endpoints={"Qwen/Qwen3-30B-A3B-Instruct-2507": "http://localhost:8001/v1"},
+    local_endpoints={"Qwen/Qwen3-30B-A3B-Instruct-2507": "http://localhost:8000/v1"},
     model_info={
         "Qwen/Qwen3-30B-A3B-Instruct-2507": {
             "input_cost_per_token": 0.0000001,
@@ -30,3 +30,5 @@ result = levi.evolve_code(
     ),
     output_dir=f"runs/{datetime.now().strftime('%Y%m%d_%H%M%S')}_po",
 )
+
+print(f"Best score: {result.best_score:.17g}")

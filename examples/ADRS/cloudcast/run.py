@@ -13,7 +13,7 @@ result = levi.evolve_code(
     score_fn=score_fn,
     paradigm_model="openrouter/google/gemini-3-flash-preview",
     mutation_model="Qwen/Qwen3-30B-A3B-Instruct-2507",
-    local_endpoints={"Qwen/Qwen3-30B-A3B-Instruct-2507": "http://localhost:8001/v1"},
+    local_endpoints={"Qwen/Qwen3-30B-A3B-Instruct-2507": "http://localhost:8000/v1"},
     budget_dollars=3.00,
     behavior=levi.BehaviorConfig(
         ast_features=['loop_count', 'branch_count', 'math_operators'],
@@ -32,3 +32,5 @@ result = levi.evolve_code(
     ),
     output_dir=f"runs/{datetime.now().strftime('%Y%m%d_%H%M%S')}_cloudcast",
 )
+
+print(f"Best score: {result.best_score:.17g}")
