@@ -137,13 +137,13 @@ See `levi.LeviConfig` for the full list of configuration options.
 
 LEVI holds the **highest average score (76.5)** across all seven [ADRS Leaderboard](https://ucbskyadrs.github.io/) problems, ahead of GEPA (71.9), OpenEvolve (70.6), and ShinkaEvolve (67.4). Six of the seven problems were solved on a **$4.50 budget**, 3-7x cheaper than baselines that typically spend $15-30 per problem. On controlled equal-budget comparisons, LEVI reaches near-peak performance up to 12× faster in sample efficiency.
 
-| Problem | LEVI | 2nd Best | Saving (over 2nd best) |
-|---------|------|----------|-----------------------|
+| Problem | LEVI | Best Other Framework | Saving |
+|---------|------|----------------------|--------|
 | Spot Single-Reg | **51.7** | GEPA 51.4 | 6.7x cheaper |
-| Spot Multi-Reg | **72.4** | GEPA 62.2 | 5.6x cheaper |
+| Spot Multi-Reg | **72.4** | OpenEvolve 66.7 | 5.6x cheaper |
 | LLM-SQL | **78.3** | OpenEvolve 72.5 | 4.4x cheaper |
 | Cloudcast | **100.0** | GEPA 96.6 | 3.3x cheaper |
-| Prism | **87.4** | Tied | 3.3x cheaper |
+| Prism | **87.4** | GEPA / OpenEvolve / ShinkaEvolve 87.4 | 3.3x cheaper |
 | EPLB | **74.6** | GEPA 70.2 | 3.3x cheaper |
 | Txn Scheduling | **71.1** | OpenEvolve 70.0 | 1.5x cheaper |
 
