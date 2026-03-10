@@ -65,7 +65,7 @@ def _wrap_litellm_error(model: str, error: Exception) -> Exception:
 class UnifiedLLMClientConfig:
     """Configuration for the unified LLM client."""
 
-    temperature: float = 0.8
+    temperature: float | None = None
     max_tokens: int = 16384
     timeout: float = 300.0
 
@@ -98,10 +98,12 @@ class UnifiedLLMClient:
         kwargs: dict[str, Any] = {
             "model": model,
             "messages": messages,
-            "temperature": temperature if temperature is not None else self._config.temperature,
             "max_tokens": max_tokens if max_tokens is not None else self._config.max_tokens,
             "timeout": timeout if timeout is not None else self._config.timeout,
         }
+        resolved_temperature = temperature if temperature is not None else self._config.temperature
+        if resolved_temperature is not None:
+            kwargs["temperature"] = resolved_temperature
         if stop:
             kwargs["stop"] = stop
         kwargs.update(extras)
@@ -239,7 +241,7 @@ class UnifiedLLMClient:
 
 
 def create_unified_client(
-    temperature: float = 0.8,
+    temperature: float | None = None,
     max_tokens: int = 16384,
     timeout: float = 300.0,
 ) -> UnifiedLLMClient:

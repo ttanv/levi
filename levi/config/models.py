@@ -38,7 +38,7 @@ class InitConfig(BaseModel):
     n_variants_per_seed: int = 20
     diversity_model: Optional[str] = None
     variant_models: Optional[list[str]] = None
-    temperature: float = 0.8
+    temperature: Optional[float] = None
     diversity_prompt: Optional[str] = None  # Custom prompt for diverse seed generation
     diversity_llm_kwargs: dict = Field(
         default_factory=dict
@@ -50,6 +50,7 @@ class MetaAdviceConfig(BaseModel):
     interval: int = 50
     model: Optional[str] = None
     max_tokens: int = 400
+    temperature: Optional[float] = None
 
 
 class BehaviorConfig(BaseModel):
@@ -84,8 +85,8 @@ class PunctuatedEquilibriumConfig(BaseModel):
     heavy_models: Optional[list[str]] = None
     variant_models: Optional[list[str]] = None
     behavior_noise: float = 0.0
-    temperature: float = 0.7
-    reasoning_effort: Optional[str] = "disabled"
+    temperature: Optional[float] = None
+    reasoning_effort: Optional[str] = None
 
 
 class PromptOptConfig(BaseModel):
@@ -105,7 +106,7 @@ class PipelineConfig(BaseModel):
     n_llm_workers: int = 4
     n_eval_processes: int = 4
     eval_timeout: float = 60.0
-    temperature: float = 0.8
+    temperature: Optional[float] = None
     max_tokens: int = 16384
     n_parents: int = 1
     n_inspirations: int = 1
