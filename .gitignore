@@ -26,8 +26,13 @@ share/python-wheels/
 *.egg
 MANIFEST
 
-# Mac artifacts
+# OS-generated files
 .DS_Store
+.AppleDouble
+.LSOverride
+._*
+Thumbs.db
+Desktop.ini
 
 # PyInstaller
 #  Usually these files are written by a python script from a template
