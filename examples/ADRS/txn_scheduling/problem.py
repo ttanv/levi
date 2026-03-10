@@ -4,6 +4,13 @@ Transaction Scheduling Problem Definition.
 Contains problem description, prompts, scoring function, and test inputs.
 """
 
+from pathlib import Path
+import sys
+
+THIS_DIR = Path(__file__).resolve().parent
+if str(THIS_DIR) not in sys.path:
+    sys.path.insert(0, str(THIS_DIR))
+
 from txn_simulator import Workload
 from workloads import WORKLOAD_1, WORKLOAD_2, WORKLOAD_3
 

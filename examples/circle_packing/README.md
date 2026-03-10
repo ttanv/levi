@@ -25,24 +25,17 @@ cd examples/circle_packing
 uv run --no-sync python run.py
 ```
 
-Quick smoke test:
+Published configuration uses:
+- paradigm: `openrouter/google/gemini-3-flash-preview`
+- mutation: local Qwen + `openrouter/xiaomi/mimo-v2-flash`
+- budget: `$15`
 
-```bash
-cd examples/circle_packing
-LEVI_BUDGET_DOLLARS=0.05 uv run --no-sync python run.py
-```
-
-Optional overrides:
-
-```bash
-export LEVI_BUDGET_DOLLARS=3.0
-export LEVI_LOCAL_ENDPOINT=http://localhost:8001/v1
-uv run --no-sync python run.py
-```
-
-Default model is ADRS-style local Qwen:
+Local model defaults:
 - `Qwen/Qwen3-30B-A3B-Instruct-2507`
-- endpoint: `http://localhost:8001/v1`
+- endpoint: `http://localhost:8000/v1`
+
+To shorten the run or use a different local endpoint, edit the corresponding
+lines in `run.py`.
 
 ## Quick Sanity Check (Seed Score)
 

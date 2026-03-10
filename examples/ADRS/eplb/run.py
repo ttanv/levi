@@ -26,3 +26,5 @@ result = levi.evolve_code(
     prompt_opt=levi.PromptOptConfig(enabled=True),
     output_dir=f"runs/{datetime.now().strftime('%Y%m%d_%H%M%S')}_po",
 )
+
+print(f"Best score: {result.best_score:.17g}")

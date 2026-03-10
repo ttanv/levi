@@ -15,6 +15,8 @@ result = levi.evolve_code(
         "Qwen/Qwen3-30B-A3B-Instruct-2507",
     ],
     budget_dollars=13,
-    local_endpoints={"Qwen/Qwen3-30B-A3B-Instruct-2507": "http://localhost:8001/v1"},
+    local_endpoints={"Qwen/Qwen3-30B-A3B-Instruct-2507": "http://localhost:8000/v1"},
     pipeline=levi.PipelineConfig(eval_timeout=300),
 )
+
+print(f"Best score: {result.best_score:.17g}")
