@@ -39,9 +39,12 @@ class ResilientProcessPool:
             return await self._execute(fn, args, timeout)
 
     async def _execute(self, fn: Callable[..., T], args: tuple, timeout: float) -> T:
-        result_queue = self._ctx.Queue(maxsize=1)
-        proc = self._ctx.Process(target=_worker_fn, args=(fn, args, result_queue), daemon=True)
-        proc.start()
+        try:
+            result_queue = self._ctx.Queue(maxsize=1)
+            proc = self._ctx.Process(target=_worker_fn, args=(fn, args, result_queue), daemon=True)
+            proc.start()
+        except (OSError, PermissionError):
+            return await self._execute_inline(fn, args, timeout)
 
         with self._lock:
             self._active[proc.pid] = proc
@@ -82,6 +85,12 @@ class ResilientProcessPool:
                 result_queue.join_thread()
             except Exception:
                 pass
+
+    async def _execute_inline(self, fn: Callable[..., T], args: tuple, timeout: float) -> T:
+        try:
+            return await asyncio.wait_for(asyncio.to_thread(fn, *args), timeout=timeout)
+        except asyncio.TimeoutError as exc:
+            raise TimeoutError(f"Inline evaluation exceeded {timeout}s timeout") from exc
 
     def _terminate_process(self, proc: mp.Process) -> None:
         if not proc.is_alive():
