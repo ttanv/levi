@@ -312,7 +312,9 @@ def _generate_paradigm_shift_examples(
     n_examples: int = 4,
 ) -> list[dspy.Example]:
     """Generate training examples from seed + baseline score."""
-    representative_solutions = f"### Region 1 - Seed (Score: {seed_score:.17g})\n```python\n{config.seed_program}\n```\n"
+    representative_solutions = (
+        f"### Region 1 - Seed (Score: {seed_score:.17g})\n```python\n{config.seed_program}\n```\n"
+    )
 
     examples = []
     for _ in range(n_examples):

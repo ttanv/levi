@@ -6,7 +6,7 @@
 <p align="center"><strong>Better LLM Optimization for the Price of a Cup of Coffee</strong></p>
 
 <p align="center">
-  <a href="https://github.com/ttanv/algoforge/actions/workflows/ci.yml"><img src="https://github.com/ttanv/algoforge/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/ttanv/algoforge/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/ttanv/algoforge/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.11%2B-blue.svg" alt="Python 3.11+"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License: MIT"></a>
   <a href="https://ttanv.github.io/levi"><img src="https://img.shields.io/badge/blog-How%20It%20Works-orange" alt="Blog"></a>
@@ -158,4 +158,3 @@ Examples live under [`examples/README.md`](examples/README.md):
 
 - `examples/circle_packing/` is a self-contained optimization example
 - `examples/ADRS/` contains seven worked [ADRS Leaderboard](https://ucbskyadrs.github.io/) problems covering cloud scheduling, GPU placement, broadcast optimization, and more
-
