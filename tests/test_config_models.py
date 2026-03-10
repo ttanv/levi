@@ -158,7 +158,15 @@ class TestLeviConfig:
 
     def test_pipeline_max_tokens_default(self):
         cfg = LeviConfig(**_minimal_config_kwargs())
+        assert cfg.pipeline.temperature is None
         assert cfg.pipeline.max_tokens == 16384
+
+    def test_provider_sensitive_defaults_are_unset(self):
+        cfg = LeviConfig(**_minimal_config_kwargs())
+        assert cfg.init.temperature is None
+        assert cfg.meta_advice.temperature is None
+        assert cfg.punctuated_equilibrium.temperature is None
+        assert cfg.punctuated_equilibrium.reasoning_effort is None
 
     def test_inputs_can_be_omitted_when_score_fn_does_not_require_them(self):
         cfg = LeviConfig(

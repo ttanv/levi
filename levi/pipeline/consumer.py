@@ -273,7 +273,7 @@ async def _generate_meta_advice(config: LeviConfig, state: PipelineState) -> Non
             llm,
             model=config.meta_advice.model,
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.7,
+            temperature=config.meta_advice.temperature,
             max_tokens=config.meta_advice.max_tokens,
             timeout=60,
             **extras,
