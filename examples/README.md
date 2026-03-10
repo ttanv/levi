@@ -5,7 +5,7 @@
 Self-contained optimization example with no external dataset:
 
 - Path: `examples/circle_packing/`
-- Run: `cd examples/circle_packing && uv run --no-sync python run_levi.py`
+- Run: `cd examples/circle_packing && uv run --no-sync python run.py`
 
 Use these optional environment variables to customize models/budget:
 
@@ -17,5 +17,7 @@ Use these optional environment variables to customize models/budget:
 All previous ADRS examples were moved under:
 
 - `examples/ADRS/`
+
+Each example directory uses `run.py` as its entrypoint.
 
 See `examples/ADRS/README.md` for ADRS-specific setup and dataset requirements.
