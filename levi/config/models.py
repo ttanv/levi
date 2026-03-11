@@ -117,7 +117,7 @@ class LeviConfig(BaseModel):
     # Required
     problem_description: str
     function_signature: str
-    seed_program: str
+    seed_program: str | None = None
     inputs: Optional[list[Any]] = None
     # v0.1: code-only. First arg is the extracted callable from exec().
     # Supports either score_fn(fn) or score_fn(fn, inputs).

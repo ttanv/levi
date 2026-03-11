@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import re
 import time
 from collections.abc import Callable
 from typing import Any
@@ -17,7 +18,7 @@ from ..llm.unified_client import UnifiedLLMClient, UnifiedLLMClientConfig
 from ..pipeline import PipelineRunner
 from ..pipeline.state import PipelineState
 from ..pool import CVTMAPElitesPool
-from ..utils import ResilientProcessPool, evaluate_code, extract_fn_name
+from ..utils import ResilientProcessPool, evaluate_code, extract_code, extract_fn_name
 
 logger = logging.getLogger(__name__)
 
@@ -123,7 +124,7 @@ def _restore_from_snapshot(
 def _build_config(
     problem_description: str,
     function_signature: str,
-    seed_program: str,
+    seed_program: str | None,
     score_fn: Callable[..., dict],
     inputs: list[Any] | None,
     model: str | list[str] | None,
@@ -136,6 +137,13 @@ def _build_config(
     **kwargs: Any,
 ) -> LeviConfig:
     """Build LeviConfig from evolve_code() parameters."""
+    # Validate function_signature
+    if not re.search(r"def\s+\w+\s*\(", function_signature):
+        raise ValueError(
+            f"Invalid function_signature: must contain a Python function definition "
+            f"(e.g. 'def solve(x):'). Got: {function_signature!r}"
+        )
+
     # Resolve models
     if model is not None and (paradigm_model is not None or mutation_model is not None):
         raise ValueError(
@@ -199,7 +207,7 @@ def evolve_code(
     problem_description: str,
     *,
     function_signature: str,
-    seed_program: str,
+    seed_program: str | None = None,
     score_fn: Callable[..., dict],
     inputs: list[Any] | None = None,
     model: str | list[str] | None = None,
@@ -222,7 +230,6 @@ def evolve_code(
         result = levi.evolve_code(
             "Optimize bin packing to minimize wasted space",
             function_signature="def pack(items, bin_capacity):",
-            seed_program="def pack(items, bin_capacity): ...",
             score_fn=my_scorer,
             model="openai/gpt-4o-mini",
             budget_dollars=5.0,
@@ -252,7 +259,8 @@ def evolve_code(
     Args:
         problem_description: Natural language description of the optimization problem.
         function_signature: Python function signature to optimize (e.g. "def solve(x):").
-        seed_program: Initial working implementation.
+        seed_program: Initial working implementation. If None, one is generated
+            automatically from the function signature using the mutation model.
         score_fn: Evaluation function returning a dict with at least {"score": float}.
             Accepts either score_fn(fn) or score_fn(fn, inputs).
         inputs: Optional test inputs passed to score_fn. Can be omitted if
@@ -287,6 +295,50 @@ def evolve_code(
         **kwargs,
     )
     return asyncio.run(_run_async(config, resume_snapshot=resume_snapshot))
+
+
+async def _evaluate_seed(
+    config: LeviConfig,
+    executor: ResilientProcessPool,
+    state: PipelineState,
+    fn_name: str,
+) -> dict:
+    """Evaluate the seed program and return its result dict."""
+    logger.info("[Levi] Evaluating seed program")
+
+    if not await state.try_start_evaluation():
+        raise RuntimeError("Budget exhausted before seed evaluation")
+
+    try:
+        seed_result = await executor.run(
+            evaluate_code,
+            config.seed_program,
+            config.score_fn,
+            config.inputs,
+            fn_name,
+            timeout=config.pipeline.eval_timeout,
+        )
+    except Exception as e:
+        logger.error(f"[Levi] Failed to evaluate seed: {e}")
+        raise RuntimeError(f"Seed program evaluation failed: {e}")
+    finally:
+        await state.finish_evaluation()
+
+    if "error" in seed_result:
+        state.record_error(str(seed_result["error"]))
+        raise RuntimeError(f"Seed program evaluation error: {seed_result['error']}")
+
+    seed_score = seed_result.get("score", 0.0)
+    state.record_accept()
+    state.record_score(
+        score=seed_score,
+        accepted=True,
+        sampler="seed",
+        archive_size=0,
+        cell_index=None,
+    )
+    logger.info(f"[Levi] Seed score: {seed_score:.17g}")
+    return seed_result
 
 
 async def _run_async(config: LeviConfig, resume_snapshot: dict | None = None) -> LeviResult:
@@ -342,42 +394,10 @@ async def _run_async(config: LeviConfig, resume_snapshot: dict | None = None) ->
     executor = ResilientProcessPool(max_workers=config.pipeline.n_eval_processes)
 
     try:
-        # Evaluate seed program
         fn_name = extract_fn_name(config.function_signature)
-        logger.info("[Levi] Evaluating seed program")
 
-        if not await state.try_start_evaluation():
-            raise RuntimeError("Budget exhausted before seed evaluation")
-
-        try:
-            seed_result = await executor.run(
-                evaluate_code,
-                config.seed_program,
-                config.score_fn,
-                config.inputs,
-                fn_name,
-                timeout=config.pipeline.eval_timeout,
-            )
-        except Exception as e:
-            logger.error(f"[Levi] Failed to evaluate seed: {e}")
-            raise RuntimeError(f"Seed program evaluation failed: {e}")
-        finally:
-            await state.finish_evaluation()
-
-        if "error" in seed_result:
-            state.record_error(str(seed_result["error"]))
-            raise RuntimeError(f"Seed program evaluation error: {seed_result['error']}")
-
-        seed_score = seed_result.get("score", 0.0)
-        state.record_accept()
-        state.record_score(
-            score=seed_score,
-            accepted=True,
-            sampler="seed",
-            archive_size=0,
-            cell_index=None,
-        )
-        logger.info(f"[Levi] Seed score: {seed_score:.17g}")
+        # Evaluate seed program (if provided)
+        seed_result = await _evaluate_seed(config, executor, state, fn_name) if config.seed_program else None
 
         # Resume from snapshot or run init
         init_cost = 0.0
@@ -386,11 +406,11 @@ async def _run_async(config: LeviConfig, resume_snapshot: dict | None = None) ->
             init_cost = _restore_from_snapshot(pool, extractor, resume_snapshot)
             state.total_cost = state._coerce_finite_float(init_cost, default=0.0)
         else:
-            if not config.init.enabled:
-                logger.info("[Levi] init.enabled=False ignored; running data-driven init")
             logger.info("[Levi] Running init phase")
             diversifier = Diversifier(config, executor, state)
-            init_cost, init_score_history = await diversifier.run(pool, config.seed_program, seed_result, extractor)
+            init_cost, init_score_history = await diversifier.run(
+                pool, config.seed_program, seed_result, extractor
+            )
             logger.info(f"[Levi] Init phase complete, cost: ${init_cost:.3f}")
 
         # Run main pipeline

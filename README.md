@@ -18,9 +18,14 @@ LEVI is an LLM-guided evolutionary framework for discovering algorithms, heurist
 
 ## Why LEVI
 
-Existing frameworks couple performance tightly to model capability. Drop to a smaller model and results degrade sharply. LEVI decouples the two by making diversity an architectural concern rather than a model concern, and by matching model capacity to task demand: cheap models for refinement, expensive models only for periodic creative leaps. Set a dollar budget and LEVI spends it well.
+Existing frameworks couple performance tightly to model capability. Drop to a smaller model and results degrade sharply. LEVI decouples the two by making diversity an architectural concern rather than a model concern, and by matching model capacity to task demand. Set a dollar budget and LEVI spends it well.
 
 **$4.50 improves on what other frameworks need $15-30 and frontier models to achieve.** Highest scores on the [ADRS benchmark](https://ucbskyadrs.github.io/) across all frameworks. See [detailed results](https://ttanv.github.io/levi).
+
+- **Built for smaller, local models.** Small models like Qwen 30B do bulk mutation; expensive models are reserved for creative breakthroughs.
+- **Budget-native.** Set a dollar, eval, or time cap and LEVI optimizes within it, including custom pricing for self-hosted models.
+- **Self-tuning prompts.** DSPy/MIPROv2 optimizes mutation prompts for your task at init, so you spend less time on prompt engineering.
+- **Programmable novelty.** Define diversity with AST features, score dimensions, or custom extractors instead of fixed bins.
 
 <p align="center">
   <img src="results/txn_scheduling.png" width="49%" />
@@ -59,7 +64,6 @@ inputs = [([4, 8, 1, 4, 2, 1], 10)]
 result = levi.evolve_code(
     "Optimize bin packing to minimize wasted space",
     function_signature="def pack(items, bin_capacity):",
-    seed_program="def pack(items, bin_capacity):\n    return [[item] for item in items]",
     score_fn=score_fn,
     inputs=inputs,
     model="openai/gpt-4o-mini",
