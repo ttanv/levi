@@ -67,6 +67,16 @@ result = levi.evolve_code(
 )
 ```
 
+If you want a repo entrypoint instead of writing code first, start with
+`examples/circle_packing/run.py`. It is the simplest end-to-end example.
+
+## Suggested Starting Points
+
+- Start here: `examples/circle_packing/` for a self-contained local-first run.
+- First ADRS run: `examples/ADRS/prism/` or `examples/ADRS/llm_sql/` if you want to avoid cloning the ADRS dataset first.
+- Try `prompt_opt`: `examples/ADRS/cant_be_late/`
+- Try `init` + `prompt_opt` + punctuated equilibrium together: `examples/ADRS/cant_be_late_multi/`
+
 ## API
 
 The main entry point is `levi.evolve_code(...)`.
