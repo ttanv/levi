@@ -89,7 +89,7 @@ class ResilientProcessPool:
     async def _execute_inline(self, fn: Callable[..., T], args: tuple, timeout: float) -> T:
         try:
             return await asyncio.wait_for(asyncio.to_thread(fn, *args), timeout=timeout)
-        except asyncio.TimeoutError as exc:
+        except TimeoutError as exc:
             raise TimeoutError(f"Inline evaluation exceeded {timeout}s timeout") from exc
 
     def _terminate_process(self, proc: mp.Process) -> None:
