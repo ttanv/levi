@@ -32,6 +32,13 @@ uv run --no-sync python run.py
 
 If you installed with `pip` instead of `uv`, use `python run.py`.
 
+## Suggested Starting Points
+
+- Start with `prism/` or `llm_sql/` if you want an ADRS-style run without cloning the ADRS dataset first.
+- Try `cloudcast/` if you want a smaller published budget.
+- Try `cant_be_late/` if you specifically want to exercise `prompt_opt`.
+- Try `cant_be_late_multi/` if you want the richest example: custom `init`, custom behavior features, punctuated equilibrium, and `prompt_opt`.
+
 ## Problems
 
 | Example | Problem | Published Budget | ADRS Data Needed |

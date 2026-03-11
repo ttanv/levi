@@ -1,5 +1,8 @@
 # Examples
 
+Start with `examples/circle_packing/` if you are new to LEVI. It is the
+smallest end-to-end example in the repo.
+
 ## Circle Packing
 
 Self-contained optimization example with no external dataset:
@@ -20,5 +23,11 @@ Additional ADRS benchmark examples live under:
 - `examples/ADRS/`
 
 Each example directory uses `run.py` as its entrypoint.
+
+Suggested picks:
+
+- `examples/ADRS/prism/` or `examples/ADRS/llm_sql/` for a simpler ADRS-style run
+- `examples/ADRS/cant_be_late/` if you want to try `prompt_opt`
+- `examples/ADRS/cant_be_late_multi/` if you want the most feature-complete example with custom `init`, punctuated equilibrium, and `prompt_opt`
 
 See `examples/ADRS/README.md` for ADRS-specific setup and dataset requirements.
