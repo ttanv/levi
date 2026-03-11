@@ -56,53 +56,6 @@ def run_packing() -> tuple[np.ndarray, np.ndarray, float]:
     pass
 """
 
-SEED_PROGRAM = '''import numpy as np
-
-N_CIRCLES = 26
-
-
-def _compute_max_radii(centers):
-    n = centers.shape[0]
-    radii = np.zeros(n, dtype=float)
-    for i in range(n):
-        x, y = centers[i]
-        # Boundary limit
-        max_r = min(x, y, 1.0 - x, 1.0 - y)
-
-        # Pairwise distance limit
-        for j in range(n):
-            if i == j:
-                continue
-            dist = np.linalg.norm(centers[i] - centers[j])
-            max_r = min(max_r, dist - radii[j])
-        radii[i] = max(max_r, 0.0)
-    return radii
-
-
-def run_packing():
-    # Simple deterministic seed layout:
-    # 1 center circle + 2 rings + 1 corner-ish circle
-    centers = np.zeros((N_CIRCLES, 2), dtype=float)
-    centers[0] = [0.5, 0.5]
-
-    idx = 1
-    for k in range(12):
-        angle = 2.0 * np.pi * k / 12.0
-        centers[idx] = [0.5 + 0.18 * np.cos(angle), 0.5 + 0.18 * np.sin(angle)]
-        idx += 1
-
-    for k in range(12):
-        angle = 2.0 * np.pi * k / 12.0
-        centers[idx] = [0.5 + 0.34 * np.cos(angle), 0.5 + 0.34 * np.sin(angle)]
-        idx += 1
-
-    centers[25] = [0.2, 0.2]
-
-    radii = _compute_max_radii(centers)
-    sum_radii = float(np.sum(radii))
-    return centers, radii, sum_radii
-'''
-
 
 def _to_array(data: Any, shape: tuple[int, ...], name: str) -> np.ndarray:
     arr = np.asarray(data, dtype=float)

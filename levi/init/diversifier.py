@@ -117,8 +117,8 @@ class Diversifier:
     async def run(
         self,
         pool: CVTMAPElitesPool,
-        seed_program: str,
-        seed_result: dict,
+        seed_program: str | None,
+        seed_result: dict | None,
         extractor: BehaviorExtractor,
     ) -> tuple[float, list[ScoreHistoryEntry]]:
         """
@@ -127,15 +127,16 @@ class Diversifier:
         Returns (total_cost, score_history) from the init phase.
         """
         fn_name = extract_fn_name(self.config.function_signature)
-        seed_score = seed_result.get("score", 0.0)
-        self.best_score = seed_score
 
-        # Record the seed itself
-        if self.state.eval_count == 0:
-            self._record_score(seed_score, sampler="init_seed")
+        if seed_result is not None:
+            seed_score = seed_result.get("score", 0.0)
+            self.best_score = seed_score
+            # Record the seed itself
+            if self.state.eval_count == 0:
+                self._record_score(seed_score, sampler="init_seed")
 
         # Phase 1: Generate diverse seeds
-        diverse_seeds = await self._generate_diverse_seeds(seed_program, seed_score, seed_result, fn_name)
+        diverse_seeds = await self._generate_diverse_seeds(seed_program, seed_result, fn_name)
 
         # Phase 2: Generate variants
         valid_programs, behavior_vectors = await self._generate_variants(diverse_seeds, fn_name, extractor)
@@ -154,19 +155,23 @@ class Diversifier:
 
     async def _generate_diverse_seeds(
         self,
-        seed_program: str,
-        seed_score: float,
-        seed_result: dict,
+        seed_program: str | None,
+        seed_result: dict | None,
         fn_name: str,
     ) -> list[tuple[str, float, dict]]:
         """Phase 1: Generate diverse seeds sequentially with context accumulation."""
         n_seeds = self.config.init.n_diverse_seeds
         model = self.config.init.diversity_model or "gpt-4"
 
-        logger.info(f"[Init Phase 1] Generating {n_seeds} diverse seeds with {model}")
-
         # Store (code, score, full_result) tuples - include full result to avoid re-evaluation
-        diverse_seeds = [(seed_program, seed_score, seed_result)]
+        diverse_seeds: list[tuple[str, float, dict]] = []
+        if seed_program is not None and seed_result is not None:
+            diverse_seeds.append((seed_program, seed_result.get("score", 0.0), seed_result))
+        else:
+            # Generate more seeds to compensate for missing seed program
+            n_seeds += 1
+
+        logger.info(f"[Init Phase 1] Generating {n_seeds} diverse seeds with {model}")
 
         max_retries = 3
         for i in range(n_seeds):
@@ -251,7 +256,7 @@ class Diversifier:
                 if success:
                     break
 
-        logger.info(f"[Init Phase 1] Generated {len(diverse_seeds) - 1} new seeds (total: {len(diverse_seeds)})")
+        logger.info(f"[Init Phase 1] Generated {len(diverse_seeds)} seeds")
         return diverse_seeds
 
     async def _generate_variants(

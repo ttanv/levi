@@ -2,13 +2,12 @@
 """Run Levi on n=26 circle packing."""
 
 import levi
-from problem import FUNCTION_SIGNATURE, PROBLEM_DESCRIPTION, SEED_PROGRAM, score_fn
+from problem import FUNCTION_SIGNATURE, PROBLEM_DESCRIPTION, score_fn
 
 
 result = levi.evolve_code(
     PROBLEM_DESCRIPTION,
     function_signature=FUNCTION_SIGNATURE,
-    seed_program=SEED_PROGRAM,
     score_fn=score_fn,
     paradigm_model="openrouter/google/gemini-3-flash-preview",
     mutation_model=["Qwen/Qwen3-30B-A3B-Instruct-2507", "openrouter/xiaomi/mimo-v2-flash"],
