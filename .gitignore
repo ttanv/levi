@@ -26,6 +26,14 @@ share/python-wheels/
 *.egg
 MANIFEST
 
+# OS-generated files
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+Thumbs.db
+Desktop.ini
+
 # PyInstaller
 #  Usually these files are written by a python script from a template
 #  before PyInstaller builds the exe, so as to inject date/other infos into it.
@@ -205,3 +213,8 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Levi run data and traces
+runs/
+**/traces/
+*.swp

@@ -4,10 +4,8 @@ Tests for PromptBuilder: Flexible, composable prompt construction.
 PromptBuilder is used to assemble prompts for LLM mutation generation.
 """
 
-import pytest
-
-from algoforge.core import Program, EvaluationResult
-from algoforge.llm import PromptBuilder, ProgramWithScore, OutputMode
+from levi.core import EvaluationResult, Program
+from levi.llm import OutputMode, ProgramWithScore, PromptBuilder
 
 
 class TestOutputMode:
@@ -17,7 +15,6 @@ class TestOutputMode:
         """All expected output modes are defined."""
         assert OutputMode.FULL.value == "full"
         assert OutputMode.DIFF.value == "diff"
-        assert OutputMode.EVOLVE_BLOCK.value == "evolve_block"
 
 
 class TestProgramWithScore:
@@ -25,9 +22,8 @@ class TestProgramWithScore:
 
     def test_creation_with_result(self):
         """ProgramWithScore can be created with a program and result."""
-        prog = Program(code="def solve(x): return x")
+        prog = Program(content="def solve(x): return x")
         result = EvaluationResult(
-            program_id=prog.id,
             scores={"score": 0.85},
         )
 
@@ -39,7 +35,7 @@ class TestProgramWithScore:
 
     def test_creation_without_result(self):
         """ProgramWithScore can be created without a result."""
-        prog = Program(code="def solve(x): return x")
+        prog = Program(content="def solve(x): return x")
 
         pws = ProgramWithScore(program=prog, result=None)
 
@@ -49,9 +45,8 @@ class TestProgramWithScore:
 
     def test_score_property_uses_primary_score(self):
         """score property uses result's primary_score."""
-        prog = Program(code="def solve(x): return x")
+        prog = Program(content="def solve(x): return x")
         result = EvaluationResult(
-            program_id=prog.id,
             scores={"accuracy": 0.9, "speed": 0.7},  # No 'score' key
         )
 
@@ -108,8 +103,8 @@ class TestPromptBuilder:
     def test_add_parents(self):
         """add_parents() adds parent programs to prompt."""
         builder = PromptBuilder()
-        prog1 = Program(code="def solve(x): return x")
-        prog2 = Program(code="def solve(x): return x * 2")
+        prog1 = Program(content="def solve(x): return x")
+        prog2 = Program(content="def solve(x): return x * 2")
 
         parents = [
             ProgramWithScore(prog1, None),
@@ -127,9 +122,8 @@ class TestPromptBuilder:
     def test_add_parents_with_scores(self):
         """add_parents() includes scores when available."""
         builder = PromptBuilder()
-        prog = Program(code="def solve(x): return x")
+        prog = Program(content="def solve(x): return x")
         result = EvaluationResult(
-            program_id=prog.id,
             scores={"score": 0.75},
         )
 
@@ -143,7 +137,7 @@ class TestPromptBuilder:
     def test_add_parents_with_priority(self):
         """add_parents() respects priority ordering."""
         builder = PromptBuilder()
-        prog = Program(code="def solve(x): return x")
+        prog = Program(content="def solve(x): return x")
 
         builder.add_section("Before", "Before parents", priority=10)
         builder.add_parents([ProgramWithScore(prog, None)], priority=20)
@@ -208,16 +202,6 @@ class TestPromptBuilder:
         assert "=======" in prompt
         assert ">>>>>>> REPLACE" in prompt
 
-    def test_set_output_mode_evolve_block(self):
-        """set_output_mode(EVOLVE_BLOCK) sets evolve block instructions."""
-        builder = PromptBuilder()
-        builder.set_output_mode(OutputMode.EVOLVE_BLOCK)
-
-        prompt = builder.build()
-
-        assert "## Output" in prompt
-        assert "EVOLVE-BLOCK" in prompt
-
     def test_set_output_mode_chainable(self):
         """set_output_mode() returns self for chaining."""
         builder = PromptBuilder()
@@ -238,7 +222,7 @@ class TestPromptBuilder:
     def test_build_complete_prompt(self):
         """build() assembles a complete prompt correctly."""
         builder = PromptBuilder()
-        prog = Program(code="def solve(x): return x")
+        prog = Program(content="def solve(x): return x")
 
         builder.add_section("Problem", "Optimize for speed", priority=10)
         builder.add_section("Signature", "def solve(x) -> int:", priority=20)
@@ -260,31 +244,9 @@ class TestPromptBuilder:
         assert "too slow" in prompt
         assert "SEARCH" in prompt
 
-    def test_clear(self):
-        """clear() removes all sections."""
-        builder = PromptBuilder()
-        builder.add_section("Test", "Content")
-        builder.set_output_mode(OutputMode.DIFF)
-
-        builder.clear()
-
-        prompt = builder.build()
-
-        assert "## Test" not in prompt
-        # Output mode should be reset to FULL
-        assert "SEARCH" not in prompt
-
-    def test_clear_chainable(self):
-        """clear() returns self for chaining."""
-        builder = PromptBuilder()
-
-        result = builder.clear()
-
-        assert result is builder
-
     def test_chained_building(self):
         """All methods can be chained together."""
-        prog = Program(code="def solve(x): return x")
+        prog = Program(content="def solve(x): return x")
 
         prompt = (
             PromptBuilder()
@@ -305,7 +267,7 @@ class TestPromptBuilder:
     def test_code_block_formatting(self):
         """Parent code is wrapped in markdown code blocks."""
         builder = PromptBuilder()
-        prog = Program(code="def solve(x):\n    return x * 2")
+        prog = Program(content="def solve(x):\n    return x * 2")
 
         builder.add_parents([ProgramWithScore(prog, None)])
 
@@ -318,10 +280,7 @@ class TestPromptBuilder:
     def test_multiple_parents_incrementing_labels(self):
         """Multiple parents get v1, v2, v3 labels."""
         builder = PromptBuilder()
-        programs = [
-            Program(code=f"def solve(x): return x + {i}")
-            for i in range(3)
-        ]
+        programs = [Program(content=f"def solve(x): return x + {i}") for i in range(3)]
 
         parents = [ProgramWithScore(p, None) for p in programs]
         builder.add_parents(parents)
@@ -341,42 +300,40 @@ class TestPromptBuilderIntegration:
         builder = PromptBuilder()
 
         # Problem description
-        builder.add_section(
-            "Problem",
-            "Optimize a scheduling algorithm for transaction ordering.",
-            priority=10
-        )
+        builder.add_section("Problem", "Optimize a scheduling algorithm for transaction ordering.", priority=10)
 
         # Function signature
         builder.add_section(
-            "Signature",
-            "```python\ndef get_random_costs() -> tuple[float, list[list[int]], float]:\n```",
-            priority=20
+            "Signature", "```python\ndef get_random_costs() -> tuple[float, list[list[int]], float]:\n```", priority=20
         )
 
         # Parent programs
-        parent = Program(code='''def get_random_costs():
+        parent = Program(
+            content="""def get_random_costs():
     schedules = []
     for w in workloads:
         schedule = list(range(w.num_txns))
         random.shuffle(schedule)
         schedules.append(schedule)
     total = sum(w.get_opt_seq_cost(s) for w, s in zip(workloads, schedules))
-    return total, schedules, 0.0''')
+    return total, schedules, 0.0"""
+        )
 
         builder.add_parents(
-            [ProgramWithScore(parent, EvaluationResult(
-                program_id=parent.id,
-                scores={"score": 45.2},
-            ))],
-            priority=30
+            [
+                ProgramWithScore(
+                    parent,
+                    EvaluationResult(
+                        scores={"score": 45.2},
+                    ),
+                )
+            ],
+            priority=30,
         )
 
         # Task instruction
         builder.add_section(
-            "Task",
-            "Write an improved version. Try different algorithms or optimize for edge cases.",
-            priority=40
+            "Task", "Write an improved version. Try different algorithms or optimize for edge cases.", priority=40
         )
 
         prompt = builder.build()
@@ -396,7 +353,7 @@ class TestPromptBuilderIntegration:
         """Builds a prompt with DIFF output mode."""
         builder = PromptBuilder()
 
-        parent = Program(code="def solve(x): return x * 2")
+        parent = Program(content="def solve(x): return x * 2")
 
         builder.add_section("Problem", "Make the function faster", priority=10)
         builder.add_parents([ProgramWithScore(parent, None)], priority=20)
@@ -408,30 +365,28 @@ class TestPromptBuilderIntegration:
         assert "<<<<<<< SEARCH" in prompt
         assert "=======" in prompt
         assert ">>>>>>> REPLACE" in prompt
-        assert "ONE format" in prompt
+        assert "SEARCH/REPLACE" in prompt
 
     def test_feedback_driven_prompt(self):
         """Builds a prompt with execution feedback."""
         builder = PromptBuilder()
 
-        parent = Program(code='''def solve(items):
+        parent = Program(
+            content="""def solve(items):
     result = []
     for item in items:
         result.append(item * 2)
-    return result''')
+    return result"""
+        )
 
         result = EvaluationResult(
-            program_id=parent.id,
             scores={"score": 0.6},
-            traces="Input [1,2,3] -> [2,4,6] (0.001s)\nInput [1..1000] -> [...] (2.5s SLOW)",
         )
 
         builder.add_section("Problem", "Optimize list processing", priority=10)
         builder.add_parents([ProgramWithScore(parent, result)], priority=20)
         builder.add_feedback(
-            "The function is slow on large inputs. "
-            "Consider using list comprehension or numpy.",
-            priority=30
+            "The function is slow on large inputs. Consider using list comprehension or numpy.", priority=30
         )
 
         prompt = builder.build()

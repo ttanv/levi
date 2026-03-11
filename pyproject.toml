@@ -1,17 +1,57 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [project]
-name = "algoforge"
+name = "levi"
 version = "0.1.0"
-description = "AlgoForge: Evolutionary optimization framework for algorithms"
+description = "Levi: Evolutionary optimization framework for algorithms"
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
 dependencies = [
     "numpy>=2.3.5",
-    "litellm>=1.56.0",
+    "litellm>=1.81.16",
     "scikit-learn>=1.4.0",
-    "torch>=2.9.1",
+    "colorama>=0.4.6",
+    "dspy>=3.1.2",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0.0",
+    "ruff>=0.11.0",
 ]
+example-eplb = [
+    "torch>=2.9.1",
+]
+example-llm-sql = [
+    "pandas>=2.3.3",
+]
+example-viz = [
+    "graphviz>=0.21",
+    "matplotlib>=3.10.8",
+]
+examples = [
+    "torch>=2.9.1",
+    "pandas>=2.3.3",
+    "graphviz>=0.21",
+    "matplotlib>=3.10.8",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["levi"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP"]
+ignore = ["UP045", "E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"levi/llm/unified_client.py" = ["E402"]
+"tests/*" = ["F841"]
+
+[tool.ruff.format]
+quote-style = "double"
