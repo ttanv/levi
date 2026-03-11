@@ -456,6 +456,10 @@ def optimize_prompts(config: LeviConfig) -> tuple[dict, float]:
             "paradigm_shift": "optimized instruction" | None,
         }
     """
+    if config.seed_program is None:
+        logger.warning("[PromptOpt] Skipping prompt optimization because no seed_program was provided")
+        return {"mutation": {}, "paradigm_shift": None}, 0.0
+
     from dspy.teleprompt import MIPROv2
 
     opt_cfg = config.prompt_opt
