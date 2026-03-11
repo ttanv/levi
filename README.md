@@ -6,7 +6,7 @@
 <p align="center"><strong>Better LLM Optimization for the Price of a Cup of Coffee</strong></p>
 
 <p align="center">
-  <a href="https://github.com/ttanv/algoforge/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/ttanv/algoforge/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
+  <a href="https://github.com/ttanv/levi/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/ttanv/levi/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.11%2B-blue.svg" alt="Python 3.11+"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License: MIT"></a>
   <a href="https://ttanv.github.io/levi"><img src="https://img.shields.io/badge/blog-How%20It%20Works-orange" alt="Blog"></a>
@@ -34,8 +34,8 @@ Existing frameworks couple performance tightly to model capability. Drop to a sm
 Install LEVI:
 
 ```bash
-git clone https://github.com/ttanv/algoforge.git
-cd algoforge
+git clone https://github.com/ttanv/levi.git
+cd levi
 
 # with uv
 uv sync
