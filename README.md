@@ -20,12 +20,8 @@ LEVI is an LLM-guided evolutionary framework for discovering algorithms, heurist
 
 Existing frameworks couple performance tightly to model capability. Drop to a smaller model and results degrade sharply. LEVI decouples the two by making diversity an architectural concern rather than a model concern, and by matching model capacity to task demand. Set a dollar budget and LEVI spends it well.
 
-**$4.50 improves on what other frameworks need $15-30 and frontier models to achieve.** Highest scores on the [ADRS benchmark](https://ucbskyadrs.github.io/) across all frameworks. See [detailed results](https://ttanv.github.io/levi).
+**$4.50 improves on what other frameworks need $15-30 and frontier models to achieve.** Highest scores on the [ADRS benchmark](https://ucbskyadrs.github.io/) across all frameworks, with a fraction of the cost. See [detailed results](https://ttanv.github.io/levi).
 
-- **Built for smaller, local models.** Small models like Qwen 30B do bulk mutation; expensive models are reserved for creative breakthroughs.
-- **Budget-native.** Set a dollar, eval, or time cap and LEVI optimizes within it, including custom pricing for self-hosted models.
-- **Self-tuning prompts.** DSPy/MIPROv2 optimizes mutation prompts for your task at init, so you spend less time on prompt engineering.
-- **Programmable novelty.** Define diversity with AST features, score dimensions, or custom extractors instead of fixed bins.
 
 <p align="center">
   <img src="results/txn_scheduling.png" width="49%" />
@@ -48,7 +44,7 @@ uv sync
 python -m pip install -e .
 ```
 
-Run it as simply as below:
+Run it as simply as below (a full LEVI program!):
 
 ```python
 import levi 
@@ -85,7 +81,7 @@ If you want a repo entrypoint instead of writing code first, start with
 
 The main entry point is `levi.evolve_code(...)`.
 
-- Required arguments: `problem_description`, `function_signature`, `seed_program`, `score_fn`
+- Required arguments: `problem_description`, `function_signature`, `score_fn`
 - Model selection: pass either `model=...` or `paradigm_model=...` / `mutation_model=...`
 - Budgeting: pass at least one of `budget_dollars`, `budget_evals`, or `budget_seconds`
 - Scoring: `score_fn` may be either `score_fn(fn)` or `score_fn(fn, inputs)`, and must return a dict containing `{"score": float}`
