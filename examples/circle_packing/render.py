@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render the archived circle packing result with a tighter, axis-based layout."""
+"""Render the best circle packing result with a tighter, axis-based layout."""
 
 from __future__ import annotations
 
@@ -45,6 +45,12 @@ CIRCLE_COLORS = [
     "#a8e6cf",
     "#6dc5a2",
 ]
+
+
+def darken_hex(hex_color: str, factor: float = 0.84) -> tuple[float, float, float, float]:
+    """Return a slightly darker RGBA edge color derived from a hex fill."""
+    rgb = tuple(int(hex_color[i : i + 2], 16) / 255.0 for i in (1, 3, 5))
+    return tuple(channel * factor for channel in rgb) + (0.9,)
 
 
 def parse_args() -> argparse.Namespace:
@@ -106,19 +112,16 @@ def render_packing(data_path: Path, output_path: Path, dpi: int) -> None:
             (float(x), float(y)),
             float(radius),
             facecolor=color,
-            edgecolor=(1.0, 1.0, 1.0, 0.68),
-            linewidth=1.2,
+            edgecolor=darken_hex(color),
+            linewidth=0.9,
             alpha=0.98,
             zorder=3,
         )
         ax.add_patch(circle)
 
-    ax.set_xlabel("x", fontsize=11, color="#5f6972", labelpad=10)
-    ax.set_ylabel("y", fontsize=11, color="#5f6972", labelpad=10)
-
     fig.text(0.10, 0.965, "Circle Packing", fontsize=19, fontweight="bold", color="#41596e")
     fig.text(0.94, 0.965, f"n = {len(radii)}  |  score = {sum_radii:.5f}+", ha="right", fontsize=12, color="#5e6870")
-    fig.text(0.10, 0.935, "Archived best feasible layout in the unit square [0, 1] x [0, 1]", fontsize=10, color="#7b756a")
+    fig.text(0.10, 0.935, "Best feasible layout achieved in the unit square [0, 1] x [0, 1]", fontsize=10, color="#7b756a")
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path, facecolor=fig.get_facecolor())
