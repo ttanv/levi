@@ -14,7 +14,7 @@
 
 ---
 
-LEVI is an LLM-guided evolutionary framework for discovering algorithms, heuristics, and optimized code. Point it at a scoring function and a seed program, set a dollar budget, and walk away.
+LEVI is an LLM-guided evolutionary framework for discovering algorithms, heuristics, and optimized code. Point it at a scoring function, set a dollar budget, and walk away.
 
 ## Why LEVI
 
@@ -31,7 +31,7 @@ Existing frameworks couple performance tightly to model capability. Drop to a sm
 
 ## Quickstart
 
-LEVI is not on PyPI yet. Install it from source:
+Install LEVI:
 
 ```bash
 git clone https://github.com/ttanv/algoforge.git
@@ -47,21 +47,17 @@ python -m pip install -e .
 Run it as simply as below (a full LEVI program!):
 
 ```python
-import levi 
+import levi
 
-def score_fn(pack, test_cases):
-    items, capacity = test_cases[0]
-    bins = pack(items, capacity)
-    wasted = sum(capacity - sum(b) for b in bins)
+def score_fn(pack):
+    bins = pack([4, 8, 1, 4, 2, 1], 10)
+    wasted = sum(10 - sum(b) for b in bins)
     return {"score": max(0.0, 100.0 - wasted)}
-
-inputs = [([4, 8, 1, 4, 2, 1], 10)]
 
 result = levi.evolve_code(
     "Optimize bin packing to minimize wasted space",
     function_signature="def pack(items, bin_capacity):",
     score_fn=score_fn,
-    inputs=inputs,
     model="openai/gpt-4o-mini",
     budget_dollars=2.0,
 )
