@@ -177,3 +177,14 @@ class TestLeviConfig:
             budget=BudgetConfig(dollars=1.0),
         )
         assert cfg.inputs is None
+
+    def test_seed_program_can_be_omitted(self):
+        cfg = LeviConfig(
+            problem_description="Test problem",
+            function_signature="def solve(x):",
+            seed_program=None,
+            inputs=[1, 2, 3],
+            score_fn=_score_fn,
+            budget=BudgetConfig(dollars=1.0),
+        )
+        assert cfg.seed_program is None

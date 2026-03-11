@@ -259,8 +259,8 @@ def evolve_code(
     Args:
         problem_description: Natural language description of the optimization problem.
         function_signature: Python function signature to optimize (e.g. "def solve(x):").
-        seed_program: Initial working implementation. If None, one is generated
-            automatically from the function signature using the mutation model.
+        seed_program: Initial working implementation. If None, init generates
+            starting programs automatically from the function signature.
         score_fn: Evaluation function returning a dict with at least {"score": float}.
             Accepts either score_fn(fn) or score_fn(fn, inputs).
         inputs: Optional test inputs passed to score_fn. Can be omitted if
