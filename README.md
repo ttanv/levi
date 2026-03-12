@@ -1,6 +1,6 @@
 <p align="center">
-  <img src="results/levi_logo.png#gh-dark-mode-only" width="25%" alt="LEVI" />
-  <img src="results/levi_logo_light.png#gh-light-mode-only" width="25%" alt="LEVI" />
+  <img src="results/levi_logo_dark.svg#gh-dark-mode-only" width="25%" alt="LEVI" />
+  <img src="results/levi_logo_light.svg#gh-light-mode-only" width="25%" alt="LEVI" />
 </p>
 
 <p align="center"><strong>Better LLM Optimization for the Price of a Cup of Coffee</strong></p>
