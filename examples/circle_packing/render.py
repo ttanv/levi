@@ -16,8 +16,8 @@ from matplotlib.ticker import FormatStrFormatter, MultipleLocator
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DATA_PATH = ROOT / "circle_packing_data.npz"
 DEFAULT_OUTPUT_PATHS = {
-    "dark": ROOT / "results" / "circle_packing_best.png",
-    "light": ROOT / "results" / "circle_packing_best_light.png",
+    "dark": ROOT / "assets" / "plots" / "circle_packing_best.png",
+    "light": ROOT / "assets" / "plots" / "circle_packing_best_light.png",
 }
 
 # Extracted from the original published PNG so the redraw preserves the circle palette.
