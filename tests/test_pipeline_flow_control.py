@@ -51,6 +51,17 @@ class TestPipelineRunnerFlowControl:
 
         assert runner.code_queue.maxsize == 6
 
+    def test_build_result_handles_empty_archive(self):
+        config = _make_config()
+        state = PipelineState(config.budget)
+        runner = PipelineRunner(config, _DummyPool(), _DummyExecutor(), state=state)
+
+        result = runner._build_result()
+
+        assert result.best_program == ""
+        assert result.best_score == 0.0
+        assert result.archive_size == 0
+
     def test_wait_for_completion_stops_on_idle_stall(self, monkeypatch):
         monkeypatch.setattr(runner_module, "_MIN_STALL_TIMEOUT_SECONDS", 0.1)
         config = _make_config(

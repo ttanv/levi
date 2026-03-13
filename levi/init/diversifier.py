@@ -86,8 +86,7 @@ class Diversifier:
 
     async def _cascade_eval(self, code: str, fn_name: str) -> dict:
         """Evaluate with cascade: quick test first, full eval only if promising."""
-        if self.state.budget_exhausted:
-            return {"error": "Budget exhausted"}
+        # Caller already reserved the eval slot.
 
         cascade = self.config.cascade
         if cascade.enabled and cascade.quick_inputs:
