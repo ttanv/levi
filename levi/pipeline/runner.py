@@ -376,6 +376,20 @@ class PipelineRunner:
             logger.info(f"[Snapshot] Saved final snapshot to {filepath}")
 
     def _build_result(self) -> LeviResult:
+        if self.pool.size() == 0:
+            best_score = self.state.best_score_so_far
+            if not math.isfinite(best_score):
+                best_score = 0.0
+            return LeviResult(
+                best_program="",
+                best_score=best_score,
+                total_evaluations=self.state.eval_count,
+                total_cost=self.state.total_cost,
+                archive_size=0,
+                runtime_seconds=self.state.elapsed_seconds,
+                score_history=self.state.get_score_history_list(),
+            )
+
         best = self.pool.best()
         return LeviResult(
             best_program=best.content if best else "",

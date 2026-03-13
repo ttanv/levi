@@ -1,10 +1,15 @@
 """Tests for low-level method helpers and utility primitives."""
 
+import asyncio
+
 import numpy as np
 import pytest
 
+from levi.config.models import BudgetConfig, InitConfig, LeviConfig
 from levi.core import EvaluationResult, Program
+from levi.init.diversifier import Diversifier
 from levi.methods.levi import _restore_from_snapshot
+from levi.pipeline.state import PipelineState
 from levi.utils import evaluate_code, extract_fn_name
 
 
@@ -202,3 +207,63 @@ class TestExtractFnName:
 
     def test_falls_back_to_solve(self):
         assert extract_fn_name("schedule_txns(txns, budget)") == "solve"
+
+
+def _dummy_score_fn(_fn, _inputs=None):
+    return {"score": 1.0}
+
+
+def _make_diversifier_config(*, budget: BudgetConfig | None = None, init: InitConfig | None = None) -> LeviConfig:
+    return LeviConfig(
+        problem_description="Test problem",
+        function_signature="def solve(x):",
+        score_fn=_dummy_score_fn,
+        budget=budget or BudgetConfig(evaluations=10),
+        init=init or InitConfig(n_diverse_seeds=0, n_variants_per_seed=0),
+    )
+
+
+class _AsyncExecutor:
+    def __init__(self, result: dict | None = None):
+        self.result = result or {"score": 1.0}
+        self.calls = 0
+
+    async def run(self, *_args, **_kwargs):
+        self.calls += 1
+        return dict(self.result)
+
+
+class TestDiversifier:
+    def test_generate_diverse_seeds_retries_three_times_when_generation_fails(self, monkeypatch):
+        config = _make_diversifier_config(init=InitConfig(n_diverse_seeds=0, n_variants_per_seed=0))
+        state = PipelineState(config.budget)
+        diversifier = Diversifier(config, _AsyncExecutor(), state)
+        attempts = []
+
+        class _Resp:
+            content = "not code"
+            cost = 0.0
+
+        async def fake_completion(**kwargs):
+            attempts.append(kwargs["model"])
+            return _Resp()
+
+        monkeypatch.setattr(diversifier, "_acompletion", fake_completion)
+
+        seeds = asyncio.run(diversifier._generate_diverse_seeds(None, None, "solve"))
+
+        assert seeds == []
+        assert len(attempts) == 3
+
+    def test_cascade_eval_uses_reserved_eval_slot(self):
+        config = _make_diversifier_config(budget=BudgetConfig(evaluations=1))
+        executor = _AsyncExecutor()
+        state = PipelineState(config.budget)
+        diversifier = Diversifier(config, executor, state)
+
+        assert asyncio.run(state.try_start_evaluation()) is True
+        result = asyncio.run(diversifier._cascade_eval("def solve(x):\n    return x", "solve"))
+        asyncio.run(state.finish_evaluation())
+
+        assert result == {"score": 1.0}
+        assert executor.calls == 1
