@@ -18,7 +18,7 @@ from ..llm.unified_client import UnifiedLLMClient, UnifiedLLMClientConfig
 from ..pipeline import PipelineRunner
 from ..pipeline.state import PipelineState
 from ..pool import CVTMAPElitesPool
-from ..utils import ResilientProcessPool, evaluate_code, extract_code, extract_fn_name
+from ..utils import ResilientProcessPool, evaluate_code, extract_fn_name
 
 logger = logging.getLogger(__name__)
 
