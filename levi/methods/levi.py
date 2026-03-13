@@ -408,9 +408,7 @@ async def _run_async(config: LeviConfig, resume_snapshot: dict | None = None) ->
         else:
             logger.info("[Levi] Running init phase")
             diversifier = Diversifier(config, executor, state)
-            init_cost, init_score_history = await diversifier.run(
-                pool, config.seed_program, seed_result, extractor
-            )
+            init_cost, init_score_history = await diversifier.run(pool, config.seed_program, seed_result, extractor)
             logger.info(f"[Levi] Init phase complete, cost: ${init_cost:.3f}")
 
         # Run main pipeline
