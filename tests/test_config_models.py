@@ -156,6 +156,19 @@ class TestLeviConfig:
         assert cfg.local_endpoints == {"Qwen/Qwen3-30B": "http://localhost:8001/v1"}
         assert cfg.model_info == {"Qwen/Qwen3-30B": {"input_cost_per_token": 0.0000001}}
 
+    def test_local_endpoints_dict_format(self):
+        cfg = LeviConfig(
+            **_minimal_config_kwargs(),
+            local_endpoints={
+                "MiniMax-M2.5": {
+                    "api_base": "https://api.minimax.io/v1",
+                    "api_key_env": "MINIMAX_API_KEY",
+                },
+            },
+        )
+        assert cfg.local_endpoints["MiniMax-M2.5"]["api_base"] == "https://api.minimax.io/v1"
+        assert cfg.local_endpoints["MiniMax-M2.5"]["api_key_env"] == "MINIMAX_API_KEY"
+
     def test_pipeline_max_tokens_default(self):
         cfg = LeviConfig(**_minimal_config_kwargs())
         assert cfg.pipeline.temperature is None

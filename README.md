@@ -117,6 +117,24 @@ result = levi.evolve_code(
 
 Hosted models should use [LiteLLM](https://docs.litellm.ai/docs/providers) identifiers such as `openai/gpt-4o-mini` or `openrouter/google/gemini-3-flash-preview`. Self-hosted models can use any stable name if you map that name through `local_endpoints`.
 
+Any OpenAI-compatible provider can be used via `local_endpoints` with authentication:
+
+```python
+# MiniMax (204K context, OpenAI-compatible API)
+result = levi.evolve_code(
+    ...,
+    paradigm_model="openai/gpt-4o",
+    mutation_model=["MiniMax-M2.5"],
+    local_endpoints={
+        "MiniMax-M2.5": {
+            "api_base": "https://api.minimax.io/v1",
+            "api_key_env": "MINIMAX_API_KEY",
+        },
+    },
+    budget_dollars=4.50,
+)
+```
+
 ### Budget
 
 ```python

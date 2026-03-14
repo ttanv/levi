@@ -130,8 +130,14 @@ class LeviConfig(BaseModel):
     paradigm_models: str | list[str] = "openai/gpt-4o"
     mutation_models: str | list[str] = "openai/gpt-4o-mini"
 
-    # Optional: for local model routing (auto-registers with litellm at startup)
-    local_endpoints: dict[str, str] = Field(default_factory=dict)
+    # Optional: for local or remote OpenAI-compatible model routing
+    # (auto-registers with litellm at startup).
+    # Values can be a plain URL string or a dict with "api_base" and optional
+    # "api_key" / "api_key_env" for authenticated remote endpoints.
+    #   Simple:   {"Qwen/...": "http://localhost:8000/v1"}
+    #   Extended: {"MiniMax-M2.5": {"api_base": "https://api.minimax.io/v1",
+    #                                "api_key_env": "MINIMAX_API_KEY"}}
+    local_endpoints: dict[str, str | dict[str, str]] = Field(default_factory=dict)
 
     # Optional: for cost tracking on custom/local models (auto-registers with litellm).
     # Without this, dollar-budget tracking won't work for unregistered models.

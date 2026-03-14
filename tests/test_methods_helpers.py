@@ -1,6 +1,8 @@
 """Tests for low-level method helpers and utility primitives."""
 
 import asyncio
+import os
+from unittest.mock import patch
 
 import numpy as np
 import pytest
@@ -8,7 +10,7 @@ import pytest
 from levi.config.models import BudgetConfig, InitConfig, LeviConfig
 from levi.core import EvaluationResult, Program
 from levi.init.diversifier import Diversifier
-from levi.methods.levi import _restore_from_snapshot
+from levi.methods.levi import _register_models_with_litellm, _restore_from_snapshot
 from levi.pipeline.state import PipelineState
 from levi.utils import evaluate_code, extract_fn_name
 
@@ -44,6 +46,93 @@ class DummyPool:
     def add_at_cell(self, cell_index, program, eval_result, behavior):
         self.add_at_cell_calls.append((cell_index, program, eval_result, behavior))
         return True
+
+
+def _dummy_score(_fn, _inputs=None):
+    return {"score": 0.0}
+
+
+class TestRegisterModelsWithLitellm:
+    def test_string_endpoint_uses_unused_key(self):
+        config = LeviConfig(
+            problem_description="t",
+            function_signature="def solve(x):",
+            score_fn=_dummy_score,
+            budget=BudgetConfig(evaluations=1),
+            local_endpoints={"Qwen/Test": "http://localhost:8000/v1"},
+        )
+        registered = {}
+        with patch("levi.methods.levi.litellm") as mock_litellm:
+            mock_litellm.register_model = lambda d: registered.update(d)
+            _register_models_with_litellm(config)
+
+        assert "Qwen/Test" in registered
+        params = registered["Qwen/Test"]["litellm_params"]
+        assert params["api_base"] == "http://localhost:8000/v1"
+        assert params["api_key"] == "unused"
+
+    def test_dict_endpoint_reads_api_key_env(self):
+        config = LeviConfig(
+            problem_description="t",
+            function_signature="def solve(x):",
+            score_fn=_dummy_score,
+            budget=BudgetConfig(evaluations=1),
+            local_endpoints={
+                "MiniMax-M2.5": {
+                    "api_base": "https://api.minimax.io/v1",
+                    "api_key_env": "MINIMAX_API_KEY",
+                },
+            },
+        )
+        registered = {}
+        with patch("levi.methods.levi.litellm") as mock_litellm, \
+             patch.dict(os.environ, {"MINIMAX_API_KEY": "test-key-123"}):
+            mock_litellm.register_model = lambda d: registered.update(d)
+            _register_models_with_litellm(config)
+
+        assert "MiniMax-M2.5" in registered
+        params = registered["MiniMax-M2.5"]["litellm_params"]
+        assert params["api_base"] == "https://api.minimax.io/v1"
+        assert params["api_key"] == "test-key-123"
+
+    def test_dict_endpoint_with_inline_api_key(self):
+        config = LeviConfig(
+            problem_description="t",
+            function_signature="def solve(x):",
+            score_fn=_dummy_score,
+            budget=BudgetConfig(evaluations=1),
+            local_endpoints={
+                "MiniMax-M2.5": {
+                    "api_base": "https://api.minimax.io/v1",
+                    "api_key": "inline-key-456",
+                },
+            },
+        )
+        registered = {}
+        with patch("levi.methods.levi.litellm") as mock_litellm:
+            mock_litellm.register_model = lambda d: registered.update(d)
+            _register_models_with_litellm(config)
+
+        params = registered["MiniMax-M2.5"]["litellm_params"]
+        assert params["api_key"] == "inline-key-456"
+
+    def test_dict_endpoint_falls_back_to_unused(self):
+        config = LeviConfig(
+            problem_description="t",
+            function_signature="def solve(x):",
+            score_fn=_dummy_score,
+            budget=BudgetConfig(evaluations=1),
+            local_endpoints={
+                "custom/model": {"api_base": "http://custom:8000/v1"},
+            },
+        )
+        registered = {}
+        with patch("levi.methods.levi.litellm") as mock_litellm:
+            mock_litellm.register_model = lambda d: registered.update(d)
+            _register_models_with_litellm(config)
+
+        params = registered["custom/model"]["litellm_params"]
+        assert params["api_key"] == "unused"
 
 
 class TestEvaluateCode:

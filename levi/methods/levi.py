@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import os
 import re
 import time
 from collections.abc import Callable
@@ -24,14 +25,24 @@ logger = logging.getLogger(__name__)
 
 
 def _register_models_with_litellm(config: LeviConfig) -> None:
-    """Auto-register local endpoints and model info with litellm."""
-    # Register local endpoints so litellm routes to them
-    for model_name, base_url in config.local_endpoints.items():
+    """Auto-register local/remote endpoints and model info with litellm."""
+    # Register endpoints so litellm routes to them
+    for model_name, endpoint in config.local_endpoints.items():
+        # Support both simple string URLs and extended dict configs
+        if isinstance(endpoint, dict):
+            base_url = endpoint["api_base"]
+            api_key = endpoint.get("api_key") or (
+                os.getenv(endpoint["api_key_env"]) if endpoint.get("api_key_env") else "unused"
+            )
+        else:
+            base_url = endpoint
+            api_key = "unused"
+
         registration: dict = {
             "litellm_params": {
                 "model": f"openai/{model_name}",
                 "api_base": base_url,
-                "api_key": "unused",
+                "api_key": api_key,
             }
         }
         # Merge model_info if available (for cost tracking)
