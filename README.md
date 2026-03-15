@@ -172,3 +172,18 @@ If you installed with `pip` instead of `uv`, run examples with `python run.py` f
 
 - `examples/circle_packing/` is a self-contained optimization example
 - `examples/ADRS/` contains seven worked [ADRS Leaderboard](https://ucbskyadrs.github.io/) problems covering cloud scheduling, GPU placement, broadcast optimization, and more
+
+## Citation
+
+If you use LEVI in your research, please cite:
+
+```bibtex
+@software{tanveer2026levi,
+  title  = {LEVI: LLM-Guided Evolutionary Search Needs Better Harnesses, Not Bigger Models},
+  author = {Tanveer, Temoor},
+  url    = {https://github.com/ttanv/levi},
+  year   = {2026}
+}
+```
+
+Contact: ttanveer@alumni.cmu.edu

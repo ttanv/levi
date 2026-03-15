@@ -1,0 +1,10 @@
+cff-version: 1.2.0
+message: "If you use LEVI in your research, please cite it as below."
+title: "LEVI: LLM-Guided Evolutionary Search Needs Better Harnesses, Not Bigger Models"
+authors:
+  - family-names: Tanveer
+    given-names: Temoor
+    email: ttanveer@alumni.cmu.edu
+type: software
+url: "https://github.com/ttanv/levi"
+license: MIT
