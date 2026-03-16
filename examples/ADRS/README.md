@@ -4,6 +4,8 @@ These examples are drawn from the [ADRS Leaderboard](https://github.com/cmu-db/A
 
 ## Setup
 
+Install `uv` first: <https://docs.astral.sh/uv/getting-started/installation/>
+
 Most examples require the ADRS Leaderboard dataset:
 
 ```bash
@@ -17,11 +19,6 @@ Some examples have extra dependencies:
 uv sync --extra examples        # all example deps
 uv sync --extra example-eplb    # just EPLB (requires torch)
 uv sync --extra example-llm-sql # just LLM SQL (requires pandas)
-
-# or without uv
-python -m pip install -e ".[examples]"
-python -m pip install -e ".[example-eplb]"
-python -m pip install -e ".[example-llm-sql]"
 ```
 
 Each problem directory uses the same entrypoint:
@@ -29,8 +26,6 @@ Each problem directory uses the same entrypoint:
 ```bash
 uv run --no-sync python run.py
 ```
-
-If you installed with `pip` instead of `uv`, use `python run.py`.
 
 ## Suggested Starting Points
 

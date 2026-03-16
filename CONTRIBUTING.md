@@ -3,8 +3,8 @@
 ## Dev Setup
 
 ```bash
-git clone https://github.com/ttanv/algoforge.git
-cd algoforge
+git clone https://github.com/ttanv/levi.git
+cd levi
 uv sync --extra dev
 pre-commit install
 ```
@@ -12,22 +12,22 @@ pre-commit install
 ## Running Tests
 
 ```bash
-pytest
+uv run pytest
 ```
 
 ## Linting and Formatting
 
 ```bash
-ruff check levi/ tests/       # lint
-ruff format --check levi/ tests/  # check formatting
-ruff format levi/ tests/       # auto-format
+uv run ruff check levi/ tests/            # lint
+uv run ruff format --check levi/ tests/   # check formatting
+uv run ruff format levi/ tests/           # auto-format
 ```
 
 ## Pull Request Process
 
 1. Create a feature branch from `main`
 2. Make your changes
-3. Ensure tests pass (`pytest`) and linting is clean (`ruff check`, `ruff format --check`)
+3. Ensure tests pass (`uv run pytest`) and linting is clean (`uv run ruff check`, `uv run ruff format --check`)
 4. Open a PR against `main`
 
 ## Code Style

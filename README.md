@@ -34,14 +34,10 @@ Existing frameworks couple performance tightly to model capability. Drop to a sm
 Install LEVI:
 
 ```bash
+# Install uv first: https://docs.astral.sh/uv/getting-started/installation/
 git clone https://github.com/ttanv/levi.git
 cd levi
-
-# with uv
 uv sync
-
-# or without uv
-python -m pip install -e .
 ```
 
 Run it as simply as below (a full LEVI program!):
@@ -168,7 +164,6 @@ LEVI scored **2.6359+ packing density** on the n=26 circle packing benchmark on 
 
 Examples live under [`examples/README.md`](examples/README.md):
 Each example directory uses `run.py` as its entrypoint.
-If you installed with `pip` instead of `uv`, run examples with `python run.py` from that directory.
 
 - `examples/circle_packing/` is a self-contained optimization example
 - `examples/ADRS/` contains seven worked [ADRS Leaderboard](https://ucbskyadrs.github.io/) problems covering cloud scheduling, GPU placement, broadcast optimization, and more
