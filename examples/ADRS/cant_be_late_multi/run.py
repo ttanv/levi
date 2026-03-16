@@ -82,55 +82,61 @@ CUSTOM_EXTRACTORS = {
     'decision_branch_depth': _compute_decision_branch_depth,
 }
 
-result = levi.evolve_code(
-    PROBLEM_DESCRIPTION,
-    function_signature=FUNCTION_SIGNATURE,
-    seed_program=SEED_PROGRAM,
-    score_fn=score_fn,
-    inputs=INPUTS,
-    paradigm_model="openrouter/google/gemini-3-flash-preview",
-    mutation_model=[
-        "openrouter/xiaomi/mimo-v2-flash",
-        "Qwen/Qwen3-30B-A3B-Instruct-2507",
-    ],
-    budget_dollars=5.00,
-    local_endpoints={"Qwen/Qwen3-30B-A3B-Instruct-2507": "http://localhost:8000/v1"},
-    model_info={
-        "openrouter/xiaomi/mimo-v2-flash": {
-            "input_cost_per_token": 0.00000009,
-            "output_cost_per_token": 0.00000029,
-        },
-        "Qwen/Qwen3-30B-A3B-Instruct-2507": {
-            "input_cost_per_token": 0.0000001,
-            "output_cost_per_token": 0.0000004,
-        },
-    },
-    init=levi.InitConfig(
-        n_diverse_seeds=5,
-        n_variants_per_seed=20,
-        diversity_prompt=DIVERSITY_SEED_PROMPT,
-    ),
-    pipeline=levi.PipelineConfig(n_llm_workers=12, n_eval_processes=12, n_inspirations=1, eval_timeout=300),
-    behavior=levi.BehaviorConfig(
-        ast_features=[
-            'state_tracking_level',
-            'math_model_complexity',
-            'threshold_count',
-            'loop_count',
-            'decision_branch_depth',
-        ],
-        init_noise=0.3,
-        custom_extractors=CUSTOM_EXTRACTORS,
-    ),
-    punctuated_equilibrium=levi.PunctuatedEquilibriumConfig(
-        enabled=True,
-        interval=5,
-        n_clusters=3,
-        n_variants=3,
-        behavior_noise=0.3,
-    ),
-    prompt_opt=levi.PromptOptConfig(enabled=True),
-    output_dir=f"runs/{datetime.now().strftime('%Y%m%d_%H%M%S')}_po",
-)
 
-print(f"Best score: {result.best_score:.17g}")
+def main() -> None:
+    result = levi.evolve_code(
+        PROBLEM_DESCRIPTION,
+        function_signature=FUNCTION_SIGNATURE,
+        seed_program=SEED_PROGRAM,
+        score_fn=score_fn,
+        inputs=INPUTS,
+        paradigm_model="openrouter/google/gemini-3-flash-preview",
+        mutation_model=[
+            "openrouter/xiaomi/mimo-v2-flash",
+            "Qwen/Qwen3-30B-A3B-Instruct-2507",
+        ],
+        budget_dollars=5.00,
+        local_endpoints={"Qwen/Qwen3-30B-A3B-Instruct-2507": "http://localhost:8000/v1"},
+        model_info={
+            "openrouter/xiaomi/mimo-v2-flash": {
+                "input_cost_per_token": 0.00000009,
+                "output_cost_per_token": 0.00000029,
+            },
+            "Qwen/Qwen3-30B-A3B-Instruct-2507": {
+                "input_cost_per_token": 0.0000001,
+                "output_cost_per_token": 0.0000004,
+            },
+        },
+        init=levi.InitConfig(
+            n_diverse_seeds=5,
+            n_variants_per_seed=20,
+            diversity_prompt=DIVERSITY_SEED_PROMPT,
+        ),
+        pipeline=levi.PipelineConfig(n_llm_workers=12, n_eval_processes=12, n_inspirations=1, eval_timeout=300),
+        behavior=levi.BehaviorConfig(
+            ast_features=[
+                'state_tracking_level',
+                'math_model_complexity',
+                'threshold_count',
+                'loop_count',
+                'decision_branch_depth',
+            ],
+            init_noise=0.3,
+            custom_extractors=CUSTOM_EXTRACTORS,
+        ),
+        punctuated_equilibrium=levi.PunctuatedEquilibriumConfig(
+            enabled=True,
+            interval=5,
+            n_clusters=3,
+            n_variants=3,
+            behavior_noise=0.3,
+        ),
+        prompt_opt=levi.PromptOptConfig(enabled=True),
+        output_dir=f"runs/{datetime.now().strftime('%Y%m%d_%H%M%S')}_po",
+    )
+
+    print(f"Best score: {result.best_score:.17g}")
+
+
+if __name__ == "__main__":
+    main()
