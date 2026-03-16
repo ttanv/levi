@@ -20,7 +20,7 @@ LEVI is an LLM-guided evolutionary framework for discovering algorithms, heurist
 
 Existing frameworks couple performance tightly to model capability. Drop to a smaller model and results degrade sharply. LEVI decouples the two by making diversity an architectural concern rather than a model concern, and by matching model capacity to task demand. Set a dollar budget and LEVI spends it well.
 
-**$4.50 improves on what other frameworks need $15-30 and frontier models to achieve.** Highest scores on the [ADRS benchmark](https://ucbskyadrs.github.io/) across all frameworks, with a fraction of the cost. See [detailed results](https://ttanv.github.io/levi).
+**LEVI improves on other frameworks at a fraction of the cost, while using smaller models.** Highest scores on the [ADRS benchmark](https://ucbskyadrs.github.io/) across all frameworks, while spending upto 6x less. See [detailed results](https://ttanv.github.io/levi).
 
 
 <p align="center">
