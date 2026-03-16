@@ -3,7 +3,7 @@
 ## Dev Setup
 
 ```bash
-git clone https://github.com/ttanv/algoforge.git
+git clone https://github.com/ttanv/levi.git
 cd algoforge
 uv sync --extra dev
 pre-commit install
