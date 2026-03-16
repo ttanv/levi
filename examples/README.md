@@ -9,7 +9,6 @@ Self-contained optimization example with no external dataset:
 
 - Path: `examples/circle_packing/`
 - Run: `cd examples/circle_packing && uv run --no-sync python run.py`
-- Without `uv`: `cd examples/circle_packing && python run.py`
 
 The example assumes the local Qwen endpoint is `http://localhost:8000/v1`.
 If your local server uses a different port or you want a smaller budget, edit
