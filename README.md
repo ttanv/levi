@@ -20,12 +20,14 @@ LEVI is an LLM-guided evolutionary framework for discovering algorithms, heurist
 
 Existing frameworks couple performance tightly to model capability. Drop to a smaller model and results degrade sharply. LEVI decouples the two by making diversity an architectural concern rather than a model concern, and by matching model capacity to task demand. Set a dollar budget and LEVI spends it well.
 
-**LEVI improves on other frameworks at a fraction of the cost, while using smaller models.** Highest scores on the [ADRS benchmark](https://ucbskyadrs.github.io/) across all frameworks, while spending upto 6x less. See [detailed results](https://ttanv.github.io/levi).
+**$4.50 improves on what other frameworks need $15-30 and frontier models to achieve.** Highest scores on the [ADRS benchmark](https://ucbskyadrs.github.io/) across all frameworks, with a fraction of the cost. See [detailed results](https://ttanv.github.io/levi).
 
 
 <p align="center">
-  <img src="assets/plots/txn_scheduling.png" width="49%" />
-  <img src="assets/plots/cant_be_late.png" width="49%" />
+  <img src="assets/plots/txn_scheduling_dark.png#gh-dark-mode-only" width="49%" />
+  <img src="assets/plots/txn_scheduling.png#gh-light-mode-only" width="49%" />
+  <img src="assets/plots/cant_be_late_dark.png#gh-dark-mode-only" width="49%" />
+  <img src="assets/plots/cant_be_late.png#gh-light-mode-only" width="49%" />
 </p>
 <p align="center"><em>LEVI converges faster and scores higher than baselines on controlled equal-budget comparisons (ADRS problems, same model, 750 evals).</em></p>
 
@@ -65,7 +67,7 @@ If you want a repo entrypoint instead of writing code first, start with
 ## Suggested Starting Points
 
 - Start here: `examples/circle_packing/` for a self-contained local-first run.
-- First ADRS run: `examples/ADRS/prism/` if you want to avoid cloning the ADRS dataset first.
+- First ADRS run: `examples/ADRS/prism/` or `examples/ADRS/llm_sql/` if you want to avoid cloning the ADRS dataset first.
 - Try `prompt_opt`: `examples/ADRS/cant_be_late/`
 - Try `init` + `prompt_opt` + punctuated equilibrium together: `examples/ADRS/cant_be_late_multi/`
 
