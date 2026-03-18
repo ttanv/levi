@@ -24,10 +24,8 @@ Existing frameworks couple performance tightly to model capability. Drop to a sm
 
 
 <p align="center">
-  <img src="assets/plots/txn_scheduling_dark.png#gh-dark-mode-only" width="49%" />
-  <img src="assets/plots/txn_scheduling.png#gh-light-mode-only" width="49%" />
-  <img src="assets/plots/cant_be_late_dark.png#gh-dark-mode-only" width="49%" />
-  <img src="assets/plots/cant_be_late.png#gh-light-mode-only" width="49%" />
+  <img src="assets/plots/txn_scheduling.png" width="49%" />
+  <img src="assets/plots/cant_be_late.png" width="49%" />
 </p>
 <p align="center"><em>LEVI converges faster and scores higher than baselines on controlled equal-budget comparisons (ADRS problems, same model, 750 evals).</em></p>
 
