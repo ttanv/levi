@@ -3,7 +3,7 @@
   <img src="assets/logos/levi_logo_light.svg#gh-light-mode-only" width="25%" alt="LEVI" />
 </p>
 
-<p align="center"><strong>Better LLM Optimization for the Price of a Cup of Coffee</strong></p>
+<p align="center"><strong>AlphaEvolve Performance for the Price of a Cup of Coffee</strong></p>
 
 <p align="center">
   <a href="https://github.com/ttanv/levi/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/ttanv/levi/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
@@ -14,7 +14,7 @@
 
 ---
 
-LEVI is an LLM-guided evolutionary framework for discovering algorithms, heuristics, and optimized code. Point it at a scoring function, set a dollar budget, and walk away.
+LEVI is an LLM-guided evolutionary framework for discovering algorithms, heuristics, and optimized code. Point it at a scoring function, set a dollar budget, and walk away. LEVI improves on other frameworks like GEPA, OpenEvolve, and AlphaEvolve for a fraction of the cost. 
 
 ## Why LEVI
 
