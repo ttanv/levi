@@ -12,7 +12,16 @@ Matches ADRS-Leaderboard evaluator.py:
 
 from pathlib import Path
 import sys
-import pandas as pd
+
+try:
+    import pandas as pd
+except ModuleNotFoundError as e:
+    if e.name == "pandas":
+        raise RuntimeError(
+            "LLM SQL requires pandas. From the repo root, run:\n"
+            "  uv sync --extra example-llm-sql"
+        ) from e
+    raise
 
 THIS_DIR = Path(__file__).resolve().parent
 if str(THIS_DIR) not in sys.path:

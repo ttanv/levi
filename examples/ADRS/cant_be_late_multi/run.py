@@ -6,8 +6,8 @@ import re
 from datetime import datetime
 from typing import Optional
 
-from problem import PROBLEM_DESCRIPTION, FUNCTION_SIGNATURE, SEED_PROGRAM, INPUTS, score_fn, DIVERSITY_SEED_PROMPT
 import levi
+from problem import PROBLEM_DESCRIPTION, FUNCTION_SIGNATURE, SEED_PROGRAM, get_inputs, score_fn, DIVERSITY_SEED_PROMPT
 from levi.core import Program
 
 
@@ -89,7 +89,7 @@ def main() -> None:
         function_signature=FUNCTION_SIGNATURE,
         seed_program=SEED_PROGRAM,
         score_fn=score_fn,
-        inputs=INPUTS,
+        inputs=get_inputs(),
         paradigm_model="openrouter/google/gemini-3-flash-preview",
         mutation_model=[
             "openrouter/xiaomi/mimo-v2-flash",

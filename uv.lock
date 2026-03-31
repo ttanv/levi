@@ -745,6 +745,9 @@ dev = [
     { name = "pytest" },
     { name = "ruff" },
 ]
+example-cloudcast = [
+    { name = "networkx" },
+]
 example-eplb = [
     { name = "torch" },
 ]
@@ -758,6 +761,7 @@ example-viz = [
 examples = [
     { name = "graphviz" },
     { name = "matplotlib" },
+    { name = "networkx" },
     { name = "pandas" },
     { name = "torch" },
 ]
@@ -771,6 +775,8 @@ requires-dist = [
     { name = "litellm", specifier = ">=1.81.16" },
     { name = "matplotlib", marker = "extra == 'example-viz'", specifier = ">=3.10.8" },
     { name = "matplotlib", marker = "extra == 'examples'", specifier = ">=3.10.8" },
+    { name = "networkx", marker = "extra == 'example-cloudcast'", specifier = ">=3.0" },
+    { name = "networkx", marker = "extra == 'examples'", specifier = ">=3.0" },
     { name = "numpy", specifier = ">=2.3.5" },
     { name = "pandas", marker = "extra == 'example-llm-sql'", specifier = ">=2.3.3" },
     { name = "pandas", marker = "extra == 'examples'", specifier = ">=2.3.3" },
@@ -780,7 +786,7 @@ requires-dist = [
     { name = "torch", marker = "extra == 'example-eplb'", specifier = ">=2.9.1" },
     { name = "torch", marker = "extra == 'examples'", specifier = ">=2.9.1" },
 ]
-provides-extras = ["dev", "example-eplb", "example-llm-sql", "example-viz", "examples"]
+provides-extras = ["dev", "example-eplb", "example-llm-sql", "example-viz", "example-cloudcast", "examples"]
 
 [[package]]
 name = "litellm"

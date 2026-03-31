@@ -61,6 +61,8 @@ def evaluate_code(code: str, score_fn: Callable[..., dict], inputs: Optional[lis
     except MemoryError:
         return {"error": "MemoryError during code execution"}
 
+    namespace["__source_code__"] = code
+
     fn = namespace.get(fn_name)
     if not isinstance(fn, types.FunctionType):
         return {"error": f"Function '{fn_name}' not found (got {type(fn).__name__})"}

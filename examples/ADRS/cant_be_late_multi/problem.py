@@ -570,8 +570,9 @@ Keep it SHORT and DIRECT:
 
 Provide your lessons (150-200 words max):"""
 
-
-INPUTS = generate_test_cases()
+def get_inputs() -> List[MultiRegionSimulationConfig]:
+    """Build evaluation inputs on demand."""
+    return generate_test_cases()
 
 
 def score_fn(strategy_step, inputs: List[MultiRegionSimulationConfig]):
@@ -650,7 +651,7 @@ def score_fn(strategy_step, inputs: List[MultiRegionSimulationConfig]):
 if __name__ == "__main__":
     print("Multi-Region Test Case Generation")
     print("=" * 50)
-    inputs = INPUTS
+    inputs = get_inputs()
     print(f"Generated {len(inputs)} test cases")
 
     # Count per scenario

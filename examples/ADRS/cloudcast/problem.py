@@ -18,7 +18,15 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from typing import Any, Dict, List, Set, Tuple
 
-import networkx as nx
+try:
+    import networkx as nx
+except ModuleNotFoundError as e:
+    if e.name == "networkx":
+        raise RuntimeError(
+            "Cloudcast requires networkx. From the repo root, run:\n"
+            "  uv sync --extra example-cloudcast"
+        ) from e
+    raise
 import numpy as np
 
 PROBLEM_DESCRIPTION = """
