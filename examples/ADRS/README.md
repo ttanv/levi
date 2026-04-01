@@ -1,6 +1,6 @@
 # Examples
 
-These examples are drawn from the [ADRS Leaderboard](https://github.com/cmu-db/ADRS-Leaderboard), a benchmark for LLM-guided algorithm discovery across systems optimization problems.
+These examples are drawn from the [ADRS Leaderboard](https://ucbskyadrs.github.io/leaderboard/), a benchmark for LLM-guided algorithm discovery across systems optimization problems.
 
 ## Setup
 
