@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Run Levi for Transaction Scheduling."""
 
-from problem import PROBLEM_DESCRIPTION, FUNCTION_SIGNATURE, SEED_PROGRAM, score_fn
 import levi
+from problem import PROBLEM_DESCRIPTION, FUNCTION_SIGNATURE, SEED_PROGRAM, score_fn
 
 
 def main() -> None:

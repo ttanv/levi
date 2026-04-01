@@ -7,8 +7,9 @@ smallest end-to-end example in the repo.
 
 Self-contained optimization example with no external dataset:
 
+- Setup: `uv sync`
 - Path: `examples/circle_packing/`
-- Run: `cd examples/circle_packing && uv run --no-sync python run.py`
+- Run: `cd examples/circle_packing && uv run python run.py`
 
 The example assumes the local Qwen endpoint is `http://localhost:8000/v1`.
 If your local server uses a different port or you want a smaller budget, edit
@@ -22,6 +23,7 @@ Additional ADRS benchmark examples live under:
 - `examples/ADRS/`
 
 Each example directory uses `run.py` as its entrypoint.
+Install the repo first with `uv sync`.
 
 Suggested picks:
 

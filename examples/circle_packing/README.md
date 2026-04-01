@@ -15,14 +15,15 @@ def run_packing() -> tuple[np.ndarray, np.ndarray, float]:
 The evaluator enforces boundary and non-overlap constraints. Invalid packings
 get score `0`.
 
-If you installed LEVI with `pip` instead of `uv`, replace `uv run --no-sync python run.py`
+If you installed LEVI with `pip` instead of `uv`, replace `uv run python run.py`
 below with `python run.py`.
 
 ## Run
 
 ```bash
+uv sync
 cd examples/circle_packing
-uv run --no-sync python run.py
+uv run python run.py
 ```
 
 Published configuration uses:
@@ -37,16 +38,3 @@ Local model defaults:
 To shorten the run or use a different local endpoint, edit the corresponding
 lines in `run.py`.
 
-## Quick Sanity Check (Seed Score)
-
-```bash
-cd examples/circle_packing
-python - <<'PY'
-from problem import score_fn, SEED_PROGRAM
-
-scope = {}
-exec(SEED_PROGRAM, scope)
-run_packing = scope["run_packing"]
-print(score_fn(run_packing))
-PY
-```

@@ -9,6 +9,8 @@ Install `uv` first: <https://docs.astral.sh/uv/getting-started/installation/>
 Most examples require the ADRS Leaderboard dataset:
 
 ```bash
+uv sync
+
 git clone https://github.com/cmu-db/ADRS-Leaderboard.git
 export ADRS_EXAMPLE_DATA_ROOT=/path/to/ADRS-Leaderboard
 ```
@@ -24,7 +26,7 @@ uv sync --extra example-llm-sql # just LLM SQL (requires pandas)
 Each problem directory uses the same entrypoint:
 
 ```bash
-uv run --no-sync python run.py
+uv run python run.py
 ```
 
 ## Suggested Starting Points

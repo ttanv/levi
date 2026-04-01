@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Run Levi on PRISM (GPU Model Placement) Problem."""
 
-from problem import PROBLEM_DESCRIPTION, FUNCTION_SIGNATURE, SEED_PROGRAM, get_lazy_inputs, score_fn
 import levi
+from problem import PROBLEM_DESCRIPTION, FUNCTION_SIGNATURE, SEED_PROGRAM, get_lazy_inputs, score_fn
 
 
 def main() -> None:

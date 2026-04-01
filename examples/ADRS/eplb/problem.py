@@ -9,7 +9,15 @@ import json
 import time
 from pathlib import Path
 
-import torch
+try:
+    import torch
+except ModuleNotFoundError as e:
+    if e.name == "torch":
+        raise RuntimeError(
+            "EPLB requires torch. From the repo root, run:\n"
+            "  uv sync --extra example-eplb"
+        ) from e
+    raise
 
 # --- EPLB Constants ---
 NUM_REPLICAS = 288

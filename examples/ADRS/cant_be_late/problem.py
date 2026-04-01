@@ -638,8 +638,9 @@ Keep it SHORT and DIRECT:
 
 Provide your lessons (150-200 words max):"""
 
-
-INPUTS = generate_test_cases()
+def get_inputs() -> List[SimulationConfig]:
+    """Build evaluation inputs on demand."""
+    return generate_test_cases()
 
 
 def score_fn(strategy_step, inputs: List[SimulationConfig]):
