@@ -468,6 +468,11 @@ class CVTMAPElitesPool:
         distances = np.sum((self._centroids - vec) ** 2, axis=1)
         return int(np.argmin(distances))
 
+    def preview_cell(self, program: Program, evaluation_scores: Optional[dict] = None) -> int:
+        """Predict which cell a program would map to without mutating the archive."""
+        behavior = self._extractor.extract(program, evaluation_scores)
+        return self._find_nearest_centroid(behavior)
+
     def add(self, program: Program, evaluation_result: EvaluationResult) -> tuple[bool, int]:
         """Add program to archive. Returns (accepted, cell_index)."""
         if not evaluation_result.is_valid:
