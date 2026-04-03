@@ -92,6 +92,7 @@ async def eval_consumer(
                 break
             try:
                 cascade = config.cascade
+                quick_score = None
                 if cascade.enabled and cascade.quick_inputs:
                     quick_result = await executor.run(
                         evaluate_code,
@@ -105,9 +106,24 @@ async def eval_consumer(
                         result = quick_result
                     else:
                         quick_score = quick_result.get("score", 0)
-                        threshold = state.best_score_so_far * cascade.min_score_ratio
-                        if quick_score < threshold:
-                            result = {"cascade_rejected": True, "quick_score": quick_score, "threshold": threshold}
+                        preview_program = Program(content=item["code"])
+                        target_cell = pool.preview_cell(preview_program, quick_result)
+                        incumbent = pool.get_elite(target_cell)
+                        incumbent_quick_score = None
+                        if incumbent is not None:
+                            incumbent_quick_score = incumbent.result.scores.get("quick_score")
+
+                        threshold = None
+                        if incumbent_quick_score is not None:
+                            threshold = incumbent_quick_score * cascade.min_score_ratio
+
+                        if threshold is not None and quick_score < threshold:
+                            result = {
+                                "cascade_rejected": True,
+                                "quick_score": quick_score,
+                                "threshold": threshold,
+                                "target_cell": target_cell,
+                            }
                         else:
                             result = await executor.run(
                                 evaluate_code,
@@ -150,6 +166,8 @@ async def eval_consumer(
                     else:
                         result = dict(result)
                         result["score"] = score
+                        if quick_score is not None:
+                            result["quick_score"] = quick_score
 
                         program = Program(content=item["code"])
                         eval_result = EvaluationResult(

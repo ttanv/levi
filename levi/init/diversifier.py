@@ -406,6 +406,44 @@ class Diversifier:
                 logger.info(f"    Code: {code_preview}...")
         return valid_programs, behavior_vectors
 
+    async def _backfill_quick_scores(self, programs: list[dict]) -> None:
+        """Compute quick_scores for programs that don't have one yet.
+
+        Modifies each program's 'result' dict in-place, adding 'quick_score'.
+        Programs that already have a quick_score or where quick eval fails are skipped.
+        """
+        cascade = self.config.cascade
+        if not (cascade.enabled and cascade.quick_inputs):
+            return
+
+        fn_name = extract_fn_name(self.config.function_signature)
+        tasks = []
+        indices = []
+        for i, prog in enumerate(programs):
+            if "quick_score" not in prog["result"]:
+                tasks.append(
+                    self.executor.run(
+                        evaluate_code,
+                        prog["code"],
+                        self.config.score_fn,
+                        cascade.quick_inputs,
+                        fn_name,
+                        timeout=cascade.quick_timeout,
+                    )
+                )
+                indices.append(i)
+
+        if not tasks:
+            return
+
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        for i, qr in zip(indices, results):
+            if isinstance(qr, Exception) or "error" in qr:
+                continue
+            programs[i]["result"]["quick_score"] = qr.get("score", 0)
+
+        logger.info(f"[Init Phase 3] Computed quick_scores for {len(tasks)} archive seeds")
+
     async def _populate_archive(
         self,
         pool: CVTMAPElitesPool,
@@ -419,9 +457,12 @@ class Diversifier:
         if not behavior_vectors:
             logger.warning("[Init Phase 3] No valid programs to build centroids")
             if seed_program and seed_result and "error" not in seed_result:
+                fallback = [{"code": seed_program, "result": {**seed_result}}]
+                await self._backfill_quick_scores(fallback)
+
                 program = Program(content=seed_program, metadata={"primary_score": seed_result.get("score", 0.0)})
                 eval_result = EvaluationResult(
-                    scores=seed_result,
+                    scores=fallback[0]["result"],
                     is_valid=True,
                 )
                 accepted, _ = pool.add(program, eval_result)
@@ -446,10 +487,16 @@ class Diversifier:
                 cell_to_programs[cell] = []
             cell_to_programs[cell].append(prog)
 
+        # Select best program per cell and backfill quick_scores for cascade
+        best_per_cell = {
+            cell_idx: max(progs, key=lambda p: p["score"])
+            for cell_idx, progs in cell_to_programs.items()
+        }
+        await self._backfill_quick_scores(list(best_per_cell.values()))
+
         # For each cell, add the best-scoring program directly (no re-extraction)
         n_accepted = 0
-        for cell_idx, progs in cell_to_programs.items():
-            best_prog = max(progs, key=lambda p: p["score"])
+        for cell_idx, best_prog in best_per_cell.items():
             program = Program(content=best_prog["code"], metadata={"primary_score": best_prog["score"]})
             eval_result = EvaluationResult(
                 scores=best_prog["result"],
