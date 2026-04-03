@@ -488,10 +488,7 @@ class Diversifier:
             cell_to_programs[cell].append(prog)
 
         # Select best program per cell and backfill quick_scores for cascade
-        best_per_cell = {
-            cell_idx: max(progs, key=lambda p: p["score"])
-            for cell_idx, progs in cell_to_programs.items()
-        }
+        best_per_cell = {cell_idx: max(progs, key=lambda p: p["score"]) for cell_idx, progs in cell_to_programs.items()}
         await self._backfill_quick_scores(list(best_per_cell.values()))
 
         # For each cell, add the best-scoring program directly (no re-extraction)
