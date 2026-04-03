@@ -3,7 +3,7 @@
   <img src="assets/logos/levi_logo_light.svg#gh-light-mode-only" width="25%" alt="LEVI" />
 </p>
 
-<p align="center"><strong>Better LLM Optimization for the Price of a Cup of Coffee</strong></p>
+<p align="center"><strong>AlphaEvolve Performance for the Price of a Cup of Coffee</strong></p>
 
 <p align="center">
   <a href="https://github.com/ttanv/levi/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/ttanv/levi/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
