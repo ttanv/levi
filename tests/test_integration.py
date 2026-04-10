@@ -8,7 +8,6 @@ punctuated equilibrium, budget tracking).
 These tests serve as regression gates for large refactors.
 """
 
-import asyncio
 import threading
 from unittest.mock import patch
 

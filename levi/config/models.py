@@ -29,7 +29,7 @@ class BudgetConfig(BaseModel):
 
 class CVTConfig(BaseModel):
     n_centroids: int = 50
-    defer_centroids: bool = True
+    data_driven_centroids: bool = True
 
 
 class InitConfig(BaseModel):
@@ -57,6 +57,7 @@ class BehaviorConfig(BaseModel):
     ast_features: list[str] = Field(default=["loop_count", "branch_count", "math_operators", "loop_nesting_max"])
     score_keys: list[str] = Field(default_factory=list)
     init_noise: float = 0.0
+
     # Custom extractors: Callable[[Program], float]. Unlike built-in AST extractors,
     # these receive only the Program, making them usable for non-code content types.
     custom_extractors: dict[str, Callable] = Field(default_factory=dict)
@@ -119,22 +120,15 @@ class LeviConfig(BaseModel):
     function_signature: str
     seed_program: str | None = None
     inputs: Optional[list[Any]] = None
-    # v0.1: code-only. First arg is the extracted callable from exec().
-    # Supports either score_fn(fn) or score_fn(fn, inputs).
-    # For prompt support, generalize to Callable[[str | Callable, ...], dict].
     score_fn: Callable[..., dict]
     budget: BudgetConfig
 
-    # Core model config — the simple API.
-    # Both accept a single string or a list of strings.
+    # Core model config
     paradigm_models: str | list[str] = "openai/gpt-4o"
     mutation_models: str | list[str] = "openai/gpt-4o-mini"
-
-    # Optional: for local model routing (auto-registers with litellm at startup)
     local_endpoints: dict[str, str] = Field(default_factory=dict)
 
     # Optional: for cost tracking on custom/local models (auto-registers with litellm).
-    # Without this, dollar-budget tracking won't work for unregistered models.
     model_info: dict[str, dict] = Field(default_factory=dict)
 
     # Auto-generated from mutation_models if not provided.
