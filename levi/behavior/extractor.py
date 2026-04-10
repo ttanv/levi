@@ -73,6 +73,7 @@ class BehaviorExtractor:
         ]
         self.score_keys = score_keys or []
         self.init_noise = init_noise
+
         # Custom extractors take (Program,) only — no AST dependency.
         # This allows non-code content types (e.g. prompts) to provide extractors.
         self._custom_extractors: dict[str, Callable[[Program], float]] = custom_extractors or {}

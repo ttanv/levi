@@ -122,14 +122,6 @@ class TestEvaluationResult:
 
         assert result.primary_score == 0.0
 
-    def test_invalid_factory_method(self):
-        """invalid() factory creates invalid result correctly."""
-        result = EvaluationResult.invalid(error="Timeout after 10s")
-
-        assert result.is_valid is False
-        assert result.error == "Timeout after 10s"
-        assert result.scores == {}
-
     def test_evaluation_result_mutable(self):
         """EvaluationResult is mutable (not frozen)."""
         result = EvaluationResult()

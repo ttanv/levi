@@ -29,11 +29,3 @@ class EvaluationResult:
         if self.scores:
             return next(iter(self.scores.values()))
         return 0.0
-
-    @classmethod
-    def invalid(cls, error: str) -> "EvaluationResult":
-        """Factory method for creating an invalid result."""
-        return cls(
-            is_valid=False,
-            error=error,
-        )
