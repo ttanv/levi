@@ -317,7 +317,7 @@ class CVTMAPElitesPool:
         temperature: float = 1.0,
         bounds_padding: float = 0.1,
         subscore_keys: Optional[list[str]] = None,
-        defer_centroids: bool = False,
+        data_driven_centroids: bool = False,
     ) -> None:
         self._extractor = behavior_extractor
         self._n_centroids = n_centroids
@@ -329,9 +329,9 @@ class CVTMAPElitesPool:
         self._maxs: Optional[np.ndarray] = None
         self._ranges: Optional[np.ndarray] = None
 
-        # Initialize centroids (can be deferred for data-driven initialization)
+        # Initialize centroids: uniform upfront tiling, or defer for data-driven init via set_centroids_from_data
         self._centroids: Optional[np.ndarray] = None
-        if not defer_centroids:
+        if not data_driven_centroids:
             self._centroids = self._init_cvt_centroids()
 
         # Single shared archive

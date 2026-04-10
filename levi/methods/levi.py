@@ -384,7 +384,7 @@ async def _run_async(config: LeviConfig, resume_snapshot: dict | None = None) ->
     pool = CVTMAPElitesPool(
         behavior_extractor=extractor,
         n_centroids=config.cvt.n_centroids,
-        defer_centroids=config.cvt.defer_centroids,
+        data_driven_centroids=config.cvt.data_driven_centroids,
     )
 
     for pair in config.sampler_model_pairs:
