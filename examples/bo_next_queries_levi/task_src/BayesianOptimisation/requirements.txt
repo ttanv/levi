@@ -1,0 +1,14 @@
+# === Core Dependencies ===
+flax==0.10.2
+optax==0.2.8
+chex==0.1.91
+numpy
+scipy
+
+tensorflow
+tensorflow-probability==0.25.0
+distrax==0.1.7
+
+tinygp==0.3.1
+
+codecarbon
