@@ -62,7 +62,6 @@ class BehaviorExtractor:
         self,
         ast_features: Optional[list[str]] = None,
         score_keys: Optional[list[str]] = None,
-        init_noise: float = 0.15,
         custom_extractors: Optional[dict[str, Callable[[Program], float]]] = None,
     ) -> None:
         self.ast_features = ast_features or [
@@ -72,7 +71,6 @@ class BehaviorExtractor:
             "range_max_arg",
         ]
         self.score_keys = score_keys or []
-        self.init_noise = init_noise
 
         # Custom extractors take (Program,) only — no AST dependency.
         # This allows non-code content types (e.g. prompts) to provide extractors.
@@ -82,9 +80,6 @@ class BehaviorExtractor:
         # All features = AST features + score keys
         self.features = self.ast_features + self.score_keys
 
-        # Phase control for noise
-        self._phase = "init"
-
         # Welford's online algorithm for z-score normalization (adaptive mode)
         self._count: dict[str, int] = {f: 0 for f in self.features}
         self._mean: dict[str, float] = {f: 0.0 for f in self.features}
@@ -92,10 +87,6 @@ class BehaviorExtractor:
 
         # Fixed bounds mode (deterministic normalization)
         self._fixed_bounds: Optional[dict[str, tuple[float, float]]] = None
-
-    def set_phase(self, phase: str) -> None:
-        """Set extraction phase: 'init' adds noise, 'evolution' does not."""
-        self._phase = phase
 
     def set_fixed_bounds(self, bounds: dict[str, tuple[float, float]]) -> None:
         """
@@ -207,11 +198,5 @@ class BehaviorExtractor:
                 self._update_stats(feature, raw)
                 z = (raw - self._mean[feature]) / self._get_std(feature)
                 values[feature] = self._zscore_to_01(z)
-
-            # Add noise during init phase (only in adaptive mode)
-            if self._phase == "init" and self.init_noise > 0:
-                for feature in self.features:
-                    noise = np.random.normal(0, self.init_noise)
-                    values[feature] = float(np.clip(values[feature] + noise, 0.0, 1.0))
 
         return FeatureVector(values)

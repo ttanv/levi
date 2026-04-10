@@ -56,7 +56,6 @@ class MetaAdviceConfig(BaseModel):
 class BehaviorConfig(BaseModel):
     ast_features: list[str] = Field(default=["loop_count", "branch_count", "math_operators", "loop_nesting_max"])
     score_keys: list[str] = Field(default_factory=list)
-    init_noise: float = 0.0
 
     # Custom extractors: Callable[[Program], float]. Unlike built-in AST extractors,
     # these receive only the Program, making them usable for non-code content types.
@@ -85,7 +84,6 @@ class PunctuatedEquilibriumConfig(BaseModel):
     n_variants: int = 3
     heavy_models: Optional[list[str]] = None
     variant_models: Optional[list[str]] = None
-    behavior_noise: float = 0.0
     temperature: Optional[float] = None
     reasoning_effort: Optional[str] = None
 

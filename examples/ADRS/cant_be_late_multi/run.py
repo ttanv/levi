@@ -6,10 +6,10 @@ import re
 from datetime import datetime
 from typing import Optional
 
-import levi
-from problem import PROBLEM_DESCRIPTION, FUNCTION_SIGNATURE, SEED_PROGRAM, get_inputs, score_fn, DIVERSITY_SEED_PROMPT
-from levi.core import Program
+from problem import DIVERSITY_SEED_PROMPT, FUNCTION_SIGNATURE, PROBLEM_DESCRIPTION, SEED_PROGRAM, get_inputs, score_fn
 
+import levi
+from levi.core import Program
 
 # --- Domain-specific behavioral feature extractors ---
 # These capture algorithmic *family* differences rather than code style/verbosity.
@@ -121,7 +121,6 @@ def main() -> None:
                 'loop_count',
                 'decision_branch_depth',
             ],
-            init_noise=0.3,
             custom_extractors=CUSTOM_EXTRACTORS,
         ),
         punctuated_equilibrium=levi.PunctuatedEquilibriumConfig(
@@ -129,7 +128,6 @@ def main() -> None:
             interval=5,
             n_clusters=3,
             n_variants=3,
-            behavior_noise=0.3,
         ),
         prompt_opt=levi.PromptOptConfig(enabled=True),
         output_dir=f"runs/{datetime.now().strftime('%Y%m%d_%H%M%S')}_po",

@@ -106,7 +106,7 @@ class TestCVTMAPElitesPool:
 
     def test_add_passes_eval_scores_to_behavior_extractor(self, monkeypatch):
         """add() forwards eval scores so score_keys can affect behavior."""
-        extractor = BehaviorExtractor(ast_features=["code_length"], init_noise=0.0)
+        extractor = BehaviorExtractor(ast_features=["code_length"])
         pool = CVTMAPElitesPool(behavior_extractor=extractor, n_centroids=10)
 
         observed = {}
@@ -123,28 +123,6 @@ class TestCVTMAPElitesPool:
             is_valid=True,
         )
         pool.add(prog, result)
-
-        assert observed["eval_result"] == result.scores
-
-    def test_add_with_behavior_noise_passes_eval_scores_to_behavior_extractor(self, monkeypatch):
-        """add_with_behavior_noise() also forwards eval scores."""
-        extractor = BehaviorExtractor(ast_features=["code_length"], init_noise=0.0)
-        pool = CVTMAPElitesPool(behavior_extractor=extractor, n_centroids=10)
-
-        observed = {}
-
-        def fake_extract(program, eval_result=None):
-            observed["eval_result"] = eval_result
-            return FeatureVector({"code_length": 0.5})
-
-        monkeypatch.setattr(extractor, "extract", fake_extract)
-
-        prog = Program(content="def solve(x): return x")
-        result = EvaluationResult(
-            scores={"score": 0.8, "aux_metric": 7.0},
-            is_valid=True,
-        )
-        pool.add_with_behavior_noise(prog, result, noise_scale=0.01)
 
         assert observed["eval_result"] == result.scores
 

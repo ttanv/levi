@@ -14,11 +14,7 @@ from levi.utils import evaluate_code, extract_fn_name
 
 
 class DummyExtractor:
-    def __init__(self):
-        self.phase = None
-
-    def set_phase(self, phase: str):
-        self.phase = phase
+    pass
 
 
 class DummyPool:
@@ -173,7 +169,6 @@ class TestRestoreFromSnapshot:
         assert isinstance(pool.add_at_cell_calls[0][1], Program)
         assert pool.add_at_cell_calls[0][1].metadata == {"tag": "restored"}
         assert isinstance(pool.add_at_cell_calls[0][2], EvaluationResult)
-        assert extractor.phase == "evolution"
 
     def test_requires_cell_and_behavior_per_elite(self):
         pool = DummyPool(n_dims=2, centroids=None)

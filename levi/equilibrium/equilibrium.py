@@ -33,7 +33,7 @@ class PunctuatedEquilibrium:
     2. Selects best elite from each cluster as representative
     3. Generates paradigm shift solution using heavy model
     4. Generates variants using lighter models
-    5. Inserts solutions with behavior noise
+    5. Inserts solutions into the archive
     """
 
     def __init__(
@@ -349,11 +349,7 @@ Output ONLY complete, runnable Python code in a ```python block.
             )
 
             async with self.archive_lock:
-                accepted, cell_idx = self.pool.add_with_behavior_noise(
-                    program,
-                    eval_result,
-                    noise_scale=self.pe_config.behavior_noise,
-                )
+                accepted, cell_idx = self.pool.add(program, eval_result)
 
             stats["paradigm_accepted"] = accepted
             stats["paradigm_cell"] = cell_idx
@@ -477,11 +473,7 @@ Output ONLY complete, runnable Python code in a ```python block.
                     )
 
                     async with self.archive_lock:
-                        accepted, cell_idx = self.pool.add_with_behavior_noise(
-                            program,
-                            eval_result,
-                            noise_scale=self.pe_config.behavior_noise,
-                        )
+                        accepted, cell_idx = self.pool.add(program, eval_result)
 
                     if accepted:
                         stats["variants_accepted"] += 1

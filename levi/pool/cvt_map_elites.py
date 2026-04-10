@@ -559,57 +559,6 @@ class CVTMAPElitesPool:
 
         return False
 
-    def add_with_behavior_noise(
-        self,
-        program: Program,
-        evaluation_result: EvaluationResult,
-        noise_scale: float = 0.05,
-    ) -> tuple[bool, int]:
-        """
-        Add program with noise applied to behavior vector before cell assignment.
-
-        This allows PE solutions to potentially land in nearby cells,
-        increasing exploration of the behavior space.
-
-        Args:
-            program: The program to add
-            evaluation_result: Evaluation results for the program
-            noise_scale: Standard deviation of Gaussian noise to add (default 0.05)
-
-        Returns:
-            Tuple of (accepted: bool, cell_index: int)
-        """
-        if not evaluation_result.is_valid:
-            return False, -1
-
-        behavior = self._extractor.extract(program, evaluation_result.scores)
-
-        # Apply noise to normalized behavior before cell assignment
-        noisy_values = {}
-        for feature in self._feature_names:
-            original = behavior[feature]
-            noise = np.random.normal(0, noise_scale)
-            noisy_values[feature] = float(np.clip(original + noise, 0.0, 1.0))
-
-        noisy_behavior = FeatureVector(noisy_values)
-        cell_index = self._find_nearest_centroid(noisy_behavior)
-
-        # Store original behavior (not noisy) for the elite record
-        raw_behavior = behavior.values.copy()
-        new_score = evaluation_result.primary_score
-
-        if cell_index not in self._elites:
-            self._elites[cell_index] = Elite(program, evaluation_result, behavior, raw_behavior)
-            self._best_score = max(self._best_score, new_score)
-            return True, cell_index
-
-        if new_score > self._elites[cell_index].result.primary_score:
-            self._elites[cell_index] = Elite(program, evaluation_result, behavior, raw_behavior)
-            self._best_score = max(self._best_score, new_score)
-            return True, cell_index
-
-        return False, cell_index
-
     def get_elites(self) -> dict[int, Elite]:
         """Get all elites in the archive."""
         return self._elites

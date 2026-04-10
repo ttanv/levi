@@ -59,7 +59,7 @@ def _setup_logging() -> None:
 
 def _restore_from_snapshot(
     pool: CVTMAPElitesPool,
-    extractor: BehaviorExtractor,
+    _extractor: BehaviorExtractor,
     snapshot: dict,
 ) -> float:
     """
@@ -116,7 +116,6 @@ def _restore_from_snapshot(
         if accepted:
             restored += 1
 
-    extractor.set_phase("evolution")
     logger.info(f"[Resume] Restored {restored}/{len(elites)} elites into pool")
     return resumed_cost
 
@@ -369,6 +368,7 @@ async def _run_async(config: LeviConfig, resume_snapshot: dict | None = None) ->
         temperature=config.pipeline.temperature,
         max_tokens=config.pipeline.max_tokens,
     )
+
     llm_client = UnifiedLLMClient(llm_config)
     set_llm_client(llm_client)
 
@@ -376,7 +376,6 @@ async def _run_async(config: LeviConfig, resume_snapshot: dict | None = None) ->
     extractor = BehaviorExtractor(
         ast_features=config.behavior.ast_features,
         score_keys=config.behavior.score_keys,
-        init_noise=config.behavior.init_noise,
         custom_extractors=config.behavior.custom_extractors or None,
     )
 

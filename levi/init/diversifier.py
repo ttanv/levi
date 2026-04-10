@@ -145,7 +145,6 @@ class Diversifier:
             pool,
             valid_programs,
             behavior_vectors,
-            extractor,
             seed_program,
             seed_result,  # Always pass seed as fallback
         )
@@ -449,7 +448,6 @@ class Diversifier:
         pool: CVTMAPElitesPool,
         valid_programs: list[dict],
         behavior_vectors: list[np.ndarray],
-        extractor: BehaviorExtractor,
         seed_program: str = None,
         seed_result: dict = None,
     ) -> None:
@@ -469,7 +467,6 @@ class Diversifier:
                 logger.info(
                     f"[Init Phase 3] Added seed program as fallback (accepted={accepted}), archive size: {pool.size()}"
                 )
-            extractor.set_phase("evolution")
             return
 
         # Build centroids from init-generated programs (seed + diverse seeds + variants).
@@ -506,6 +503,3 @@ class Diversifier:
         logger.info(
             f"[Init Phase 3] Done: {n_accepted} cells filled, archive size: {pool.size()}, best: {best_score:.17g}, cost: ${self.total_cost:.3f}"
         )
-
-        # Switch extractor to evolution phase
-        extractor.set_phase("evolution")
