@@ -66,10 +66,12 @@ class MockLLM:
         code = PROGRAMS[idx]
         content = f"```python\n{code}\n```"
 
-        self.calls.append({
-            "model": model,
-            "prompt_snippet": messages[0]["content"][:200] if messages else "",
-        })
+        self.calls.append(
+            {
+                "model": model,
+                "prompt_snippet": messages[0]["content"][:200] if messages else "",
+            }
+        )
 
         return CompletionResponse(
             content=content,
