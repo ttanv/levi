@@ -5,6 +5,7 @@ import logging
 from collections.abc import Callable
 from typing import Optional
 
+from ..clients import client_name, short_client_name
 from ..config import LeviConfig
 from ..core import EvaluationResult, Program
 from ..pool import CVTMAPElitesPool
@@ -17,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 
 def _short_model(model: str) -> str:
-    return model.split("/")[-1]
+    return short_client_name(model)
 
 
 def _model_label(item: dict) -> str:
@@ -265,8 +266,6 @@ def _format_metrics_for_llm(
 
 
 async def _generate_meta_advice(config: LeviConfig, state: PipelineState) -> None:
-    from ..llm import get_llm_client
-
     if not config.meta_advice.model:
         return
 
@@ -281,22 +280,19 @@ async def _generate_meta_advice(config: LeviConfig, state: PipelineState) -> Non
     prompt = META_ADVISOR_PROMPT.format(metrics_data=metrics_data)
 
     try:
-        llm = get_llm_client()
-
         extras = {}
-        if "deepseek" in config.meta_advice.model.lower():
+        if "deepseek" in client_name(config.meta_advice.model).lower():
             extras["reasoning"] = {"enabled": True}
 
         response = await state.acompletion(
-            llm,
-            model=config.meta_advice.model,
-            messages=[{"role": "user", "content": prompt}],
+            config.meta_advice.model,
+            prompt=[{"role": "user", "content": prompt}],
             temperature=config.meta_advice.temperature,
             max_tokens=config.meta_advice.max_tokens,
             timeout=60,
             **extras,
         )
-        advice = response.content.strip()
+        advice = response.text.strip()
         cost = response.cost
     except BudgetLimitReached:
         return

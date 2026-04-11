@@ -6,12 +6,13 @@ import random
 
 import numpy as np
 
+from ..clients import client_name
 from ..behavior import BehaviorExtractor
 from ..config import LeviConfig
 from ..core import EvaluationResult, Program
-from ..llm import OutputMode, ProgramWithScore, PromptBuilder, get_llm_client
 from ..pipeline.state import BudgetLimitReached, PipelineState, ScoreHistoryEntry
 from ..pool import CVTMAPElitesPool
+from ..prompts import OutputMode, ProgramWithScore, PromptBuilder
 from ..utils import ResilientProcessPool, evaluate_code, extract_code, extract_fn_name
 
 logger = logging.getLogger(__name__)
@@ -67,10 +68,9 @@ class Diversifier:
         self.total_cost = 0.0
         self.best_score = 0.0
 
-    async def _acompletion(self, *, model: str, messages: list, **kwargs):
+    async def _acompletion(self, *, model, prompt, **kwargs):
         """Route completion through state for budget tracking."""
-        llm = get_llm_client()
-        return await self.state.acompletion(llm, model=model, messages=messages, **kwargs)
+        return await self.state.acompletion(model, prompt=prompt, **kwargs)
 
     def _record_score(self, score: float, sampler: str) -> None:
         """Record a score from the init phase."""
@@ -169,7 +169,7 @@ class Diversifier:
             # Generate more seeds to compensate for missing seed program
             n_seeds += 1
 
-        logger.info(f"[Init Phase 1] Generating {n_seeds} diverse seeds with {model}")
+        logger.info(f"[Init Phase 1] Generating {n_seeds} diverse seeds with {client_name(model)}")
 
         max_retries = 3
         for i in range(n_seeds):
@@ -208,11 +208,11 @@ class Diversifier:
                     }
                     response = await self._acompletion(
                         model=model,
-                        messages=[{"role": "user", "content": prompt}],
+                        prompt=[{"role": "user", "content": prompt}],
                         temperature=self.config.init.temperature,
                         **llm_kwargs,
                     )
-                    content = response.content
+                    content = response.text
                     self.total_cost += response.cost
 
                     new_code = extract_code(content)
@@ -268,7 +268,9 @@ class Diversifier:
         models = self.config.init.variant_models or ["gpt-4o-mini"]
         n_variants = n_variants_per_seed * len(diverse_seeds)
 
-        logger.info(f"[Init Phase 2] Generating {n_variants} variants with {models}")
+        logger.info(
+            f"[Init Phase 2] Generating {n_variants} variants with {[client_name(model) for model in models]}"
+        )
 
         # Build all seeds as ProgramWithScore for sampling
         all_parents = []
@@ -301,12 +303,12 @@ class Diversifier:
             try:
                 response = await self._acompletion(
                     model=model,
-                    messages=[{"role": "user", "content": prompt}],
+                    prompt=[{"role": "user", "content": prompt}],
                     temperature=self.config.init.temperature,
                     max_tokens=4096,
                     timeout=300,
                 )
-                return {"idx": idx, "content": response.content, "cost": response.cost}
+                return {"idx": idx, "content": response.text, "cost": response.cost}
             except BudgetLimitReached:
                 return {"idx": idx, "error": "Budget exhausted"}
             except Exception as e:

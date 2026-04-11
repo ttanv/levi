@@ -4,13 +4,17 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from ..clients.base import ClientSpec
+
 
 class SamplerModelPair(BaseModel):
     sampler: str
-    model: str
+    model: ClientSpec
     weight: float = 1.0
     temperature: Optional[float] = None  # For softmax sampler
     n_cycles: Optional[int] = None  # For cyclic_annealing sampler
+
+    model_config = {"arbitrary_types_allowed": True}
 
     @field_validator("weight")
     @classmethod
@@ -36,21 +40,25 @@ class InitConfig(BaseModel):
     enabled: bool = True
     n_diverse_seeds: int = 4
     n_variants_per_seed: int = 20
-    diversity_model: Optional[str] = None
-    variant_models: Optional[list[str]] = None
+    diversity_model: Optional[ClientSpec] = None
+    variant_models: Optional[list[ClientSpec]] = None
     temperature: Optional[float] = None
     diversity_prompt: Optional[str] = None  # Custom prompt for diverse seed generation
     diversity_llm_kwargs: dict = Field(
         default_factory=dict
     )  # Extra kwargs passed to diversity LLM calls (e.g. reasoning_effort, max_tokens)
 
+    model_config = {"arbitrary_types_allowed": True}
+
 
 class MetaAdviceConfig(BaseModel):
     enabled: bool = True
     interval: int = 50
-    model: Optional[str] = None
+    model: Optional[ClientSpec] = None
     max_tokens: int = 400
     temperature: Optional[float] = None
+
+    model_config = {"arbitrary_types_allowed": True}
 
 
 class BehaviorConfig(BaseModel):
@@ -82,15 +90,17 @@ class PunctuatedEquilibriumConfig(BaseModel):
     interval: int = 10
     n_clusters: int = 3
     n_variants: int = 3
-    heavy_models: Optional[list[str]] = None
-    variant_models: Optional[list[str]] = None
+    heavy_models: Optional[list[ClientSpec]] = None
+    variant_models: Optional[list[ClientSpec]] = None
     temperature: Optional[float] = None
     reasoning_effort: Optional[str] = None
+
+    model_config = {"arbitrary_types_allowed": True}
 
 
 class PromptOptConfig(BaseModel):
     enabled: bool = False
-    teacher_model: Optional[str] = None  # Model for MIPROv2 instruction proposals; None = paradigm_models[0]
+    teacher_model: Optional[ClientSpec] = None  # Model for MIPROv2 instruction proposals; None = paradigm_models[0]
     n_trials: int = 12
     num_candidates: int = 4
     num_threads: int = 4
@@ -99,6 +109,8 @@ class PromptOptConfig(BaseModel):
     optimize_paradigm_shift: bool = True  # Only runs if PE is enabled
     cache_dir: Optional[str] = None  # None = output_dir or cwd
     force: bool = False  # Re-optimize even if cached
+
+    model_config = {"arbitrary_types_allowed": True}
 
 
 class PipelineConfig(BaseModel):
@@ -122,12 +134,8 @@ class LeviConfig(BaseModel):
     budget: BudgetConfig
 
     # Core model config
-    paradigm_models: str | list[str] = "openai/gpt-4o"
-    mutation_models: str | list[str] = "openai/gpt-4o-mini"
-    local_endpoints: dict[str, str] = Field(default_factory=dict)
-
-    # Optional: for cost tracking on custom/local models (auto-registers with litellm).
-    model_info: dict[str, dict] = Field(default_factory=dict)
+    paradigm_models: ClientSpec | list[ClientSpec] = "openai/gpt-4o"
+    mutation_models: ClientSpec | list[ClientSpec] = "openai/gpt-4o-mini"
 
     # Auto-generated from mutation_models if not provided.
     # Pass explicitly to override (e.g. for custom sampler/temperature combos).
@@ -152,10 +160,10 @@ class LeviConfig(BaseModel):
 
     @model_validator(mode="after")
     def _auto_wire_models(self) -> "LeviConfig":
-        # 1. Coerce str → list[str]
-        if isinstance(self.paradigm_models, str):
+        # 1. Coerce single client spec to list[ClientSpec]
+        if not isinstance(self.paradigm_models, list):
             self.paradigm_models = [self.paradigm_models]
-        if isinstance(self.mutation_models, str):
+        if not isinstance(self.mutation_models, list):
             self.mutation_models = [self.mutation_models]
 
         # 2. Auto-generate sampler_model_pairs if not provided

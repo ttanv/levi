@@ -7,14 +7,11 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-import litellm
-
 from ..behavior import BehaviorExtractor, FeatureVector
+from ..clients import BaseClient
 from ..config import BudgetConfig, LeviConfig, LeviResult
 from ..core import EvaluationResult, Program
 from ..init import Diversifier
-from ..llm import clear_llm_client, set_llm_client
-from ..llm.unified_client import UnifiedLLMClient, UnifiedLLMClientConfig
 from ..pipeline import PipelineRunner
 from ..pipeline.state import PipelineState
 from ..pool import CVTMAPElitesPool
@@ -22,27 +19,8 @@ from ..utils import ResilientProcessPool, evaluate_code, extract_fn_name
 
 logger = logging.getLogger(__name__)
 
-
-def _register_models_with_litellm(config: LeviConfig) -> None:
-    """Auto-register local endpoints and model info with litellm."""
-    # Register local endpoints so litellm routes to them
-    for model_name, base_url in config.local_endpoints.items():
-        registration: dict = {
-            "litellm_params": {
-                "model": f"openai/{model_name}",
-                "api_base": base_url,
-                "api_key": "unused",
-            }
-        }
-        # Merge model_info if available (for cost tracking)
-        if model_name in config.model_info:
-            registration.update(config.model_info[model_name])
-        litellm.register_model({model_name: registration})
-
-    # Register model_info for non-local models (cost tracking for custom cloud models)
-    non_local_info = {k: v for k, v in config.model_info.items() if k not in config.local_endpoints}
-    if non_local_info:
-        litellm.register_model(non_local_info)
+ModelSpec = str | BaseClient
+ModelSpecOrList = ModelSpec | list[ModelSpec]
 
 
 def _setup_logging() -> None:
@@ -126,9 +104,9 @@ def _build_config(
     seed_program: str | None,
     score_fn: Callable[..., dict],
     inputs: list[Any] | None,
-    model: str | list[str] | None,
-    paradigm_model: str | list[str] | None,
-    mutation_model: str | list[str] | None,
+    model: ModelSpecOrList | None,
+    paradigm_model: ModelSpecOrList | None,
+    mutation_model: ModelSpecOrList | None,
     budget_dollars: float | None,
     budget_evals: int | None,
     budget_seconds: float | None,
@@ -209,9 +187,9 @@ def evolve_code(
     seed_program: str | None = None,
     score_fn: Callable[..., dict],
     inputs: list[Any] | None = None,
-    model: str | list[str] | None = None,
-    paradigm_model: str | list[str] | None = None,
-    mutation_model: str | list[str] | None = None,
+    model: ModelSpecOrList | None = None,
+    paradigm_model: ModelSpecOrList | None = None,
+    mutation_model: ModelSpecOrList | None = None,
     budget_dollars: float | None = None,
     budget_evals: int | None = None,
     budget_seconds: float | None = None,
@@ -273,7 +251,8 @@ def evolve_code(
         budget_seconds: Maximum wall-clock seconds.
         resume_snapshot: Optional snapshot dict to resume a previous run.
         **kwargs: Advanced overrides — any LeviConfig field (e.g. pipeline,
-            punctuated_equilibrium, output_dir, local_endpoints).
+            punctuated_equilibrium, output_dir). For custom endpoints or
+            explicit pricing, pass ``levi.Client(...)`` as a model.
 
     Returns:
         LeviResult with best_program, best_score, and run statistics.
@@ -345,16 +324,17 @@ async def _run_async(config: LeviConfig, resume_snapshot: dict | None = None) ->
     run_start_time = time.time()
     _setup_logging()
     state = PipelineState(config.budget, start_time=run_start_time)
+    state.configure_client_defaults(
+        temperature=config.pipeline.temperature,
+        max_tokens=config.pipeline.max_tokens,
+    )
     state.configure_llm_concurrency(config.pipeline.n_llm_workers)
 
     logger.info("[Levi] Starting evolutionary optimization")
     logger.info(f"[Levi] Budget: {config.budget}")
     logger.info(f"[Levi] Sampler-model pairs: {len(config.sampler_model_pairs)}")
 
-    # Register local endpoints and model info with litellm
-    _register_models_with_litellm(config)
-
-    # Run prompt optimization if enabled (before LLM client setup)
+    # Run prompt optimization if enabled.
     if config.prompt_opt.enabled and not config.prompt_overrides:
         from ..prompt_opt import optimize_prompts
 
@@ -362,15 +342,6 @@ async def _run_async(config: LeviConfig, resume_snapshot: dict | None = None) ->
         config.prompt_overrides = overrides
         state.total_cost += opt_cost
         logger.info(f"[Levi] Prompt optimization cost: ${opt_cost:.3f}")
-
-    # Initialize unified LLM client
-    llm_config = UnifiedLLMClientConfig(
-        temperature=config.pipeline.temperature,
-        max_tokens=config.pipeline.max_tokens,
-    )
-
-    llm_client = UnifiedLLMClient(llm_config)
-    set_llm_client(llm_client)
 
     # Create behavior extractor
     extractor = BehaviorExtractor(
@@ -438,6 +409,5 @@ async def _run_async(config: LeviConfig, resume_snapshot: dict | None = None) ->
         return result
 
     finally:
-        await llm_client.close()
-        clear_llm_client()
+        await state.close_clients()
         executor.shutdown()

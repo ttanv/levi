@@ -5,7 +5,7 @@ PromptBuilder is used to assemble prompts for LLM mutation generation.
 """
 
 from levi.core import EvaluationResult, Program
-from levi.llm import OutputMode, ProgramWithScore, PromptBuilder
+from levi.prompts import OutputMode, ProgramWithScore, PromptBuilder
 
 
 class TestOutputMode:

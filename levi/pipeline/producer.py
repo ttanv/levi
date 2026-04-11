@@ -6,9 +6,10 @@ import random
 import re
 from typing import Optional
 
+from ..clients import client_name
 from ..config import LeviConfig
-from ..llm import OutputMode, ProgramWithScore, PromptBuilder, get_llm_client
 from ..pool import CVTMAPElitesPool
+from ..prompts import OutputMode, ProgramWithScore, PromptBuilder
 from ..utils import extract_code
 from .state import BudgetLimitReached, PipelineState
 
@@ -77,8 +78,9 @@ async def llm_producer(
 
             # Check for optimized mutation instructions for this model
             mutation_overrides = config.prompt_overrides.get("mutation", {})
-            if model in mutation_overrides:
-                builder.set_custom_output(mutation_overrides[model])
+            model_key = client_name(model)
+            if model_key in mutation_overrides:
+                builder.set_custom_output(mutation_overrides[model_key])
             else:
                 builder.set_output_mode(output_mode)
 
@@ -88,21 +90,19 @@ async def llm_producer(
             prompt = builder.build()
 
             try:
-                llm = get_llm_client()
                 response = await state.acompletion(
-                    llm,
-                    model=model,
-                    messages=[{"role": "user", "content": prompt}],
+                    model,
+                    prompt=[{"role": "user", "content": prompt}],
                     temperature=config.pipeline.temperature,
                     max_tokens=config.pipeline.max_tokens,
                     timeout=300,
                 )
-                content = response.content
+                content = response.text
             except BudgetLimitReached:
                 stop_event.set()
                 break
             except Exception as e:
-                logger.warning(f"[LLM-{worker_id}] [{model}] Error: {e}")
+                logger.warning(f"[LLM-{worker_id}] [{model_key}] Error: {e}")
                 await asyncio.sleep(1.0)
                 continue
 
@@ -125,7 +125,7 @@ async def llm_producer(
                     "code": code,
                     "sampler": sampler_name,
                     "source_cell": sample.metadata.get("source_cell"),
-                    "model": model,
+                    "model": model_key,
                 }
             )
 

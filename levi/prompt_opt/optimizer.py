@@ -15,6 +15,8 @@ from typing import Any, Optional
 
 import dspy
 
+from ..clients import BaseClient, Client, client_name
+from ..clients.base import ClientSpec
 from ..config import LeviConfig
 from ..utils.code_extraction import extract_code, extract_fn_name
 from ..utils.evaluation import evaluate_code
@@ -54,21 +56,29 @@ def _configure_dspy_tips() -> None:
 
 
 def _make_dspy_lm(
-    model: str,
-    config: LeviConfig,
+    model: ClientSpec,
     temperature: float = 0.8,
     max_tokens: int = 8192,
 ) -> dspy.LM:
-    """Create a ``dspy.LM`` from an Levi model name + ``config.local_endpoints``."""
-    if model in config.local_endpoints:
-        return dspy.LM(
-            model=f"openai/{model}",
-            api_base=config.local_endpoints[model],
-            api_key="unused",
-            temperature=temperature,
-            max_tokens=max_tokens,
-        )
-    return dspy.LM(model=model, temperature=temperature, max_tokens=max_tokens)
+    """Create a ``dspy.LM`` from a Levi client spec."""
+    model_id = client_name(model)
+
+    if isinstance(model, Client):
+        kwargs = {
+            "model": model_id,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+        if "api_base" in model.defaults:
+            kwargs["api_base"] = model.defaults["api_base"]
+        if "api_key" in model.defaults:
+            kwargs["api_key"] = model.defaults["api_key"]
+        return dspy.LM(**kwargs)
+
+    if isinstance(model, BaseClient):
+        raise TypeError("DSPy prompt optimization supports string model specs or Levi's built-in Client.")
+
+    return dspy.LM(model=model_id, temperature=temperature, max_tokens=max_tokens)
 
 
 # ---------------------------------------------------------------------------
@@ -345,13 +355,15 @@ def _config_hash(config: LeviConfig) -> str:
             "problem_description": config.problem_description,
             "function_signature": config.function_signature,
             "seed_program": config.seed_program,
-            "mutation_models": sorted(config.mutation_models),
-            "paradigm_models": sorted(config.paradigm_models),
+            "mutation_models": sorted(client_name(model) for model in config.mutation_models),
+            "paradigm_models": sorted(client_name(model) for model in config.paradigm_models),
             "n_trials": config.prompt_opt.n_trials,
             "num_candidates": config.prompt_opt.num_candidates,
             "optimize_mutation": config.prompt_opt.optimize_mutation,
             "optimize_paradigm_shift": config.prompt_opt.optimize_paradigm_shift,
-            "teacher_model": config.prompt_opt.teacher_model,
+            "teacher_model": (
+                client_name(config.prompt_opt.teacher_model) if config.prompt_opt.teacher_model is not None else None
+            ),
         },
         sort_keys=True,
     )
@@ -495,10 +507,10 @@ def optimize_prompts(config: LeviConfig) -> tuple[dict, float]:
         trainset = _generate_mutation_examples(config, fn_name, seed_score)
 
         for model in config.mutation_models:
-            logger.info("[PromptOpt] Optimizing mutation prompt for %s", model)
+            logger.info("[PromptOpt] Optimizing mutation prompt for %s", client_name(model))
 
-            target_lm = _make_dspy_lm(model, config)
-            teacher_lm = _make_dspy_lm(opt_cfg.teacher_model, config)
+            target_lm = _make_dspy_lm(model)
+            teacher_lm = _make_dspy_lm(opt_cfg.teacher_model)
 
             dspy.configure(lm=target_lm)
 
@@ -527,10 +539,10 @@ def optimize_prompts(config: LeviConfig) -> tuple[dict, float]:
 
                 for _name, predictor in optimized_module.named_predictors():
                     if hasattr(predictor, "signature"):
-                        overrides["mutation"][model] = str(predictor.signature.instructions)
+                        overrides["mutation"][client_name(model)] = str(predictor.signature.instructions)
                         break
             except Exception as exc:
-                logger.error("[PromptOpt] Failed to optimize mutation for %s: %s", model, exc)
+                logger.error("[PromptOpt] Failed to optimize mutation for %s: %s", client_name(model), exc)
 
     # 3. Optimize paradigm shift prompt (only if PE is enabled)
     if opt_cfg.optimize_paradigm_shift and config.punctuated_equilibrium.enabled:
@@ -538,8 +550,8 @@ def optimize_prompts(config: LeviConfig) -> tuple[dict, float]:
 
         trainset = _generate_paradigm_shift_examples(config, seed_score)
         paradigm_model = config.paradigm_models[0]
-        target_lm = _make_dspy_lm(paradigm_model, config)
-        teacher_lm = _make_dspy_lm(opt_cfg.teacher_model, config)
+        target_lm = _make_dspy_lm(paradigm_model)
+        teacher_lm = _make_dspy_lm(opt_cfg.teacher_model)
         dspy.configure(lm=target_lm)
 
         def ps_metric(example, prediction, trace=None, _cfg=config, _fn=fn_name, _seed=config.seed_program):

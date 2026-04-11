@@ -5,6 +5,7 @@ import math
 
 import pytest
 
+from levi.clients import BaseClient, ClientResult
 from levi.config.models import BudgetConfig
 from levi.pipeline.state import BudgetLimitReached, PipelineState
 
@@ -137,49 +138,42 @@ class TestPipelineStateGates:
         assert asyncio.run(state.try_start_evaluation()) is True
 
     def test_llm_gate_accounts_cost_and_stops_new_calls(self):
-        class _Resp:
-            def __init__(self, content: str, cost: float):
-                self.content = content
-                self.cost = cost
-
-        class _LLM:
+        class _Client(BaseClient):
             def __init__(self):
+                super().__init__("m")
                 self.calls = 0
 
-            async def acompletion(self, **kwargs):
+            async def acompletion(self, prompt, **kwargs):
                 self.calls += 1
-                return _Resp(content="ok", cost=0.6)
+                return ClientResult(text="ok", cost=0.6)
 
         state = PipelineState(BudgetConfig(dollars=1.0))
-        state.configure_llm_concurrency(4)
-        llm = _LLM()
+        state.configure_client_concurrency(4)
+        client = _Client()
 
         asyncio.run(
             state.acompletion(
-                llm,
-                model="m",
-                messages=[{"role": "user", "content": "x"}],
+                client,
+                prompt=[{"role": "user", "content": "x"}],
                 timeout=1,
             )
         )
         asyncio.run(
             state.acompletion(
-                llm,
-                model="m",
-                messages=[{"role": "user", "content": "x"}],
+                client,
+                prompt=[{"role": "user", "content": "x"}],
                 timeout=1,
             )
         )
 
         assert state.total_cost > 1.0
-        assert llm.calls == 2
+        assert client.calls == 2
 
         with pytest.raises(BudgetLimitReached):
             asyncio.run(
                 state.acompletion(
-                    llm,
-                    model="m",
-                    messages=[{"role": "user", "content": "x"}],
+                    client,
+                    prompt=[{"role": "user", "content": "x"}],
                     timeout=1,
                 )
             )

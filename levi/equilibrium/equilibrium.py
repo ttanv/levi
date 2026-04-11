@@ -12,9 +12,9 @@ import random
 
 from sklearn.cluster import KMeans
 
+from ..clients import client_name
 from ..config import LeviConfig
 from ..core import EvaluationResult, Program
-from ..llm import get_llm_client
 from ..pipeline.state import BudgetLimitReached, PipelineState
 from ..pool import CVTMAPElitesPool
 from ..pool.cvt_map_elites import Elite
@@ -263,9 +263,6 @@ Output ONLY complete, runnable Python code in a ```python block.
         prompt = self._build_paradigm_shift_prompt(representatives, n_evaluations, budget_progress)
 
         try:
-            # Build call kwargs
-            llm = get_llm_client()
-
             extras = {}
             # Add reasoning_effort for DeepSeek models if configured
             if self.pe_config.reasoning_effort:
@@ -278,15 +275,14 @@ Output ONLY complete, runnable Python code in a ```python block.
                     logger.info(f"[PE] Using reasoning_effort={self.pe_config.reasoning_effort} for paradigm shift")
 
             response = await self.state.acompletion(
-                llm,
-                model=heavy_model,
-                messages=[{"role": "user", "content": prompt}],
+                heavy_model,
+                prompt=[{"role": "user", "content": prompt}],
                 temperature=self.pe_config.temperature,
                 max_tokens=4096,
                 timeout=300,
                 **extras,
             )
-            content = response.content
+            content = response.text
             cost = response.cost
             stats["total_cost"] += cost
         except BudgetLimitReached:
@@ -310,7 +306,7 @@ Output ONLY complete, runnable Python code in a ```python block.
             stats["evaluations"].append(
                 {
                     "source": "paradigm_shift",
-                    "model": heavy_model,
+                    "model": client_name(heavy_model),
                     "error": "Budget exhausted",
                     "archive_size": self.pool.size(),
                 }
@@ -356,7 +352,7 @@ Output ONLY complete, runnable Python code in a ```python block.
             stats["evaluations"].append(
                 {
                     "source": "paradigm_shift",
-                    "model": heavy_model,
+                    "model": client_name(heavy_model),
                     "score": score,
                     "accepted": accepted,
                     "cell_index": cell_idx,
@@ -371,7 +367,7 @@ Output ONLY complete, runnable Python code in a ```python block.
             stats["evaluations"].append(
                 {
                     "source": "paradigm_shift",
-                    "model": heavy_model,
+                    "model": client_name(heavy_model),
                     "error": error_message,
                     "archive_size": self.pool.size(),
                 }
@@ -387,26 +383,32 @@ Output ONLY complete, runnable Python code in a ```python block.
                 if not variant_models:
                     variant_models = [heavy_model]
 
-            logger.info(f"[PE] Generating {self.pe_config.n_variants} variants using models: {variant_models[:3]}...")
+            logger.info(
+                f"[PE] Generating {self.pe_config.n_variants} variants using models: "
+                f"{[client_name(model) for model in variant_models[:3]]}..."
+            )
 
             variant_prompt = self._build_variant_prompt(paradigm_code, stats["paradigm_score"])
 
-            async def generate_variant(model: str, idx: int):
+            async def generate_variant(model, idx: int):
                 try:
-                    llm = get_llm_client()
                     response = await self.state.acompletion(
-                        llm,
-                        model=model,
-                        messages=[{"role": "user", "content": variant_prompt}],
+                        model,
+                        prompt=[{"role": "user", "content": variant_prompt}],
                         temperature=self.pe_config.temperature,
                         max_tokens=4096,
                         timeout=300,
                     )
-                    return {"idx": idx, "content": response.content, "cost": response.cost, "model": model}
+                    return {
+                        "idx": idx,
+                        "content": response.text,
+                        "cost": response.cost,
+                        "model": client_name(model),
+                    }
                 except BudgetLimitReached:
-                    return {"idx": idx, "error": "Budget exhausted", "model": model}
+                    return {"idx": idx, "error": "Budget exhausted", "model": client_name(model)}
                 except Exception as e:
-                    return {"idx": idx, "error": str(e), "model": model}
+                    return {"idx": idx, "error": str(e), "model": client_name(model)}
 
             # Generate variants in parallel
             tasks = [

@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from ..clients import short_client_name
 from ..config import LeviConfig, LeviResult
 from ..equilibrium import PunctuatedEquilibrium
 from ..pool import CVTMAPElitesPool
@@ -199,7 +200,7 @@ class PipelineRunner:
         evaluations = stats.get("evaluations", [])
         for eval_data in evaluations:
             source = eval_data.get("source", "pe")
-            model = str(eval_data.get("model", "unknown")).split("/")[-1]
+            model = short_client_name(str(eval_data.get("model", "unknown")))
             archive_size = eval_data.get("archive_size", self.pool.size())
             try:
                 archive_size_int = int(archive_size)

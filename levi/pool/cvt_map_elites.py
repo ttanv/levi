@@ -18,6 +18,7 @@ import numpy as np
 from sklearn.cluster import KMeans
 
 from ..behavior import BehaviorExtractor, FeatureVector
+from ..clients.base import ClientSpec
 from ..core import EvaluationResult, Program
 from .protocol import SampleResult
 
@@ -298,7 +299,7 @@ class SubscoreSampler(Sampler):
 @dataclass
 class SamplerModelConfig:
     sampler_name: str
-    model: str
+    model: ClientSpec
     weight: float = 1.0
 
 
@@ -613,7 +614,7 @@ class CVTMAPElitesPool:
     def register_sampler_model_pair(
         self,
         sampler_name: str,
-        model: str,
+        model: ClientSpec,
         weight: float = 1.0,
         temperature: Optional[float] = None,
         n_cycles: Optional[int] = None,
@@ -639,7 +640,7 @@ class CVTMAPElitesPool:
         self._sampler_model_pairs.append(SamplerModelConfig(actual_sampler_name, model, weight))
         self._total_weight += weight
 
-    def get_weighted_sampler_config(self) -> tuple[str, str]:
+    def get_weighted_sampler_config(self) -> tuple[str, ClientSpec]:
         if not self._sampler_model_pairs:
             raise ValueError("No sampler-model pairs registered. Call register_sampler_model_pair() first.")
 

@@ -3,6 +3,7 @@
 import pytest
 from pydantic import ValidationError
 
+from levi import Client
 from levi.config.models import (
     BudgetConfig,
     LeviConfig,
@@ -147,14 +148,18 @@ class TestLeviConfig:
         )
         assert cfg.prompt_overrides == overrides
 
-    def test_local_endpoints_and_model_info(self):
+    def test_client_model_spec_is_preserved(self):
+        local_client = Client(
+            "Qwen/Qwen3-30B",
+            api_base="http://localhost:8001/v1",
+            api_key="unused",
+            input_cost_per_token=0.0000001,
+        )
         cfg = LeviConfig(
             **_minimal_config_kwargs(),
-            local_endpoints={"Qwen/Qwen3-30B": "http://localhost:8001/v1"},
-            model_info={"Qwen/Qwen3-30B": {"input_cost_per_token": 0.0000001}},
+            mutation_models=local_client,
         )
-        assert cfg.local_endpoints == {"Qwen/Qwen3-30B": "http://localhost:8001/v1"}
-        assert cfg.model_info == {"Qwen/Qwen3-30B": {"input_cost_per_token": 0.0000001}}
+        assert cfg.mutation_models == [local_client]
 
     def test_pipeline_max_tokens_default(self):
         cfg = LeviConfig(**_minimal_config_kwargs())

@@ -7,6 +7,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+from ..clients import ClientInput, ClientResolver, ClientSpec, DEFAULT_TIMEOUT
 from ..config import BudgetConfig
 
 logger = logging.getLogger(__name__)
@@ -240,22 +241,23 @@ class BudgetTracker:
 
 
 # ---------------------------------------------------------------------------
-# LLMGate – concurrency control and budget enforcement for LLM calls
+# ClientGate – concurrency control and budget enforcement for client calls
 # ---------------------------------------------------------------------------
 
 
-class LLMGate:
-    """Concurrency and budget gate for LLM API calls.
+class ClientGate:
+    """Concurrency and budget gate for text-generation client calls.
 
-    Wraps every ``llm_client.acompletion`` call with:
+    Wraps every ``client.acompletion`` call with:
     * semaphore-based concurrency limiting
     * budget-exhaustion check (raises ``BudgetLimitReached``)
     * automatic serial mode when budget is tight
     * cost extraction and accounting
     """
 
-    def __init__(self, tracker: BudgetTracker) -> None:
+    def __init__(self, tracker: BudgetTracker, resolver: ClientResolver) -> None:
         self._tracker = tracker
+        self._resolver = resolver
         self._semaphore = asyncio.Semaphore(1)
         self._serial_lock = asyncio.Lock()
 
@@ -268,17 +270,17 @@ class LLMGate:
 
     async def acompletion(
         self,
-        llm_client: Any,
+        client_spec: ClientSpec,
         *,
-        model: str,
-        messages: list[dict[str, str]],
+        prompt: ClientInput,
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
         timeout: Optional[float] = None,
         **extras: Any,
     ) -> Any:
-        """Budget/concurrency gate around ``llm_client.acompletion``."""
+        """Budget/concurrency gate around ``client.acompletion``."""
         tracker = self._tracker
+        client = self._resolver.resolve(client_spec)
         async with self._semaphore:
             async with tracker._lock:
                 if tracker.exhausted:
@@ -289,18 +291,16 @@ class LLMGate:
             try:
                 if use_serial:
                     async with self._serial_lock:
-                        response = await llm_client.acompletion(
-                            model=model,
-                            messages=messages,
+                        response = await client.acompletion(
+                            prompt,
                             temperature=temperature,
                             max_tokens=max_tokens,
                             timeout=timeout,
                             **extras,
                         )
                 else:
-                    response = await llm_client.acompletion(
-                        model=model,
-                        messages=messages,
+                    response = await client.acompletion(
+                        prompt,
                         temperature=temperature,
                         max_tokens=max_tokens,
                         timeout=timeout,
@@ -336,7 +336,9 @@ class PipelineState:
     def __init__(self, budget: BudgetConfig, start_time: float | None = None):
         st = start_time if start_time is not None else time.time()
         self.budget_tracker = BudgetTracker(budget, start_time=st)
-        self.llm_gate = LLMGate(self.budget_tracker)
+        self.client_resolver = ClientResolver(timeout=DEFAULT_TIMEOUT)
+        self.client_gate = ClientGate(self.budget_tracker, self.client_resolver)
+        self.llm_gate = self.client_gate
 
         # Eval outcome counters (not budget-relevant, so kept here)
         self.accept_count: int = 0
@@ -429,32 +431,49 @@ class PipelineState:
         await self.budget_tracker.finish_evaluation()
 
     # ------------------------------------------------------------------
-    # Delegation: LLMGate
+    # Delegation: ClientGate
     # ------------------------------------------------------------------
 
+    def configure_client_defaults(
+        self,
+        *,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        timeout: float = DEFAULT_TIMEOUT,
+    ) -> None:
+        self.client_resolver.configure(
+            temperature=temperature,
+            max_tokens=max_tokens,
+            timeout=timeout,
+        )
+
+    def configure_client_concurrency(self, max_in_flight: int) -> None:
+        self.client_gate.configure_concurrency(max_in_flight)
+
     def configure_llm_concurrency(self, max_in_flight: int) -> None:
-        self.llm_gate.configure_concurrency(max_in_flight)
+        self.configure_client_concurrency(max_in_flight)
 
     async def acompletion(
         self,
-        llm_client: Any,
+        client_spec: ClientSpec,
         *,
-        model: str,
-        messages: list[dict[str, str]],
+        prompt: ClientInput,
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
         timeout: Optional[float] = None,
         **extras: Any,
     ) -> Any:
-        return await self.llm_gate.acompletion(
-            llm_client,
-            model=model,
-            messages=messages,
+        return await self.client_gate.acompletion(
+            client_spec,
+            prompt=prompt,
             temperature=temperature,
             max_tokens=max_tokens,
             timeout=timeout,
             **extras,
         )
+
+    async def close_clients(self) -> None:
+        await self.client_resolver.close()
 
     # ------------------------------------------------------------------
     # Backward-compat static helpers (used by runner / equilibrium)
@@ -557,3 +576,6 @@ class PipelineState:
     def get_score_history_list(self) -> list[float]:
         """Get just the best scores over time for the result."""
         return [entry.best_score for entry in self.score_history]
+
+
+LLMGate = ClientGate
