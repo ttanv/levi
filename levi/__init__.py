@@ -29,7 +29,7 @@ Power users can pass any LeviConfig field as a keyword argument::
 # Core types
 # Behavior
 from .behavior import BehaviorExtractor, FeatureVector
-from .clients import BaseClient, Client, ClientResult
+from .clients import BaseClient, ClaudeCodeClient, ClientResult, CodexClient, LM
 
 # Config types
 from .config import (
@@ -75,8 +75,10 @@ __all__ = [
     "CVTMAPElitesPool",
     # Clients
     "BaseClient",
-    "Client",
+    "LM",
     "ClientResult",
+    "CodexClient",
+    "ClaudeCodeClient",
     # Prompts
     "PromptBuilder",
     "ProgramWithScore",

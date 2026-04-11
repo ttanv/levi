@@ -1,10 +1,14 @@
-"""Client backends for Levi."""
+"""Generation backends for Levi."""
 
 from .base import BaseClient, ClientResult
-from .client import Client
+from .claude_code import ClaudeCodeClient
+from .codex import CodexClient
+from .lm import LM
 
 __all__ = [
     "BaseClient",
-    "Client",
+    "ClaudeCodeClient",
     "ClientResult",
+    "CodexClient",
+    "LM",
 ]

@@ -13,7 +13,7 @@ def main() -> None:
         score_fn=score_fn,
         inputs=get_lazy_inputs(),
         paradigm_model="openrouter/google/gemini-3-flash-preview",
-        mutation_model=levi.Client(
+        mutation_model=levi.LM(
             "Qwen/Qwen3-30B-A3B-Instruct-2507",
             api_base="http://localhost:8000/v1",
             api_key="unused",

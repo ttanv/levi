@@ -93,7 +93,7 @@ def main() -> None:
         paradigm_model="openrouter/google/gemini-3-flash-preview",
         mutation_model=[
             "openrouter/xiaomi/mimo-v2-flash",
-            levi.Client(
+            levi.LM(
                 "Qwen/Qwen3-30B-A3B-Instruct-2507",
                 api_base="http://localhost:8000/v1",
                 api_key="unused",

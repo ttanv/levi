@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from ..clients.base import ClientInput, ClientSpec
-from ..clients.client import DEFAULT_TIMEOUT, _ClientResolver
+from ..clients.lm import DEFAULT_TIMEOUT, _LMResolver
 from ..config import BudgetConfig
 
 logger = logging.getLogger(__name__)
@@ -256,7 +256,7 @@ class ClientGate:
     * cost extraction and accounting
     """
 
-    def __init__(self, tracker: BudgetTracker, resolver: _ClientResolver) -> None:
+    def __init__(self, tracker: BudgetTracker, resolver: _LMResolver) -> None:
         self._tracker = tracker
         self._resolver = resolver
         self._semaphore = asyncio.Semaphore(1)
@@ -333,7 +333,7 @@ class PipelineState:
     def __init__(self, budget: BudgetConfig, start_time: float | None = None):
         st = start_time if start_time is not None else time.time()
         self.budget_tracker = BudgetTracker(budget, start_time=st)
-        self.client_resolver = _ClientResolver(timeout=DEFAULT_TIMEOUT)
+        self.client_resolver = _LMResolver(timeout=DEFAULT_TIMEOUT)
         self.client_gate = ClientGate(self.budget_tracker, self.client_resolver)
 
         # Eval outcome counters (not budget-relevant, so kept here)

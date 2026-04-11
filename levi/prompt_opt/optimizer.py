@@ -15,7 +15,7 @@ from typing import Any, Optional
 
 import dspy
 
-from ..clients import BaseClient, Client
+from ..clients import BaseClient, LM
 from ..clients.base import ClientSpec, client_name
 from ..config import LeviConfig
 from ..utils.code_extraction import extract_code, extract_fn_name
@@ -63,7 +63,7 @@ def _make_dspy_lm(
     """Create a ``dspy.LM`` from a Levi client spec."""
     model_id = client_name(model)
 
-    if isinstance(model, Client):
+    if isinstance(model, LM):
         kwargs = {
             "model": model_id,
             "temperature": temperature,
@@ -76,7 +76,10 @@ def _make_dspy_lm(
         return dspy.LM(**kwargs)
 
     if isinstance(model, BaseClient):
-        raise TypeError("DSPy prompt optimization supports string model specs or Levi's built-in Client.")
+        raise TypeError(
+            "DSPy prompt optimization supports string model specs or Levi's built-in LM. "
+            "Subscription-backed clients (CodexClient, ClaudeCodeClient) cannot drive DSPy."
+        )
 
     return dspy.LM(model=model_id, temperature=temperature, max_tokens=max_tokens)
 

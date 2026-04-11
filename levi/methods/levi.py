@@ -249,7 +249,7 @@ def evolve_code(
         resume_snapshot: Optional snapshot dict to resume a previous run.
         **kwargs: Advanced overrides — any LeviConfig field (e.g. pipeline,
             punctuated_equilibrium, output_dir). For custom endpoints or
-            explicit pricing, pass ``levi.Client(...)`` as a model.
+            explicit pricing, pass ``levi.LM(...)`` as a model.
 
     Returns:
         LeviResult with best_program, best_score, and run statistics.

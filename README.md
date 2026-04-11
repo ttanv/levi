@@ -89,10 +89,10 @@ LEVI holds the **highest average score (76.5)** across all seven [ADRS Leaderboa
 
 LEVI scored **2.6359+ packing density** on the n=26 circle packing benchmark, with a local model handling the majority of mutations. See [`examples/circle_packing`](examples/circle_packing) for the full setup.
 
-For advanced routing, pass a `levi.Client(...)` directly:
+For advanced routing, pass a `levi.LM(...)` directly:
 
 ```python
-local_qwen = levi.Client(
+local_qwen = levi.LM(
     "Qwen/Qwen3-30B-A3B-Instruct-2507",
     api_base="http://localhost:8000/v1",
     api_key="unused",

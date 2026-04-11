@@ -3,7 +3,7 @@
 import pytest
 from pydantic import ValidationError
 
-from levi import Client
+from levi import LM
 from levi.config.models import (
     BudgetConfig,
     LeviConfig,
@@ -149,7 +149,7 @@ class TestLeviConfig:
         assert cfg.prompt_overrides == overrides
 
     def test_client_model_spec_is_preserved(self):
-        local_client = Client(
+        local_client = LM(
             "Qwen/Qwen3-30B",
             api_base="http://localhost:8001/v1",
             api_key="unused",

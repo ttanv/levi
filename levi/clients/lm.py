@@ -70,7 +70,7 @@ def _usage_value(usage: Any, field: str) -> float:
     return normalized or 0.0
 
 
-def _cost_from_explicit_pricing(client: "Client", response: Any) -> Optional[float]:
+def _cost_from_explicit_pricing(client: "LM", response: Any) -> Optional[float]:
     if (
         client.input_cost_per_token is None
         and client.output_cost_per_token is None
@@ -103,7 +103,7 @@ def _cost_from_explicit_pricing(client: "Client", response: Any) -> Optional[flo
     )
 
 
-def _extract_cost(client: "Client", response: Any) -> float:
+def _extract_cost(client: "LM", response: Any) -> float:
     explicit_cost = _cost_from_explicit_pricing(client, response)
     if explicit_cost is not None:
         return explicit_cost
@@ -124,8 +124,8 @@ def _extract_cost(client: "Client", response: Any) -> float:
         return 0.0
 
 
-class Client(BaseClient):
-    """Default generation client backed by LiteLLM."""
+class LM(BaseClient):
+    """Default language-model backend backed by LiteLLM."""
 
     def __init__(
         self,
@@ -181,8 +181,8 @@ class Client(BaseClient):
         return ClientResult(text=text, cost=cost)
 
 
-class _ClientResolver:
-    """Run-local cache that turns string model specs into configured Client instances."""
+class _LMResolver:
+    """Run-local cache that turns string model specs into configured LM instances."""
 
     def __init__(
         self,
@@ -215,7 +215,7 @@ class _ClientResolver:
 
         client = self._clients.get(spec)
         if client is None:
-            client = Client(spec, timeout=self._timeout, **self._defaults)
+            client = LM(spec, timeout=self._timeout, **self._defaults)
             self._clients[spec] = client
         return client
 
