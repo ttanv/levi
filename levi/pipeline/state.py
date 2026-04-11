@@ -7,7 +7,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from ..clients import ClientInput, ClientResolver, ClientSpec, DEFAULT_TIMEOUT
+from ..clients.base import ClientInput, ClientSpec
+from ..clients.client import DEFAULT_TIMEOUT, _ClientResolver
 from ..config import BudgetConfig
 
 logger = logging.getLogger(__name__)
@@ -81,18 +82,18 @@ class BudgetTracker:
     # Cost tracking
     total_cost: float = 0.0
 
-    # Eval / LLM counters
+    # Eval / client counters
     eval_count: int = 0
     eval_in_flight: int = 0
-    llm_in_flight: int = 0
+    client_in_flight: int = 0
 
     # Async lock – protects counter mutations that must be atomic with
-    # budget-exhaustion checks (eval reservation, LLM gating).
+    # budget-exhaustion checks (eval reservation, client gating).
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
 
-    # LLM cost EMA – used by LLMGate to decide serial-mode
-    _llm_cost_ema: float = 0.0
-    _llm_cost_samples: int = 0
+    # Client cost EMA – used to decide when the budget is tight enough to serialize requests.
+    _client_cost_ema: float = 0.0
+    _client_cost_samples: int = 0
 
     # ---- budget queries ----
 
@@ -175,17 +176,17 @@ class BudgetTracker:
             return
         self.total_cost += normalized
 
-    def record_llm_cost(self, cost: object) -> None:
-        """Record an LLM call cost (updates total_cost *and* EMA)."""
+    def record_client_cost(self, cost: object) -> None:
+        """Record a generation call cost (updates total_cost and the rolling EMA)."""
         normalized = coerce_finite_float(cost, default=0.0)
         if normalized < 0.0:
             return
         self.total_cost += normalized
-        if self._llm_cost_samples == 0:
-            self._llm_cost_ema = normalized
+        if self._client_cost_samples == 0:
+            self._client_cost_ema = normalized
         else:
-            self._llm_cost_ema = (0.8 * self._llm_cost_ema) + (0.2 * normalized)
-        self._llm_cost_samples += 1
+            self._client_cost_ema = (0.8 * self._client_cost_ema) + (0.2 * normalized)
+        self._client_cost_samples += 1
 
     # ---- eval reservation ----
 
@@ -203,7 +204,7 @@ class BudgetTracker:
             if self.eval_in_flight > 0:
                 self.eval_in_flight -= 1
 
-    # ---- serial-mode decision helpers (used by LLMGate) ----
+    # ---- serial-mode decision helpers (used by ClientGate) ----
 
     def remaining_dollars(self) -> float | None:
         dollars_limit = _coerce_positive_limit(self.budget.dollars)
@@ -211,9 +212,9 @@ class BudgetTracker:
             return None
         return dollars_limit - coerce_finite_float(self.total_cost, default=float("inf"))
 
-    def _llm_serial_threshold(self, dollars_limit: float) -> float:
-        if self._llm_cost_samples > 0:
-            ema = self._llm_cost_ema
+    def _client_serial_threshold(self, dollars_limit: float) -> float:
+        if self._client_cost_samples > 0:
+            ema = self._client_cost_ema
         else:
             ema = max(0.01 * dollars_limit, 0.05)
         return max(3.0 * ema, 0.03 * dollars_limit, 0.05)
@@ -222,7 +223,7 @@ class BudgetTracker:
         dollars_limit = _coerce_positive_limit(self.budget.dollars)
         if dollars_limit is not None:
             remaining = self.remaining_dollars()
-            if remaining is not None and remaining <= self._llm_serial_threshold(dollars_limit):
+            if remaining is not None and remaining <= self._client_serial_threshold(dollars_limit):
                 return True
 
         if self.budget.evaluations is not None:
@@ -255,14 +256,14 @@ class ClientGate:
     * cost extraction and accounting
     """
 
-    def __init__(self, tracker: BudgetTracker, resolver: ClientResolver) -> None:
+    def __init__(self, tracker: BudgetTracker, resolver: _ClientResolver) -> None:
         self._tracker = tracker
         self._resolver = resolver
         self._semaphore = asyncio.Semaphore(1)
         self._serial_lock = asyncio.Lock()
 
     def configure_concurrency(self, max_in_flight: int) -> None:
-        """Set global max concurrent LLM requests for this run."""
+        """Set global max concurrent generation requests for this run."""
         limit = int(coerce_finite_float(max_in_flight, default=1.0))
         if limit <= 0:
             limit = 1
@@ -284,8 +285,8 @@ class ClientGate:
         async with self._semaphore:
             async with tracker._lock:
                 if tracker.exhausted:
-                    raise BudgetLimitReached("Budget exhausted before LLM call")
-                tracker.llm_in_flight += 1
+                    raise BudgetLimitReached("Budget exhausted before client call")
+                tracker.client_in_flight += 1
                 use_serial = tracker.should_use_serial_mode()
 
             try:
@@ -308,10 +309,10 @@ class ClientGate:
                     )
             finally:
                 async with tracker._lock:
-                    tracker.llm_in_flight = max(0, tracker.llm_in_flight - 1)
+                    tracker.client_in_flight = max(0, tracker.client_in_flight - 1)
 
             async with tracker._lock:
-                tracker.record_llm_cost(getattr(response, "cost", 0.0))
+                tracker.record_client_cost(getattr(response, "cost", 0.0))
 
             return response
 
@@ -325,20 +326,15 @@ class PipelineState:
     """Shared pipeline state for producer-consumer coordination.
 
     Composes :class:`BudgetTracker` (budget/cost enforcement) and
-    :class:`LLMGate` (LLM concurrency control) with domain-specific
+    :class:`ClientGate` (generation concurrency control) with domain-specific
     pipeline state (eval metrics, meta-advice, score history).
-
-    Delegation properties preserve the original flat API so that
-    existing consumers (producer, consumer, runner, diversifier,
-    equilibrium) require no changes.
     """
 
     def __init__(self, budget: BudgetConfig, start_time: float | None = None):
         st = start_time if start_time is not None else time.time()
         self.budget_tracker = BudgetTracker(budget, start_time=st)
-        self.client_resolver = ClientResolver(timeout=DEFAULT_TIMEOUT)
+        self.client_resolver = _ClientResolver(timeout=DEFAULT_TIMEOUT)
         self.client_gate = ClientGate(self.budget_tracker, self.client_resolver)
-        self.llm_gate = self.client_gate
 
         # Eval outcome counters (not budget-relevant, so kept here)
         self.accept_count: int = 0
@@ -401,8 +397,8 @@ class PipelineState:
         return self.budget_tracker.eval_in_flight
 
     @property
-    def llm_in_flight(self) -> int:
-        return self.budget_tracker.llm_in_flight
+    def client_in_flight(self) -> int:
+        return self.budget_tracker.client_in_flight
 
     @property
     def budget_exhausted(self) -> bool:
@@ -450,9 +446,6 @@ class PipelineState:
     def configure_client_concurrency(self, max_in_flight: int) -> None:
         self.client_gate.configure_concurrency(max_in_flight)
 
-    def configure_llm_concurrency(self, max_in_flight: int) -> None:
-        self.configure_client_concurrency(max_in_flight)
-
     async def acompletion(
         self,
         client_spec: ClientSpec,
@@ -474,24 +467,6 @@ class PipelineState:
 
     async def close_clients(self) -> None:
         await self.client_resolver.close()
-
-    # ------------------------------------------------------------------
-    # Backward-compat static helpers (used by runner / equilibrium)
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _coerce_finite_float(value: object, *, default: float) -> float:
-        return coerce_finite_float(value, default=default)
-
-    @staticmethod
-    def _coerce_positive_limit(value: object) -> float | None:
-        return _coerce_positive_limit(value)
-
-    def _should_use_llm_serial_mode(self) -> bool:
-        return self.budget_tracker.should_use_serial_mode()
-
-    def _remaining_dollars(self) -> float | None:
-        return self.budget_tracker.remaining_dollars()
 
     # ------------------------------------------------------------------
     # Domain: eval outcome recording
@@ -576,6 +551,3 @@ class PipelineState:
     def get_score_history_list(self) -> list[float]:
         """Get just the best scores over time for the result."""
         return [entry.best_score for entry in self.score_history]
-
-
-LLMGate = ClientGate

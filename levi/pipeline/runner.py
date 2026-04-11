@@ -8,14 +8,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from ..clients import short_client_name
+from ..clients.base import short_client_name
 from ..config import LeviConfig, LeviResult
 from ..equilibrium import PunctuatedEquilibrium
 from ..pool import CVTMAPElitesPool
 from ..utils import ResilientProcessPool
 from .consumer import eval_consumer
 from .producer import llm_producer
-from .state import PipelineState
+from .state import PipelineState, coerce_finite_float
 
 logger = logging.getLogger(__name__)
 
@@ -45,9 +45,9 @@ class PipelineRunner:
             self.state.start_time = start_time
         if state is None:
             # Include init phase cost when runner owns state lifecycle.
-            self.state.total_cost = self.state._coerce_finite_float(init_cost, default=0.0)
+            self.state.total_cost = coerce_finite_float(init_cost, default=0.0)
         initial_best = pool.get_stats().get("best_score", float("-inf"))
-        self.state.best_score_so_far = self.state._coerce_finite_float(initial_best, default=float("-inf"))
+        self.state.best_score_so_far = coerce_finite_float(initial_best, default=float("-inf"))
         if init_score_history and not self.state.score_history:
             self.state.score_history = list(init_score_history)
             self.state.eval_count = len(init_score_history)
@@ -72,7 +72,7 @@ class PipelineRunner:
 
     async def run(self) -> LeviResult:
         logger.info(
-            f"[Pipeline] Starting with {self.config.pipeline.n_llm_workers} LLM workers, "
+            f"[Pipeline] Starting with {self.config.pipeline.n_llm_workers} generation workers, "
             f"{self.config.pipeline.n_eval_processes} eval workers"
         )
 
@@ -167,7 +167,7 @@ class PipelineRunner:
 
             current_eval_count = self.state.eval_count
             queue_size = self.code_queue.qsize()
-            has_pending_work = queue_size > 0 or self.state.llm_in_flight > 0 or self.state.eval_in_flight > 0
+            has_pending_work = queue_size > 0 or self.state.client_in_flight > 0 or self.state.eval_in_flight > 0
 
             if current_eval_count != last_eval_count or has_pending_work:
                 last_eval_count = current_eval_count
@@ -271,7 +271,7 @@ class PipelineRunner:
                 logger.info(
                     f"[Status] Cost: ${self.state.total_cost:.3f} | "
                     f"Evals: {self.state.eval_count} | "
-                    f"LLM in-flight: {self.state.llm_in_flight} | "
+                    f"Clients in-flight: {self.state.client_in_flight} | "
                     f"Eval in-flight: {self.state.eval_in_flight} | "
                     f"Archive: {self.pool.size()} | "
                     f"Best: {best_score:.17g}"

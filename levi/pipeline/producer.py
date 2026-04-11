@@ -6,7 +6,7 @@ import random
 import re
 from typing import Optional
 
-from ..clients import client_name
+from ..clients.base import client_name
 from ..config import LeviConfig
 from ..pool import CVTMAPElitesPool
 from ..prompts import OutputMode, ProgramWithScore, PromptBuilder

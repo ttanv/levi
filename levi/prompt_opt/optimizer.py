@@ -15,8 +15,8 @@ from typing import Any, Optional
 
 import dspy
 
-from ..clients import BaseClient, Client, client_name
-from ..clients.base import ClientSpec
+from ..clients import BaseClient, Client
+from ..clients.base import ClientSpec, client_name
 from ..config import LeviConfig
 from ..utils.code_extraction import extract_code, extract_fn_name
 from ..utils.evaluation import evaluate_code

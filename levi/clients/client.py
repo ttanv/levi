@@ -7,23 +7,13 @@ from typing import Any, Optional
 
 import litellm
 
-from .base import BaseClient, ClientInput, ClientResult, ClientSpec, DEFAULT_TIMEOUT
+from .base import BaseClient, ClientInput, ClientResult, ClientSpec
 
 litellm.suppress_debug_info = True
 
+DEFAULT_TIMEOUT: float = 300.0
+
 logger = logging.getLogger(__name__)
-
-
-def client_name(spec: ClientSpec) -> str:
-    """Return the model identifier associated with a client spec."""
-    if isinstance(spec, BaseClient):
-        return spec.model
-    return spec
-
-
-def short_client_name(spec: ClientSpec) -> str:
-    """Return the trailing segment of a model identifier for logs."""
-    return client_name(spec).split("/")[-1]
 
 def _normalize_prompt(prompt: ClientInput) -> list[dict[str, Any]]:
     if isinstance(prompt, str):
@@ -80,7 +70,7 @@ def _usage_value(usage: Any, field: str) -> float:
     return normalized or 0.0
 
 
-def _cost_from_explicit_pricing(client: BaseClient, response: Any) -> Optional[float]:
+def _cost_from_explicit_pricing(client: "Client", response: Any) -> Optional[float]:
     if (
         client.input_cost_per_token is None
         and client.output_cost_per_token is None
@@ -113,7 +103,7 @@ def _cost_from_explicit_pricing(client: BaseClient, response: Any) -> Optional[f
     )
 
 
-def _extract_cost(client: BaseClient, response: Any) -> float:
+def _extract_cost(client: "Client", response: Any) -> float:
     explicit_cost = _cost_from_explicit_pricing(client, response)
     if explicit_cost is not None:
         return explicit_cost
@@ -147,14 +137,12 @@ class Client(BaseClient):
         cache_read_input_token_cost: Optional[float] = None,
         **defaults: Any,
     ):
-        super().__init__(
-            model,
-            timeout=timeout,
-            input_cost_per_token=input_cost_per_token,
-            output_cost_per_token=output_cost_per_token,
-            cache_read_input_token_cost=cache_read_input_token_cost,
-            **defaults,
-        )
+        super().__init__(model)
+        self.timeout = timeout
+        self.input_cost_per_token = input_cost_per_token
+        self.output_cost_per_token = output_cost_per_token
+        self.cache_read_input_token_cost = cache_read_input_token_cost
+        self.defaults = defaults
 
     async def acompletion(self, prompt: ClientInput, **kwargs: Any) -> ClientResult:
         request: dict[str, Any] = dict(self.defaults)
@@ -193,8 +181,8 @@ class Client(BaseClient):
         return ClientResult(text=text, cost=cost)
 
 
-class ClientResolver:
-    """Small run-local cache that resolves string model specs into client instances."""
+class _ClientResolver:
+    """Run-local cache that turns string model specs into configured Client instances."""
 
     def __init__(
         self,
@@ -234,10 +222,3 @@ class ClientResolver:
     async def close(self) -> None:
         for client in self._clients.values():
             await client.close()
-
-
-def resolve_client(spec: ClientSpec, **kwargs: Any) -> BaseClient:
-    """Resolve a client spec without caching."""
-    if isinstance(spec, BaseClient):
-        return spec
-    return Client(spec, **kwargs)

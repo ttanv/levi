@@ -5,7 +5,7 @@ import logging
 from collections.abc import Callable
 from typing import Optional
 
-from ..clients import client_name, short_client_name
+from ..clients.base import client_name, short_client_name
 from ..config import LeviConfig
 from ..core import EvaluationResult, Program
 from ..pool import CVTMAPElitesPool

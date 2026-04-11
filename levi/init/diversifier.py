@@ -6,8 +6,8 @@ import random
 
 import numpy as np
 
-from ..clients import client_name
 from ..behavior import BehaviorExtractor
+from ..clients.base import client_name
 from ..config import LeviConfig
 from ..core import EvaluationResult, Program
 from ..pipeline.state import BudgetLimitReached, PipelineState, ScoreHistoryEntry

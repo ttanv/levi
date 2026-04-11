@@ -12,10 +12,10 @@ import random
 
 from sklearn.cluster import KMeans
 
-from ..clients import client_name
+from ..clients.base import client_name
 from ..config import LeviConfig
 from ..core import EvaluationResult, Program
-from ..pipeline.state import BudgetLimitReached, PipelineState
+from ..pipeline.state import BudgetLimitReached, PipelineState, coerce_finite_float
 from ..pool import CVTMAPElitesPool
 from ..pool.cvt_map_elites import Elite
 from ..utils import ResilientProcessPool, coerce_score, evaluate_code, extract_code, extract_fn_name
@@ -232,7 +232,7 @@ Output ONLY complete, runnable Python code in a ```python block.
                 return False
             if self.state.budget.evaluations is None:
                 return True
-            eval_limit = int(self.state._coerce_finite_float(self.state.budget.evaluations, default=0.0))
+            eval_limit = int(coerce_finite_float(self.state.budget.evaluations, default=0.0))
             if eval_limit <= 0:
                 return False
             return (self.state.eval_count + pe_evals_started) < eval_limit

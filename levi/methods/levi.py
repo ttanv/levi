@@ -8,19 +8,16 @@ from collections.abc import Callable
 from typing import Any
 
 from ..behavior import BehaviorExtractor, FeatureVector
-from ..clients import BaseClient
+from ..clients.base import ClientSpec
 from ..config import BudgetConfig, LeviConfig, LeviResult
 from ..core import EvaluationResult, Program
 from ..init import Diversifier
 from ..pipeline import PipelineRunner
-from ..pipeline.state import PipelineState
+from ..pipeline.state import PipelineState, coerce_finite_float
 from ..pool import CVTMAPElitesPool
 from ..utils import ResilientProcessPool, evaluate_code, extract_fn_name
 
 logger = logging.getLogger(__name__)
-
-ModelSpec = str | BaseClient
-ModelSpecOrList = ModelSpec | list[ModelSpec]
 
 
 def _setup_logging() -> None:
@@ -104,9 +101,9 @@ def _build_config(
     seed_program: str | None,
     score_fn: Callable[..., dict],
     inputs: list[Any] | None,
-    model: ModelSpecOrList | None,
-    paradigm_model: ModelSpecOrList | None,
-    mutation_model: ModelSpecOrList | None,
+    model: ClientSpec | list[ClientSpec] | None,
+    paradigm_model: ClientSpec | list[ClientSpec] | None,
+    mutation_model: ClientSpec | list[ClientSpec] | None,
     budget_dollars: float | None,
     budget_evals: int | None,
     budget_seconds: float | None,
@@ -187,9 +184,9 @@ def evolve_code(
     seed_program: str | None = None,
     score_fn: Callable[..., dict],
     inputs: list[Any] | None = None,
-    model: ModelSpecOrList | None = None,
-    paradigm_model: ModelSpecOrList | None = None,
-    mutation_model: ModelSpecOrList | None = None,
+    model: ClientSpec | list[ClientSpec] | None = None,
+    paradigm_model: ClientSpec | list[ClientSpec] | None = None,
+    mutation_model: ClientSpec | list[ClientSpec] | None = None,
     budget_dollars: float | None = None,
     budget_evals: int | None = None,
     budget_seconds: float | None = None,
@@ -328,7 +325,7 @@ async def _run_async(config: LeviConfig, resume_snapshot: dict | None = None) ->
         temperature=config.pipeline.temperature,
         max_tokens=config.pipeline.max_tokens,
     )
-    state.configure_llm_concurrency(config.pipeline.n_llm_workers)
+    state.configure_client_concurrency(config.pipeline.n_llm_workers)
 
     logger.info("[Levi] Starting evolutionary optimization")
     logger.info(f"[Levi] Budget: {config.budget}")
@@ -374,7 +371,7 @@ async def _run_async(config: LeviConfig, resume_snapshot: dict | None = None) ->
         init_score_history = []
         if resume_snapshot is not None:
             init_cost = _restore_from_snapshot(pool, extractor, resume_snapshot)
-            state.total_cost = state._coerce_finite_float(init_cost, default=0.0)
+            state.total_cost = coerce_finite_float(init_cost, default=0.0)
         else:
             logger.info("[Levi] Running init phase")
             diversifier = Diversifier(config, executor, state)
