@@ -13,9 +13,12 @@ def main() -> None:
         score_fn=score_fn,
         inputs=get_lazy_inputs(),
         paradigm_model="openrouter/google/gemini-3-flash-preview",
-        mutation_model="Qwen/Qwen3-30B-A3B-Instruct-2507",
+        mutation_model=levi.Client(
+            "Qwen/Qwen3-30B-A3B-Instruct-2507",
+            api_base="http://localhost:8000/v1",
+            api_key="unused",
+        ),
         budget_dollars=4.50,
-        local_endpoints={"Qwen/Qwen3-30B-A3B-Instruct-2507": "http://localhost:8000/v1"},
         behavior=levi.BehaviorConfig(
             ast_features=['loop_nesting_max', 'branch_count', 'comparison_count', 'subscript_count'],
         ),

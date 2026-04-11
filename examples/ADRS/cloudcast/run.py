@@ -14,8 +14,11 @@ def main() -> None:
         seed_program=SEED_PROGRAM,
         score_fn=score_fn,
         paradigm_model="openrouter/google/gemini-3-flash-preview",
-        mutation_model="Qwen/Qwen3-30B-A3B-Instruct-2507",
-        local_endpoints={"Qwen/Qwen3-30B-A3B-Instruct-2507": "http://localhost:8000/v1"},
+        mutation_model=levi.Client(
+            "Qwen/Qwen3-30B-A3B-Instruct-2507",
+            api_base="http://localhost:8000/v1",
+            api_key="unused",
+        ),
         budget_dollars=3.00,
         behavior=levi.BehaviorConfig(
             ast_features=['loop_count', 'branch_count', 'math_operators'],

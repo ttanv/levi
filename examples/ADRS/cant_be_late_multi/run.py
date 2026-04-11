@@ -93,20 +93,15 @@ def main() -> None:
         paradigm_model="openrouter/google/gemini-3-flash-preview",
         mutation_model=[
             "openrouter/xiaomi/mimo-v2-flash",
-            "Qwen/Qwen3-30B-A3B-Instruct-2507",
+            levi.Client(
+                "Qwen/Qwen3-30B-A3B-Instruct-2507",
+                api_base="http://localhost:8000/v1",
+                api_key="unused",
+                input_cost_per_token=0.0000001,
+                output_cost_per_token=0.0000004,
+            ),
         ],
         budget_dollars=5.00,
-        local_endpoints={"Qwen/Qwen3-30B-A3B-Instruct-2507": "http://localhost:8000/v1"},
-        model_info={
-            "openrouter/xiaomi/mimo-v2-flash": {
-                "input_cost_per_token": 0.00000009,
-                "output_cost_per_token": 0.00000029,
-            },
-            "Qwen/Qwen3-30B-A3B-Instruct-2507": {
-                "input_cost_per_token": 0.0000001,
-                "output_cost_per_token": 0.0000004,
-            },
-        },
         init=levi.InitConfig(
             n_diverse_seeds=5,
             n_variants_per_seed=20,
