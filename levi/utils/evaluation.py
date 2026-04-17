@@ -75,6 +75,53 @@ def evaluate_code(code: str, score_fn: Callable[..., dict], inputs: Optional[lis
         return {"error": f"Scoring error: {e}"}
 
 
+def evaluate_prompt(prompt: str, score_fn: Callable[..., Any], inputs: Optional[list]) -> dict:
+    """Runs in subprocess: score a prompt string directly."""
+    try:
+        accepts_1 = _accepts_n_positional_args(score_fn, 1)
+        accepts_2 = _accepts_n_positional_args(score_fn, 2)
+
+        if inputs is None:
+            if accepts_1 is True:
+                result = score_fn(prompt)
+            elif accepts_2 is True:
+                result = score_fn(prompt, [])
+            else:
+                result = score_fn(prompt)
+        else:
+            if accepts_2 is True:
+                result = score_fn(prompt, inputs)
+            elif accepts_1 is True:
+                result = score_fn(prompt)
+            else:
+                result = score_fn(prompt, inputs)
+    except MemoryError:
+        return {"error": "MemoryError during scoring"}
+    except Exception as e:
+        return {"error": f"Scoring error: {e}"}
+
+    return normalize_prompt_result(result)
+
+
+def normalize_prompt_result(result: Any) -> dict:
+    """Normalize prompt-evaluator outputs into Levi's metric dict shape."""
+    if isinstance(result, (int, float)):
+        return {"score": float(result)}
+
+    if not isinstance(result, dict):
+        return {"error": f"Prompt evaluator must return a number or dict, got {type(result).__name__}"}
+
+    normalized: dict[str, Any] = {}
+    for key, value in result.items():
+        if isinstance(value, bool):
+            normalized[key] = float(value)
+        elif isinstance(value, (int, float)):
+            normalized[key] = float(value)
+        else:
+            normalized[key] = value
+    return normalized
+
+
 def coerce_score(result: dict) -> tuple[float | None, str | None]:
     """Extract a finite numeric score from an evaluation result."""
     try:

@@ -22,6 +22,13 @@ PROGRAMS = [
     "def solve(x):\n    return sum(range(x))",
 ]
 
+PROMPTS = [
+    "Answer the task.",
+    "Answer the task carefully and show the key reasoning steps.",
+    "Break the task into steps, reason carefully, and verify the final answer before responding.",
+    "Use a structured plan, test edge cases mentally, and present the final answer clearly.",
+]
+
 
 def _score_fn(fn):
     return {"score": fn(5)}
@@ -29,6 +36,15 @@ def _score_fn(fn):
 
 def _score_fn_with_inputs(fn, inputs):
     return {"score": sum(fn(x) for x in inputs)}
+
+
+def _prompt_score_fn(prompt):
+    lower = prompt.lower()
+    score = 0.0
+    for token in ["step", "careful", "verify", "structured", "final answer"]:
+        if token in lower:
+            score += 1.0
+    return {"score": score}
 
 
 class MockClient(BaseClient):
@@ -47,6 +63,37 @@ class MockClient(BaseClient):
 
         code = PROGRAMS[idx]
         content = f"```python\n{code}\n```"
+
+        if isinstance(prompt, list):
+            prompt_text = prompt[0]["content"] if prompt else ""
+        else:
+            prompt_text = prompt
+
+        self.calls.append(
+            {
+                "model": self.model,
+                "prompt_snippet": prompt_text[:200],
+            }
+        )
+
+        return ClientResult(text=content, cost=0.001)
+
+
+class PromptMockClient(BaseClient):
+    """Thread-safe mock that cycles through deterministic prompt variants."""
+
+    def __init__(self):
+        super().__init__("fake/test-prompt-model")
+        self._counter = 0
+        self._lock = threading.Lock()
+        self.calls = []
+
+    async def acompletion(self, prompt, **kwargs):
+        with self._lock:
+            idx = self._counter % len(PROMPTS)
+            self._counter += 1
+
+        content = PROMPTS[idx]
 
         if isinstance(prompt, list):
             prompt_text = prompt[0]["content"] if prompt else ""
@@ -171,3 +218,35 @@ class TestFullRun:
         assert result.best_score >= 6
         assert result.total_evaluations >= 3
         assert result.best_program
+
+    def test_prompt_evolution_single_prompt(self):
+        mock_client = PromptMockClient()
+
+        result = levi.evolve_prompts(
+            "Optimize a single instruction prompt for answer quality.",
+            evaluator=_prompt_score_fn,
+            seed_prompt="Answer the task.",
+            model=mock_client,
+            budget_evals=12,
+            init=levi.InitConfig(n_diverse_seeds=2, n_variants_per_seed=2),
+            pipeline=levi.PipelineConfig(
+                n_llm_workers=2,
+                n_eval_processes=2,
+                eval_timeout=5.0,
+            ),
+            punctuated_equilibrium=levi.PunctuatedEquilibriumConfig(
+                enabled=True,
+                interval=4,
+                n_clusters=2,
+                n_variants=1,
+            ),
+            cascade=levi.CascadeConfig(enabled=False),
+            cvt=levi.CVTConfig(n_centroids=8, data_driven_centroids=True),
+        )
+
+        assert result.best_score >= 3.0
+        assert result.total_evaluations >= 4
+        assert result.archive_size >= 1
+        assert result.best_prompt
+        assert any(token in result.best_prompt.lower() for token in ["verify", "structured", "step"])
+        assert len(mock_client.calls) >= 3

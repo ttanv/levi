@@ -7,10 +7,10 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from ..artifacts import ArtifactAdapter, CodeAdapter
+from ..artifacts import ArtifactAdapter, CodeAdapter, PromptAdapter
 from ..behavior import BehaviorExtractor, FeatureVector
 from ..clients.base import ClientSpec
-from ..config import BudgetConfig, LeviConfig, LeviResult
+from ..config import BehaviorConfig, BudgetConfig, LeviConfig, LeviResult, MetaAdviceConfig
 from ..core import EvaluationResult, Program
 from ..init import Diversifier
 from ..pipeline import PipelineRunner
@@ -185,6 +185,66 @@ def _build_config(
     return LeviConfig(**config_dict)
 
 
+def _build_prompt_config(
+    problem_description: str,
+    seed_prompt: str | None,
+    evaluator: Callable[..., dict],
+    inputs: list[Any] | None,
+    model: ClientSpec | list[ClientSpec] | None,
+    paradigm_model: ClientSpec | list[ClientSpec] | None,
+    mutation_model: ClientSpec | list[ClientSpec] | None,
+    budget_dollars: float | None,
+    budget_evals: int | None,
+    budget_seconds: float | None,
+    target_score: float | None = None,
+    **kwargs: Any,
+) -> LeviConfig:
+    """Build LeviConfig for prompt evolution."""
+    if model is not None and (paradigm_model is not None or mutation_model is not None):
+        raise ValueError(
+            "Cannot specify both 'model' and 'paradigm_model'/'mutation_model'. "
+            "Use 'model' for a single model, or 'paradigm_model'/'mutation_model' for separate models."
+        )
+
+    if model is not None:
+        resolved_paradigm = model
+        resolved_mutation = model
+    elif paradigm_model is not None or mutation_model is not None:
+        resolved_paradigm = paradigm_model or mutation_model
+        resolved_mutation = mutation_model or paradigm_model
+    else:
+        raise ValueError("Must specify 'model' (for both), or 'paradigm_model' and/or 'mutation_model'.")
+
+    if budget_dollars is None and budget_evals is None and budget_seconds is None:
+        raise ValueError(
+            "Must specify at least one budget constraint: budget_dollars, budget_evals, or budget_seconds."
+        )
+
+    budget = BudgetConfig(
+        dollars=budget_dollars,
+        evaluations=budget_evals,
+        seconds=budget_seconds,
+        target_score=target_score,
+    )
+
+    config_dict: dict[str, Any] = {
+        "problem_description": problem_description,
+        "function_signature": "def prompt_artifact():",
+        "seed_program": seed_prompt,
+        "score_fn": evaluator,
+        "paradigm_models": resolved_paradigm,
+        "mutation_models": resolved_mutation,
+        "budget": budget,
+        "meta_advice": MetaAdviceConfig(enabled=False),
+        "behavior": BehaviorConfig(ast_features=[], score_keys=["score"]),
+    }
+    if inputs is not None:
+        config_dict["inputs"] = inputs
+
+    config_dict.update(kwargs)
+    return LeviConfig(**config_dict)
+
+
 def evolve_code(
     problem_description: str,
     *,
@@ -280,6 +340,40 @@ def evolve_code(
     return asyncio.run(_run_async(config, resume_snapshot=resume_snapshot))
 
 
+def evolve_prompts(
+    problem_description: str,
+    *,
+    evaluator: Callable[..., dict],
+    seed_prompt: str | None = None,
+    inputs: list[Any] | None = None,
+    model: ClientSpec | list[ClientSpec] | None = None,
+    paradigm_model: ClientSpec | list[ClientSpec] | None = None,
+    mutation_model: ClientSpec | list[ClientSpec] | None = None,
+    budget_dollars: float | None = None,
+    budget_evals: int | None = None,
+    budget_seconds: float | None = None,
+    target_score: float | None = None,
+    resume_snapshot: dict | None = None,
+    **kwargs: Any,
+) -> LeviResult:
+    """Run Levi evolutionary prompt optimization for a single prompt."""
+    config = _build_prompt_config(
+        problem_description=problem_description,
+        seed_prompt=seed_prompt,
+        evaluator=evaluator,
+        inputs=inputs,
+        model=model,
+        paradigm_model=paradigm_model,
+        mutation_model=mutation_model,
+        budget_dollars=budget_dollars,
+        budget_evals=budget_evals,
+        budget_seconds=budget_seconds,
+        target_score=target_score,
+        **kwargs,
+    )
+    return asyncio.run(_run_async(config, resume_snapshot=resume_snapshot, artifact_adapter=PromptAdapter(config)))
+
+
 async def _evaluate_seed(
     config: LeviConfig,
     executor: ResilientProcessPool,
@@ -317,7 +411,11 @@ async def _evaluate_seed(
     return seed_result
 
 
-async def _run_async(config: LeviConfig, resume_snapshot: dict | None = None) -> LeviResult:
+async def _run_async(
+    config: LeviConfig,
+    resume_snapshot: dict | None = None,
+    artifact_adapter: ArtifactAdapter | None = None,
+) -> LeviResult:
     """Internal async implementation."""
     run_start_time = time.time()
     _setup_logging()
@@ -331,10 +429,10 @@ async def _run_async(config: LeviConfig, resume_snapshot: dict | None = None) ->
     logger.info("[Levi] Starting evolutionary optimization")
     logger.info(f"[Levi] Budget: {config.budget}")
     logger.info(f"[Levi] Sampler-model pairs: {len(config.sampler_model_pairs)}")
-    artifact_adapter = CodeAdapter(config)
+    artifact_adapter = artifact_adapter or CodeAdapter(config)
 
     # Run prompt optimization if enabled.
-    if config.prompt_opt.enabled and not config.prompt_overrides:
+    if artifact_adapter.artifact_type == "code" and config.prompt_opt.enabled and not config.prompt_overrides:
         from ..prompt_opt import optimize_prompts
 
         overrides, opt_cost = optimize_prompts(config)
@@ -399,10 +497,10 @@ async def _run_async(config: LeviConfig, resume_snapshot: dict | None = None) ->
         )
         if config.output_dir:
             logger.info(f"[Levi] Snapshot: {config.output_dir}/snapshot.json")
-        code_preview = result.best_program[:500]
+        content_preview = result.best_program[:500]
         if len(result.best_program) > 500:
-            code_preview += "..."
-        logger.info(f"[Levi] Best program:\n{code_preview}")
+            content_preview += "..."
+        logger.info(f"[Levi] Best {artifact_adapter.artifact_type}:\n{content_preview}")
 
         return result
 

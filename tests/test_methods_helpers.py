@@ -6,12 +6,13 @@ import numpy as np
 import pytest
 
 from levi.artifacts import CodeAdapter
+from levi.behavior import BehaviorExtractor
 from levi.config.models import BudgetConfig, InitConfig, LeviConfig
 from levi.core import EvaluationResult, Program
 from levi.init.diversifier import Diversifier
 from levi.methods.levi import _restore_from_snapshot
 from levi.pipeline.state import PipelineState
-from levi.utils import evaluate_code, extract_fn_name
+from levi.utils import evaluate_code, evaluate_prompt, extract_fn_name
 
 
 class DummyExtractor:
@@ -114,6 +115,24 @@ class TestEvaluateCode:
 
         assert result == {"score": 0.0}
         assert observed["inputs"] == []
+
+
+class TestEvaluatePrompt:
+    def test_supports_prompt_evaluator_returning_number(self):
+        def evaluator(prompt):
+            return len(prompt)
+
+        result = evaluate_prompt("Be more explicit.", evaluator, None)
+
+        assert result == {"score": 17.0}
+
+    def test_behavior_extractor_supports_score_only_for_non_code_content(self):
+        extractor = BehaviorExtractor(ast_features=[], score_keys=["score"])
+        extractor.set_fixed_bounds({"score": (0.0, 10.0)})
+
+        behavior = extractor.extract(Program(content="Please solve carefully."), {"score": 2.5})
+
+        assert behavior["score"] == 0.25
 
 
 class TestRestoreFromSnapshot:

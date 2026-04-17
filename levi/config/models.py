@@ -222,3 +222,7 @@ class LeviResult(BaseModel):
     score_history: Optional[list[float]] = None
 
     model_config = {"arbitrary_types_allowed": True}
+
+    @property
+    def best_prompt(self) -> str:
+        return self.best_program

@@ -64,13 +64,20 @@ class BehaviorExtractor:
         score_keys: Optional[list[str]] = None,
         custom_extractors: Optional[dict[str, Callable[[Program], float]]] = None,
     ) -> None:
-        self.ast_features = ast_features or [
-            "math_operators",
-            "loop_nesting_max",
-            "comprehension_count",
-            "range_max_arg",
-        ]
-        self.score_keys = score_keys or []
+        if ast_features is None:
+            self.ast_features = [
+                "math_operators",
+                "loop_nesting_max",
+                "comprehension_count",
+                "range_max_arg",
+            ]
+        else:
+            self.ast_features = list(ast_features)
+
+        if score_keys is None:
+            self.score_keys = []
+        else:
+            self.score_keys = list(score_keys)
 
         # Custom extractors take (Program,) only — no AST dependency.
         # This allows non-code content types (e.g. prompts) to provide extractors.
@@ -151,10 +158,16 @@ class BehaviorExtractor:
 
     def extract(self, program: Program, eval_result: Optional[dict] = None) -> FeatureVector:
         """Extract behavioral features from a program."""
-        try:
-            tree = ast.parse(program.content)
-        except SyntaxError:
-            return FeatureVector({f: 0.5 for f in self.features})
+        tree = None
+        needs_ast = any(
+            feature_name not in self._custom_extractors and feature_name in self.extractors
+            for feature_name in self.ast_features
+        )
+        if needs_ast:
+            try:
+                tree = ast.parse(program.content)
+            except SyntaxError:
+                return FeatureVector({f: 0.5 for f in self.features})
 
         raw_values: dict[str, float] = {}
 

@@ -56,7 +56,7 @@ from .prompts import (
 )
 
 # Methods
-from .methods import evolve_code
+from .methods import evolve_code, evolve_prompts
 
 # Protocols and pools
 from .pool import CVTMAPElitesPool, ProgramPool, SampleResult
@@ -101,4 +101,5 @@ __all__ = [
     "PromptOptConfig",
     # Methods
     "evolve_code",
+    "evolve_prompts",
 ]
