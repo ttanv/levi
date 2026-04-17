@@ -5,6 +5,7 @@ import asyncio
 import numpy as np
 import pytest
 
+from levi.artifacts import CodeAdapter
 from levi.config.models import BudgetConfig, InitConfig, LeviConfig
 from levi.core import EvaluationResult, Program
 from levi.init.diversifier import Diversifier
@@ -195,6 +196,35 @@ class TestRestoreFromSnapshot:
         with pytest.raises(KeyError):
             _restore_from_snapshot(pool, extractor, snapshot)
 
+    def test_restores_using_content_field_when_present(self):
+        pool = DummyPool(n_dims=2, centroids=None)
+        extractor = DummyExtractor()
+        snapshot = {
+            "metadata": {
+                "centroids": [[0.1, 0.2], [0.8, 0.9]],
+                "normalization": {
+                    "mins": [0.0, 0.0],
+                    "maxs": [10.0, 20.0],
+                    "ranges": [10.0, 20.0],
+                },
+            },
+            "run_state": {"total_cost": 1.25},
+            "elites": [
+                {
+                    "cell_index": 1,
+                    "content": "def solve(x):\n    return x + 3",
+                    "scores": {"score": 6.0},
+                    "behavior": {"loop_count": 0.25, "branch_count": 0.75},
+                }
+            ],
+        }
+        config = _make_diversifier_config()
+
+        resumed_cost = _restore_from_snapshot(pool, extractor, snapshot, artifact_adapter=CodeAdapter(config))
+
+        assert resumed_cost == 1.25
+        assert pool.add_at_cell_calls[0][1].content == "def solve(x):\n    return x + 3"
+
 
 class TestExtractFnName:
     def test_extracts_name_from_valid_signature(self):
@@ -232,7 +262,7 @@ class TestDiversifier:
     def test_generate_diverse_seeds_retries_three_times_when_generation_fails(self, monkeypatch):
         config = _make_diversifier_config(init=InitConfig(n_diverse_seeds=0, n_variants_per_seed=0))
         state = PipelineState(config.budget)
-        diversifier = Diversifier(config, _AsyncExecutor(), state)
+        diversifier = Diversifier(config, _AsyncExecutor(), CodeAdapter(config), state)
         attempts = []
 
         class _Resp:
@@ -245,7 +275,7 @@ class TestDiversifier:
 
         monkeypatch.setattr(diversifier, "_acompletion", fake_completion)
 
-        seeds = asyncio.run(diversifier._generate_diverse_seeds(None, None, "solve"))
+        seeds = asyncio.run(diversifier._generate_diverse_seeds(None, None))
 
         assert seeds == []
         assert len(attempts) == 3
@@ -254,10 +284,10 @@ class TestDiversifier:
         config = _make_diversifier_config(budget=BudgetConfig(evaluations=1))
         executor = _AsyncExecutor()
         state = PipelineState(config.budget)
-        diversifier = Diversifier(config, executor, state)
+        diversifier = Diversifier(config, executor, CodeAdapter(config), state)
 
         assert asyncio.run(state.try_start_evaluation()) is True
-        result = asyncio.run(diversifier._cascade_eval("def solve(x):\n    return x", "solve"))
+        result = asyncio.run(diversifier._cascade_eval("def solve(x):\n    return x"))
         asyncio.run(state.finish_evaluation())
 
         assert result == {"score": 1.0}

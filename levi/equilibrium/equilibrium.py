@@ -12,14 +12,14 @@ import random
 
 from sklearn.cluster import KMeans
 
+from ..artifacts import ArtifactAdapter
 from ..clients.base import client_name
 from ..config import LeviConfig
-from ..core import EvaluationResult, Program
+from ..core import EvaluationResult
 from ..pipeline.state import BudgetLimitReached, PipelineState, coerce_finite_float
 from ..pool import CVTMAPElitesPool
 from ..pool.cvt_map_elites import Elite
-from ..utils import ResilientProcessPool, coerce_score, evaluate_code, extract_code, extract_fn_name
-from .prompts import PARADIGM_SHIFT_PROMPTS, VARIANT_GENERATION_PROMPT, get_budget_stage
+from ..utils import ResilientProcessPool, coerce_score
 
 logger = logging.getLogger(__name__)
 
@@ -41,16 +41,17 @@ class PunctuatedEquilibrium:
         config: LeviConfig,
         pool: CVTMAPElitesPool,
         executor: ResilientProcessPool,
+        artifact_adapter: ArtifactAdapter,
         archive_lock: asyncio.Lock,
         state: PipelineState,
     ):
         self.config = config
         self.pool = pool
         self.executor = executor
+        self.artifact_adapter = artifact_adapter
         self.archive_lock = archive_lock
         self.state = state
         self.pe_config = config.punctuated_equilibrium
-        self.fn_name = extract_fn_name(config.function_signature)
 
     def _cluster_occupied_centroids(self) -> dict[int, list[int]]:
         """
@@ -125,72 +126,19 @@ class PunctuatedEquilibrium:
             budget_progress: Fraction of budget consumed (0-1). Controls prompt
                 aggressiveness: early budget = radical shifts, late = refinement.
         """
-        stage = get_budget_stage(budget_progress)
-        logger.info(f"[PE] Budget progress: {budget_progress:.1%} -> stage={stage}")
-
-        rep_text_parts = []
-        for i, (cluster_id, elite) in enumerate(representatives):
-            score = elite.result.primary_score
-            code = elite.program.content
-            rep_text_parts.append(
-                f"### Region {i + 1} (Cluster {cluster_id}, Score: {score:.17g})\n```python\n{code}\n```"
-            )
-
-        representative_solutions = "\n\n".join(rep_text_parts)
-
-        # Check for optimized paradigm shift instructions
-        override = self.config.prompt_overrides.get("paradigm_shift")
-        if override:
-            # Use optimized prompt instead of default template
-            return f"""# Algorithmic Paradigm Shift Challenge
-
-## Problem
-{self.config.problem_description}
-
-## Function Signature
-```python
-{self.config.function_signature}
-```
-
-## Current Best Solutions ({len(representatives)} regions, {n_evaluations} evaluations)
-
-{representative_solutions}
-
-## Your Task
-{override}
-
-Output ONLY complete, runnable Python code in a ```python block.
-"""
-
-        # Use stage-appropriate prompt template
-        template = PARADIGM_SHIFT_PROMPTS[stage]
-        return template.format(
-            problem_description=self.config.problem_description,
-            function_signature=self.config.function_signature,
+        return self.artifact_adapter.build_paradigm_shift_prompt(
+            representatives,
             n_evaluations=n_evaluations,
-            n_regions=len(representatives),
-            representative_solutions=representative_solutions,
+            budget_progress=budget_progress,
         )
 
     def _build_variant_prompt(self, base_code: str, base_score: float) -> str:
         """Build prompt for variant generation."""
-        return VARIANT_GENERATION_PROMPT.format(
-            problem_description=self.config.problem_description,
-            function_signature=self.config.function_signature,
-            base_code=base_code,
-            base_score=base_score,
-        )
+        return self.artifact_adapter.build_variant_prompt(base_code, base_score)
 
     async def _evaluate(self, code: str) -> dict:
         """Evaluate code using the executor."""
-        return await self.executor.run(
-            evaluate_code,
-            code,
-            self.config.score_fn,
-            self.config.inputs,
-            self.fn_name,
-            timeout=self.config.pipeline.eval_timeout,
-        )
+        return await self.artifact_adapter.evaluate(self.executor, code)
 
     async def trigger(self, n_evaluations: int, budget_progress: float = 0.0) -> dict:
         """
@@ -292,7 +240,7 @@ Output ONLY complete, runnable Python code in a ```python block.
             logger.warning(f"[PE] Paradigm shift generation failed: {e}")
             return stats
 
-        paradigm_code = extract_code(content)
+        paradigm_code = self.artifact_adapter.extract_candidate(content)
         if not paradigm_code:
             logger.warning("[PE] Failed to extract paradigm shift code")
             return stats
@@ -332,8 +280,8 @@ Output ONLY complete, runnable Python code in a ```python block.
         if "error" not in result:
             stats["paradigm_score"] = score
 
-            program = Program(
-                content=paradigm_code,
+            program = self.artifact_adapter.make_program(
+                paradigm_code,
                 metadata={
                     "source": "punctuated_equilibrium",
                     "pe_type": "paradigm_shift",
@@ -426,7 +374,7 @@ Output ONLY complete, runnable Python code in a ```python block.
 
                 stats["total_cost"] += vr["cost"]
 
-                variant_code = extract_code(vr["content"])
+                variant_code = self.artifact_adapter.extract_candidate(vr["content"])
                 if not variant_code:
                     logger.warning(f"[PE] Variant {vr['idx']} code extraction failed ({vr.get('model', '?')})")
                     continue
@@ -462,8 +410,8 @@ Output ONLY complete, runnable Python code in a ```python block.
                         result["score"] = score
 
                 if "error" not in result:
-                    program = Program(
-                        content=variant_code,
+                    program = self.artifact_adapter.make_program(
+                        variant_code,
                         metadata={
                             "source": "punctuated_equilibrium",
                             "pe_type": "variant",

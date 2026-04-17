@@ -3,6 +3,7 @@
 import asyncio
 
 import levi.pipeline.runner as runner_module
+from levi.artifacts import CodeAdapter
 from levi.config.models import BudgetConfig, LeviConfig
 from levi.pipeline.producer import llm_producer
 from levi.pipeline.runner import PipelineRunner
@@ -47,14 +48,14 @@ class _DummyExecutor:
 class TestPipelineRunnerFlowControl:
     def test_runner_auto_sizes_code_queue(self):
         config = _make_config(pipeline={"n_eval_processes": 3})
-        runner = PipelineRunner(config, _DummyPool(), _DummyExecutor())
+        runner = PipelineRunner(config, _DummyPool(), _DummyExecutor(), artifact_adapter=CodeAdapter(config))
 
         assert runner.code_queue.maxsize == 6
 
     def test_build_result_handles_empty_archive(self):
         config = _make_config()
         state = PipelineState(config.budget)
-        runner = PipelineRunner(config, _DummyPool(), _DummyExecutor(), state=state)
+        runner = PipelineRunner(config, _DummyPool(), _DummyExecutor(), artifact_adapter=CodeAdapter(config), state=state)
 
         result = runner._build_result()
 
@@ -72,7 +73,7 @@ class TestPipelineRunnerFlowControl:
             }
         )
         state = PipelineState(config.budget)
-        runner = PipelineRunner(config, _DummyPool(), _DummyExecutor(), state=state)
+        runner = PipelineRunner(config, _DummyPool(), _DummyExecutor(), artifact_adapter=CodeAdapter(config), state=state)
 
         asyncio.run(runner._wait_for_completion())
 
@@ -95,6 +96,7 @@ class TestProducerFlowControl:
                 pool=_EmptyPool(),
                 archive_lock=archive_lock,
                 config=config,
+                artifact_adapter=CodeAdapter(config),
                 state=state,
                 stop_event=stop_event,
             )

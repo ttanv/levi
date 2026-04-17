@@ -7,6 +7,7 @@ import time
 from collections.abc import Callable
 from typing import Any
 
+from ..artifacts import ArtifactAdapter, CodeAdapter
 from ..behavior import BehaviorExtractor, FeatureVector
 from ..clients.base import ClientSpec
 from ..config import BudgetConfig, LeviConfig, LeviResult
@@ -15,7 +16,7 @@ from ..init import Diversifier
 from ..pipeline import PipelineRunner
 from ..pipeline.state import PipelineState, coerce_finite_float
 from ..pool import CVTMAPElitesPool
-from ..utils import ResilientProcessPool, evaluate_code, extract_fn_name
+from ..utils import ResilientProcessPool
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +37,7 @@ def _restore_from_snapshot(
     pool: CVTMAPElitesPool,
     _extractor: BehaviorExtractor,
     snapshot: dict,
+    artifact_adapter: ArtifactAdapter | None = None,
 ) -> float:
     """
     Restore pool state from a snapshot dict.
@@ -72,8 +74,14 @@ def _restore_from_snapshot(
     # Restore elites into pool
     restored = 0
     for elite_data in elites:
+        if artifact_adapter is not None:
+            content = artifact_adapter.snapshot_content(elite_data)
+        elif "content" in elite_data:
+            content = elite_data["content"]
+        else:
+            content = elite_data["code"]
         program = Program(
-            content=elite_data["code"],
+            content=content,
             metadata=elite_data.get("metadata", {}),
         )
         eval_result = EvaluationResult(
@@ -276,7 +284,7 @@ async def _evaluate_seed(
     config: LeviConfig,
     executor: ResilientProcessPool,
     state: PipelineState,
-    fn_name: str,
+    artifact_adapter: ArtifactAdapter,
 ) -> dict:
     """Evaluate the seed program and return its result dict."""
     logger.info("[Levi] Evaluating seed program")
@@ -285,14 +293,7 @@ async def _evaluate_seed(
         raise RuntimeError("Budget exhausted before seed evaluation")
 
     try:
-        seed_result = await executor.run(
-            evaluate_code,
-            config.seed_program,
-            config.score_fn,
-            config.inputs,
-            fn_name,
-            timeout=config.pipeline.eval_timeout,
-        )
+        seed_result = await artifact_adapter.evaluate(executor, config.seed_program or "")
     except Exception as e:
         logger.error(f"[Levi] Failed to evaluate seed: {e}")
         raise RuntimeError(f"Seed program evaluation failed: {e}")
@@ -330,6 +331,7 @@ async def _run_async(config: LeviConfig, resume_snapshot: dict | None = None) ->
     logger.info("[Levi] Starting evolutionary optimization")
     logger.info(f"[Levi] Budget: {config.budget}")
     logger.info(f"[Levi] Sampler-model pairs: {len(config.sampler_model_pairs)}")
+    artifact_adapter = CodeAdapter(config)
 
     # Run prompt optimization if enabled.
     if config.prompt_opt.enabled and not config.prompt_overrides:
@@ -361,20 +363,18 @@ async def _run_async(config: LeviConfig, resume_snapshot: dict | None = None) ->
     executor = ResilientProcessPool(max_workers=config.pipeline.n_eval_processes)
 
     try:
-        fn_name = extract_fn_name(config.function_signature)
-
         # Evaluate seed program (if provided)
-        seed_result = await _evaluate_seed(config, executor, state, fn_name) if config.seed_program else None
+        seed_result = await _evaluate_seed(config, executor, state, artifact_adapter) if config.seed_program else None
 
         # Resume from snapshot or run init
         init_cost = 0.0
         init_score_history = []
         if resume_snapshot is not None:
-            init_cost = _restore_from_snapshot(pool, extractor, resume_snapshot)
+            init_cost = _restore_from_snapshot(pool, extractor, resume_snapshot, artifact_adapter=artifact_adapter)
             state.total_cost = coerce_finite_float(init_cost, default=0.0)
         else:
             logger.info("[Levi] Running init phase")
-            diversifier = Diversifier(config, executor, state)
+            diversifier = Diversifier(config, executor, artifact_adapter, state)
             init_cost, init_score_history = await diversifier.run(pool, config.seed_program, seed_result, extractor)
             logger.info(f"[Levi] Init phase complete, cost: ${init_cost:.3f}")
 
@@ -384,6 +384,7 @@ async def _run_async(config: LeviConfig, resume_snapshot: dict | None = None) ->
             config,
             pool,
             executor,
+            artifact_adapter=artifact_adapter,
             output_dir=config.output_dir,
             init_cost=init_cost,
             init_score_history=init_score_history,

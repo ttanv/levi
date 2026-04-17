@@ -3,40 +3,18 @@
 import asyncio
 import logging
 import random
-import re
-from typing import Optional
 
+from ..artifacts import ArtifactAdapter, apply_diff as _apply_diff
 from ..clients.base import client_name
 from ..config import LeviConfig
 from ..pool import CVTMAPElitesPool
-from ..prompts import OutputMode, ProgramWithScore, PromptBuilder
-from ..utils import extract_code
+from ..prompts import ProgramWithScore
 from .state import BudgetLimitReached, PipelineState
 
 logger = logging.getLogger(__name__)
 
-
-def apply_diff(original: str, diff_response: str) -> Optional[str]:
-    """Apply SEARCH/REPLACE diff blocks to original code."""
-    result = original
-
-    pattern = r"<<<<<<< SEARCH\s*(.*?)\s*=======\s*(.*?)\s*>>>>>>> REPLACE"
-    matches = re.findall(pattern, diff_response, re.DOTALL)
-
-    if not matches:
-        # No diff blocks found, try to extract full code
-        return extract_code(diff_response)
-
-    for search, replace in matches:
-        search = search.strip()
-        replace = replace.strip()
-        if search in result:
-            result = result.replace(search, replace, 1)
-        else:
-            # Search block not found in original - diff failed
-            return None
-
-    return result
+# Backwards-compatible re-export used by existing tests and callers.
+apply_diff = _apply_diff
 
 
 async def llm_producer(
@@ -45,6 +23,7 @@ async def llm_producer(
     pool: CVTMAPElitesPool,
     archive_lock: asyncio.Lock,
     config: LeviConfig,
+    artifact_adapter: ArtifactAdapter,
     state: PipelineState,
     stop_event: asyncio.Event,
 ) -> None:
@@ -69,25 +48,13 @@ async def llm_producer(
 
             # Determine output mode from config
             use_diff = config.pipeline.output_mode == "diff"
-            output_mode = OutputMode.DIFF if use_diff else OutputMode.FULL
-
-            builder = PromptBuilder()
-            builder.add_section("Problem", config.problem_description, priority=10)
-            builder.add_section("Signature", f"```python\n{config.function_signature}\n```", priority=20)
-            builder.add_parents([ProgramWithScore(p, None) for p in parents], priority=30)
-
-            # Check for optimized mutation instructions for this model
-            mutation_overrides = config.prompt_overrides.get("mutation", {})
             model_key = client_name(model)
-            if model_key in mutation_overrides:
-                builder.set_custom_output(mutation_overrides[model_key])
-            else:
-                builder.set_output_mode(output_mode)
-
-            if state.current_meta_advice and random.random() < 0.8:
-                builder.add_section("Meta-Advice", state.current_meta_advice, priority=100)
-
-            prompt = builder.build()
+            prompt = artifact_adapter.build_mutation_prompt(
+                [ProgramWithScore(p, None) for p in parents],
+                meta_advice=state.current_meta_advice if state.current_meta_advice and random.random() < 0.8 else None,
+                model=model,
+                use_diff=use_diff,
+            )
 
             try:
                 response = await state.acompletion(
@@ -112,17 +79,17 @@ async def llm_producer(
                 stop_event.set()
                 break
 
-            # Extract or apply code based on mode
-            if use_diff:
-                code = apply_diff(parent.content, content)
-            else:
-                code = extract_code(content)
-            if not code:
+            candidate_content = artifact_adapter.extract_candidate(
+                content,
+                parent_content=parent.content if use_diff else None,
+                use_diff=use_diff,
+            )
+            if not candidate_content:
                 continue
 
             await code_queue.put(
                 {
-                    "code": code,
+                    "content": candidate_content,
                     "sampler": sampler_name,
                     "source_cell": sample.metadata.get("source_cell"),
                     "model": model_key,

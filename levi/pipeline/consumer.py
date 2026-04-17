@@ -5,11 +5,12 @@ import logging
 from collections.abc import Callable
 from typing import Optional
 
+from ..artifacts import ArtifactAdapter
 from ..clients.base import client_name, short_client_name
 from ..config import LeviConfig
-from ..core import EvaluationResult, Program
+from ..core import EvaluationResult
 from ..pool import CVTMAPElitesPool
-from ..utils import ResilientProcessPool, coerce_score, evaluate_code, extract_fn_name
+from ..utils import ResilientProcessPool, coerce_score
 from .state import BudgetLimitReached, PipelineState
 
 SNAPSHOT_INTERVAL = 10  # Save snapshot every N evaluations
@@ -73,12 +74,11 @@ async def eval_consumer(
     archive_lock: asyncio.Lock,
     executor: ResilientProcessPool,
     config: LeviConfig,
+    artifact_adapter: ArtifactAdapter,
     state: PipelineState,
     stop_event: asyncio.Event,
     snapshot_callback: Optional[Callable[[], None]] = None,
 ) -> None:
-    fn_name = extract_fn_name(config.function_signature)
-
     while not stop_event.is_set() or not code_queue.empty():
         try:
             item = await asyncio.wait_for(code_queue.get(), timeout=2.0)
@@ -95,19 +95,17 @@ async def eval_consumer(
                 cascade = config.cascade
                 quick_score = None
                 if cascade.enabled and cascade.quick_inputs:
-                    quick_result = await executor.run(
-                        evaluate_code,
-                        item["code"],
-                        config.score_fn,
-                        cascade.quick_inputs,
-                        fn_name,
+                    quick_result = await artifact_adapter.evaluate(
+                        executor,
+                        item["content"],
+                        inputs=cascade.quick_inputs,
                         timeout=cascade.quick_timeout,
                     )
                     if "error" in quick_result:
                         result = quick_result
                     else:
                         quick_score = quick_result.get("score", 0)
-                        preview_program = Program(content=item["code"])
+                        preview_program = artifact_adapter.make_program(item["content"])
                         target_cell = pool.preview_cell(preview_program, quick_result)
                         incumbent = pool.get_elite(target_cell)
                         incumbent_quick_score = None
@@ -126,23 +124,9 @@ async def eval_consumer(
                                 "target_cell": target_cell,
                             }
                         else:
-                            result = await executor.run(
-                                evaluate_code,
-                                item["code"],
-                                config.score_fn,
-                                config.inputs,
-                                fn_name,
-                                timeout=config.pipeline.eval_timeout,
-                            )
+                            result = await artifact_adapter.evaluate(executor, item["content"])
                 else:
-                    result = await executor.run(
-                        evaluate_code,
-                        item["code"],
-                        config.score_fn,
-                        config.inputs,
-                        fn_name,
-                        timeout=config.pipeline.eval_timeout,
-                    )
+                    result = await artifact_adapter.evaluate(executor, item["content"])
             except TimeoutError:
                 result = {"error": "Timeout"}
             except Exception as e:
@@ -170,7 +154,7 @@ async def eval_consumer(
                         if quick_score is not None:
                             result["quick_score"] = quick_score
 
-                        program = Program(content=item["code"])
+                        program = artifact_adapter.make_program(item["content"])
                         eval_result = EvaluationResult(
                             scores=result,
                             is_valid=True,

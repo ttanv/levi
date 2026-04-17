@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from ..artifacts import ArtifactAdapter
 from ..clients.base import short_client_name
 from ..config import LeviConfig, LeviResult
 from ..equilibrium import PunctuatedEquilibrium
@@ -28,6 +29,7 @@ class PipelineRunner:
         config: LeviConfig,
         pool: CVTMAPElitesPool,
         executor: ResilientProcessPool,
+        artifact_adapter: ArtifactAdapter,
         output_dir: Optional[str] = None,
         init_cost: float = 0.0,
         init_score_history: Optional[list] = None,
@@ -37,6 +39,7 @@ class PipelineRunner:
         self.config = config
         self.pool = pool
         self.executor = executor
+        self.artifact_adapter = artifact_adapter
         self.archive_lock = asyncio.Lock()
         queue_maxsize = max(1, config.pipeline.n_eval_processes * 2)
         self.code_queue = asyncio.Queue(maxsize=queue_maxsize)
@@ -66,6 +69,7 @@ class PipelineRunner:
                 config=config,
                 pool=pool,
                 executor=executor,
+                artifact_adapter=artifact_adapter,
                 archive_lock=self.archive_lock,
                 state=self.state,
             )
@@ -84,6 +88,7 @@ class PipelineRunner:
                     pool=self.pool,
                     archive_lock=self.archive_lock,
                     config=self.config,
+                    artifact_adapter=self.artifact_adapter,
                     state=self.state,
                     stop_event=self.stop_event,
                 )
@@ -100,6 +105,7 @@ class PipelineRunner:
                     archive_lock=self.archive_lock,
                     executor=self.executor,
                     config=self.config,
+                    artifact_adapter=self.artifact_adapter,
                     state=self.state,
                     stop_event=self.stop_event,
                     snapshot_callback=self.save_snapshot if self.output_dir else None,

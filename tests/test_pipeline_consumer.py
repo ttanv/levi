@@ -2,6 +2,7 @@
 
 import asyncio
 
+from levi.artifacts import CodeAdapter
 from levi.config.models import BudgetConfig, CascadeConfig, LeviConfig, PipelineConfig
 from levi.core import EvaluationResult
 from levi.pipeline.consumer import eval_consumer
@@ -69,7 +70,7 @@ class _Pool:
 async def _run_consumer_once(pool: _Pool, executor: _Executor, config: LeviConfig) -> PipelineState:
     state = PipelineState(config.budget)
     queue = asyncio.Queue()
-    await queue.put({"code": "def solve(x):\n    return x", "sampler": "softmax", "source_cell": 3, "model": "m"})
+    await queue.put({"content": "def solve(x):\n    return x", "sampler": "softmax", "source_cell": 3, "model": "m"})
     stop_event = asyncio.Event()
     stop_event.set()
     archive_lock = asyncio.Lock()
@@ -81,6 +82,7 @@ async def _run_consumer_once(pool: _Pool, executor: _Executor, config: LeviConfi
         archive_lock=archive_lock,
         executor=executor,
         config=config,
+        artifact_adapter=CodeAdapter(config),
         state=state,
         stop_event=stop_event,
     )

@@ -719,6 +719,7 @@ class CVTMAPElitesPool:
             elite_data = {
                 "cell_index": cell_idx,
                 "program_id": str(elite.program.id),
+                "content": elite.program.content,
                 "code": elite.program.content,
                 "scores": elite.result.scores,
                 "primary_score": elite.result.primary_score,
