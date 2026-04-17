@@ -1,254 +1,167 @@
-"""Canonical prompt-bundle helpers for prompt evolution."""
+"""Minimal prompt-bundle helpers for prompt evolution."""
 
 from __future__ import annotations
 
 import json
-import re
-from collections.abc import Mapping
-from dataclasses import dataclass
-from json import JSONDecodeError
+from collections.abc import Collection
 from typing import Any
 
 DEFAULT_PROMPT_TARGET = "prompt"
-_WRAPPER_KEYS = ("prompts", "bundle")
-_SINGLE_VALUE_KEYS = ("prompt", "value", "content", "text")
-_GENERIC_FENCED_BLOCK_RE = re.compile(r"```(?:[a-zA-Z0-9_+-]+)?\s*(.*?)```", re.IGNORECASE | re.DOTALL)
-_JSON_FENCED_BLOCK_RE = re.compile(r"```json\s*(.*?)```", re.IGNORECASE | re.DOTALL)
 
 
-@dataclass(frozen=True, order=True)
-class PromptTarget:
-    """Named prompt component within a bundle."""
-
-    name: str
-    text: str
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.name, str) or not self.name.strip():
-            raise ValueError("prompt target name must be a non-empty string")
-        if not isinstance(self.text, str):
-            raise ValueError("prompt target text must be a string")
-
-
-@dataclass(frozen=True)
 class PromptBundle:
-    """Canonical representation of one or more prompt components."""
+    """Canonical prompt artifact with explicit editable-target metadata."""
 
-    targets: tuple[PromptTarget, ...]
+    def __init__(
+        self,
+        prompts: dict[str, str],
+        editable_targets: Collection[str] | None = None,
+    ) -> None:
+        if not prompts:
+            raise ValueError("prompt bundle must contain at least one prompt")
 
-    def __post_init__(self) -> None:
-        if not self.targets:
-            raise ValueError("prompt bundle must contain at least one target")
+        self.prompts = dict(sorted(prompts.items()))
 
-        sorted_targets = tuple(sorted(self.targets, key=lambda target: target.name))
-        names = [target.name for target in sorted_targets]
-        if len(set(names)) != len(names):
-            raise ValueError("prompt bundle target names must be unique")
+        if editable_targets is None:
+            self.editable_targets = tuple(self.prompts.keys())
+        else:
+            self.editable_targets = tuple(sorted(dict.fromkeys(editable_targets)))
+            for target in self.editable_targets:
+                if target not in self.prompts:
+                    raise ValueError(f"editable target {target!r} is not present in prompts")
 
-        object.__setattr__(self, "targets", sorted_targets)
+    def __eq__(self, other: object) -> bool:
+        return self.prompts == other.prompts and self.editable_targets == other.editable_targets
 
-    @classmethod
-    def single(cls, text: str, *, target: str = DEFAULT_PROMPT_TARGET) -> "PromptBundle":
+    def __repr__(self) -> str:
+        return f"PromptBundle(prompts={self.prompts!r}, editable_targets={self.editable_targets!r})"
+
+    @staticmethod
+    def single(
+        text: str,
+        *,
+        target: str = DEFAULT_PROMPT_TARGET,
+        editable: bool = True,
+    ) -> "PromptBundle":
         """Build a bundle containing one named prompt."""
-        return cls((PromptTarget(target, text),))
+        editable_targets = (target,) if editable else ()
+        return PromptBundle({target: text}, editable_targets=editable_targets)
 
-    @classmethod
-    def from_mapping(cls, prompts: dict[str, str]) -> "PromptBundle":
+    @staticmethod
+    def from_mapping(
+        prompts: dict[str, str],
+        *,
+        editable_targets: Collection[str] | None = None,
+    ) -> "PromptBundle":
         """Build a bundle from a mapping of target name -> prompt text."""
         if not prompts:
-            raise ValueError("prompt mapping must contain at least one target")
-        return cls(tuple(PromptTarget(name, text) for name, text in prompts.items()))
+            raise ValueError("prompt mapping must contain at least one prompt")
+        return PromptBundle(prompts, editable_targets=editable_targets)
 
-    @classmethod
+    @staticmethod
     def from_value(
-        cls,
-        value: "PromptBundle | str | Mapping[str, str]",
+        value: "PromptBundle | str | dict[str, str]",
         *,
         default_target: str = DEFAULT_PROMPT_TARGET,
+        editable_targets: Collection[str] | None = None,
     ) -> "PromptBundle":
-        """Normalize a single prompt or prompt mapping into a bundle."""
+        """Normalize a prompt string or mapping into a bundle."""
         if isinstance(value, PromptBundle):
             return value
         if isinstance(value, str):
-            return cls.single(value, target=default_target)
-        if isinstance(value, Mapping):
-            _validate_string_mapping(value)
-            return cls.from_mapping(dict(value))
-        raise TypeError("prompt bundle value must be a PromptBundle, string, or Mapping[str, str]")
+            editable = editable_targets is None or default_target in editable_targets
+            return PromptBundle.single(value, target=default_target, editable=editable)
+        if isinstance(value, dict):
+            return PromptBundle.from_mapping(value, editable_targets=editable_targets)
+        return PromptBundle.from_mapping(value, editable_targets=editable_targets)  # type: ignore[arg-type]
 
-    @classmethod
-    def from_serialized(cls, serialized: str, *, reference: "PromptBundle | None" = None) -> "PromptBundle":
-        """Deserialize a canonical JSON prompt bundle."""
-        payload = json.loads(serialized)
-        return cls.from_payload(payload, reference=reference)
+    @staticmethod
+    def from_payload(payload: Any) -> "PromptBundle":
+        """Build a bundle from decoded JSON."""
+        if "prompts" in payload:
+            return PromptBundle.from_mapping(
+                payload["prompts"],
+                editable_targets=payload.get("editable_targets"),
+            )
 
-    @classmethod
-    def from_payload(cls, payload: Any, *, reference: "PromptBundle | None" = None) -> "PromptBundle":
-        """Build a bundle from decoded JSON or other parsed payloads."""
-        prompts = _coerce_prompt_mapping(payload, reference=reference)
-        return cls.from_mapping(prompts)
+        return PromptBundle.from_mapping(payload)
+
+    @staticmethod
+    def from_serialized(serialized: str) -> "PromptBundle":
+        """Deserialize a prompt bundle from JSON."""
+        return PromptBundle.from_payload(json.loads(serialized))
 
     @property
     def target_names(self) -> tuple[str, ...]:
-        return tuple(target.name for target in self.targets)
+        return tuple(self.prompts.keys())
+
+    @property
+    def immutable_targets(self) -> tuple[str, ...]:
+        editable = set(self.editable_targets)
+        return tuple(name for name in self.target_names if name not in editable)
 
     @property
     def is_single_target(self) -> bool:
-        return len(self.targets) == 1
+        return len(self.prompts) == 1
 
     def get(self, target: str) -> str:
-        for entry in self.targets:
-            if entry.name == target:
-                return entry.text
-        raise KeyError(target)
+        return self.prompts[target]
+
+    def is_editable(self, target: str) -> bool:
+        if target not in self.prompts:
+            raise KeyError(target)
+        return target in set(self.editable_targets)
 
     def as_dict(self) -> dict[str, str]:
-        return {target.name: target.text for target in self.targets}
+        return dict(self.prompts)
+
+    def as_payload(self) -> dict[str, Any]:
+        return {
+            "prompts": self.as_dict(),
+            "editable_targets": list(self.editable_targets),
+        }
+
+    def with_updates(self, updates: dict[str, str]) -> "PromptBundle":
+        """Return a new bundle with selected prompt texts replaced."""
+        if not updates:
+            return self
+
+        updated_prompts = self.as_dict()
+        for name, text in updates.items():
+            if name not in updated_prompts:
+                raise KeyError(name)
+            updated_prompts[name] = text
+
+        return PromptBundle(updated_prompts, editable_targets=self.editable_targets)
 
     def serialize(self) -> str:
-        """Return a deterministic JSON representation for storage/evolution."""
-        return json.dumps(self.as_dict(), indent=2, sort_keys=True, ensure_ascii=False)
+        """Return a deterministic JSON representation for storage."""
+        return json.dumps(self.as_payload(), indent=2, sort_keys=True, ensure_ascii=False)
 
 
 def normalize_prompt_bundle(
-    value: PromptBundle | str | Mapping[str, str],
+    value: PromptBundle | str | dict[str, str],
     *,
     default_target: str = DEFAULT_PROMPT_TARGET,
+    editable_targets: Collection[str] | None = None,
 ) -> PromptBundle:
     """Normalize prompt inputs into a canonical bundle."""
-    return PromptBundle.from_value(value, default_target=default_target)
+    return PromptBundle.from_value(
+        value,
+        default_target=default_target,
+        editable_targets=editable_targets,
+    )
 
 
 def serialize_prompt_bundle(
-    value: PromptBundle | str | Mapping[str, str],
+    value: PromptBundle | str | dict[str, str],
     *,
     default_target: str = DEFAULT_PROMPT_TARGET,
+    editable_targets: Collection[str] | None = None,
 ) -> str:
     """Normalize prompt inputs and return canonical serialized content."""
-    return normalize_prompt_bundle(value, default_target=default_target).serialize()
-
-
-def parse_prompt_bundle_response(
-    response_text: str,
-    *,
-    reference: PromptBundle | None = None,
-) -> PromptBundle | None:
-    """Parse a model response into a prompt bundle.
-
-    Accepts:
-    - Bare JSON object: ``{"mutation": "...", "system": "..."}``
-    - Wrapped JSON: ``{"prompts": {...}}`` or ``{"bundle": {...}}``
-    - Single-target raw text when ``reference`` names exactly one target
-    """
-
-    for payload in _iter_decoded_json_payloads(response_text):
-        try:
-            return PromptBundle.from_payload(payload, reference=reference)
-        except (TypeError, ValueError):
-            continue
-
-    if reference is not None and reference.is_single_target:
-        target_name = reference.target_names[0]
-        raw_text = _strip_outer_fence(response_text).strip()
-        if raw_text:
-            return PromptBundle.single(raw_text, target=target_name)
-
-    return None
-
-
-def _validate_string_mapping(prompts: Mapping[str, str]) -> None:
-    for name, text in prompts.items():
-        if not isinstance(name, str) or not name.strip():
-            raise ValueError("prompt target names must be non-empty strings")
-        if not isinstance(text, str):
-            raise ValueError("prompt target values must be strings")
-
-
-def _coerce_prompt_mapping(payload: Any, *, reference: PromptBundle | None = None) -> dict[str, str]:
-    if isinstance(payload, str):
-        target_name = DEFAULT_PROMPT_TARGET
-        if reference is not None and reference.is_single_target:
-            target_name = reference.target_names[0]
-        return {target_name: payload}
-
-    if not isinstance(payload, Mapping):
-        raise TypeError("prompt bundle payload must be a string or object")
-
-    mapping = dict(payload)
-    for key in _WRAPPER_KEYS:
-        wrapped = mapping.get(key)
-        if isinstance(wrapped, Mapping):
-            _validate_string_mapping(wrapped)
-            return dict(wrapped)
-
-    if reference is not None:
-        matched = _select_reference_targets(mapping, reference)
-        if matched is not None:
-            return matched
-
-    _validate_string_mapping(mapping)
-    return mapping
-
-
-def _select_reference_targets(mapping: dict[str, Any], reference: PromptBundle) -> dict[str, str] | None:
-    reference_names = reference.target_names
-    if all(name in mapping and isinstance(mapping[name], str) for name in reference_names):
-        return {name: mapping[name] for name in reference_names}
-
-    if reference.is_single_target:
-        target_name = reference_names[0]
-        for alias in _SINGLE_VALUE_KEYS:
-            value = mapping.get(alias)
-            if isinstance(value, str):
-                return {target_name: value}
-
-    return None
-
-
-def _iter_decoded_json_payloads(text: str) -> list[Any]:
-    decoder = json.JSONDecoder()
-    payloads: list[Any] = []
-    seen: set[str] = set()
-
-    for candidate in _iter_json_candidates(text):
-        stripped = candidate.strip()
-        if not stripped or stripped in seen:
-            continue
-        seen.add(stripped)
-        try:
-            payloads.append(decoder.decode(stripped))
-        except JSONDecodeError:
-            continue
-
-    stripped_text = text.strip()
-    for idx, ch in enumerate(stripped_text):
-        if ch not in '{"':
-            continue
-        fragment = stripped_text[idx:]
-        try:
-            payload, end = decoder.raw_decode(fragment)
-        except JSONDecodeError:
-            continue
-
-        raw_candidate = fragment[:end].strip()
-        if raw_candidate in seen:
-            continue
-        seen.add(raw_candidate)
-        payloads.append(payload)
-
-    return payloads
-
-
-def _iter_json_candidates(text: str) -> list[str]:
-    candidates = [text]
-    candidates.extend(match.group(1) for match in _JSON_FENCED_BLOCK_RE.finditer(text))
-    candidates.extend(match.group(1) for match in _GENERIC_FENCED_BLOCK_RE.finditer(text))
-    return candidates
-
-
-def _strip_outer_fence(text: str) -> str:
-    stripped = text.strip()
-    match = _GENERIC_FENCED_BLOCK_RE.fullmatch(stripped)
-    if match:
-        return match.group(1)
-    return stripped
+    return normalize_prompt_bundle(
+        value,
+        default_target=default_target,
+        editable_targets=editable_targets,
+    ).serialize()
