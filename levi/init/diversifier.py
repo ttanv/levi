@@ -1,8 +1,10 @@
 """Init phase: diverse seed generation and archive initialization."""
 
 import asyncio
+import json
 import logging
 import random
+from pathlib import Path
 
 import numpy as np
 
@@ -15,6 +17,7 @@ from ..pipeline.state import BudgetLimitReached, PipelineState, ScoreHistoryEntr
 from ..pool import CVTMAPElitesPool
 from ..prompts import ProgramWithScore
 from ..utils import ResilientProcessPool
+from .proxy_benchmark import build_problem_score_matrix, select_inputs_by_index, select_proxy_problem_subset
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +58,12 @@ class Diversifier:
     async def _cascade_eval(self, content: str) -> dict:
         """Evaluate with cascade: quick test first, full eval only if promising."""
         # Caller already reserved the eval slot.
+        if self._should_bypass_cascade_for_proxy_discovery():
+            result = await self.artifact_adapter.evaluate(self.executor, content)
+            if "error" not in result:
+                score = result.get("score", 0)
+                self._record_score(score, sampler="init_variant")
+            return result
 
         cascade = self.config.cascade
         if cascade.enabled and cascade.quick_inputs:
@@ -101,6 +110,9 @@ class Diversifier:
 
         # Phase 2: Generate variants
         valid_programs, behavior_vectors = await self._generate_variants(diverse_seeds, extractor)
+
+        # Phase 2.5: Learn a proxy benchmark from init-stage prompt evaluations.
+        behavior_vectors = self._maybe_configure_proxy_benchmark(valid_programs, extractor, behavior_vectors)
 
         # Phase 3: Build centroids and populate archive
         await self._populate_archive(
@@ -295,7 +307,8 @@ class Diversifier:
         behavior_vectors = []
         failure_errors = []  # Track unique failure reasons
 
-        for _, data in eval_results:
+        next_init_order = len(diverse_seeds)
+        for idx, data in sorted(eval_results, key=lambda item: item[0]):
             result = data["result"]
             if "error" in result:
                 if result.get("budget_stop"):
@@ -314,23 +327,32 @@ class Diversifier:
                     "score": score,
                     "result": result,
                     "behavior": behavior,
+                    "init_order": next_init_order + idx,
+                    "init_source": "variant",
                 }
             )
             behavior_vectors.append(np.array([behavior[f] for f in extractor.features]))
 
         # Add diverse seeds directly (already evaluated in Phase 1, no need to re-evaluate)
-        for seed_code, seed_score, seed_result in diverse_seeds:
+        seed_programs = []
+        seed_behavior_vectors = []
+        for init_order, (seed_code, seed_score, seed_result) in enumerate(diverse_seeds):
             program = self.artifact_adapter.make_program(seed_code, metadata={"primary_score": seed_score})
             behavior = extractor.extract(program, seed_result)
-            valid_programs.append(
+            seed_programs.append(
                 {
                     "content": seed_code,
                     "score": seed_score,
                     "result": seed_result,
                     "behavior": behavior,
+                    "init_order": init_order,
+                    "init_source": "seed",
                 }
             )
-            behavior_vectors.append(np.array([behavior[f] for f in extractor.features]))
+            seed_behavior_vectors.append(np.array([behavior[f] for f in extractor.features]))
+
+        valid_programs = seed_programs + valid_programs
+        behavior_vectors = seed_behavior_vectors + behavior_vectors
 
         logger.info(f"[Init Phase 2] Valid programs: {len(valid_programs)}")
 
@@ -341,6 +363,247 @@ class Diversifier:
                 logger.info(f"  - {error_msg[:100]}")
                 logger.info(f"    Content: {code_preview}...")
         return valid_programs, behavior_vectors
+
+    def _should_bypass_cascade_for_proxy_discovery(self) -> bool:
+        proxy_cfg = self.config.proxy_benchmark
+        return (
+            proxy_cfg.enabled
+            and self.artifact_adapter.artifact_type == "prompt"
+            and bool(proxy_cfg.discovery_inputs)
+            and not proxy_cfg.selected_indices
+        )
+
+    def _maybe_configure_proxy_benchmark(
+        self,
+        valid_programs: list[dict],
+        extractor: BehaviorExtractor,
+        behavior_vectors: list[np.ndarray],
+    ) -> list[np.ndarray]:
+        proxy_cfg = self.config.proxy_benchmark
+        if not proxy_cfg.enabled:
+            return behavior_vectors
+        if self.artifact_adapter.artifact_type != "prompt":
+            logger.info("[Init Proxy] Skipping proxy benchmark selection for non-prompt artifacts")
+            return behavior_vectors
+        if not proxy_cfg.discovery_inputs:
+            logger.info("[Init Proxy] Skipping proxy benchmark selection without discovery inputs")
+            return behavior_vectors
+
+        discovery_programs = self._select_proxy_candidates(valid_programs, proxy_cfg.matrix_key)
+        if len(discovery_programs) < 2:
+            logger.info("[Init Proxy] Skipping proxy benchmark selection (need at least 2 init outputs with per-problem scores)")
+            return behavior_vectors
+
+        try:
+            score_matrix = build_problem_score_matrix(
+                [program["result"] for program in discovery_programs],
+                key=proxy_cfg.matrix_key,
+            )
+        except ValueError as error:
+            logger.info(f"[Init Proxy] Skipping proxy benchmark selection: {error}")
+            return behavior_vectors
+
+        if score_matrix.shape[1] != len(proxy_cfg.discovery_inputs):
+            logger.info(
+                "[Init Proxy] Skipping proxy benchmark selection: matrix width %s does not match discovery pool %s",
+                score_matrix.shape[1],
+                len(proxy_cfg.discovery_inputs),
+            )
+            return behavior_vectors
+
+        if proxy_cfg.debug_logging:
+            self._log_proxy_discovery_matrix(discovery_programs, score_matrix)
+        selection = select_proxy_problem_subset(
+            score_matrix,
+            proxy_cfg.subset_size,
+            trace_top_k=proxy_cfg.debug_top_k,
+        )
+        proxy_cfg.selected_indices = list(selection.selected_indices)
+        self.config.inputs = select_inputs_by_index(proxy_cfg.discovery_inputs, proxy_cfg.selected_indices)
+        refreshed_behavior_vectors = self._apply_proxy_scores(valid_programs, extractor)
+        self._write_proxy_benchmark_artifact(discovery_programs, score_matrix, selection)
+        if proxy_cfg.debug_logging:
+            self._log_proxy_selection(selection)
+            self._log_proxy_prompt_scores(valid_programs)
+
+        logger.info(
+            "[Init Proxy] Selected %d representative problems from %d init outputs; future evals now use the proxy subset",
+            len(proxy_cfg.selected_indices),
+            len(discovery_programs),
+        )
+        return refreshed_behavior_vectors
+
+    def _select_proxy_candidates(self, valid_programs: list[dict], matrix_key: str) -> list[dict]:
+        ordered = sorted(valid_programs, key=lambda item: (item.get("init_order", 10**9), -item.get("score", 0.0)))
+        selected: list[dict] = []
+        seen_contents: set[str] = set()
+
+        for program in ordered:
+            content = program["content"]
+            if content in seen_contents:
+                continue
+            per_problem_scores = program.get("result", {}).get(matrix_key)
+            if not isinstance(per_problem_scores, (list, tuple)):
+                continue
+            selected.append(program)
+            seen_contents.add(content)
+        return selected
+
+    def _apply_proxy_scores(self, valid_programs: list[dict], extractor: BehaviorExtractor) -> list[np.ndarray]:
+        selected_indices = self.config.proxy_benchmark.selected_indices
+        matrix_key = self.config.proxy_benchmark.matrix_key
+        behavior_vectors: list[np.ndarray] = []
+
+        for program in valid_programs:
+            result = dict(program["result"])
+            per_problem_scores = result.get(matrix_key)
+            if isinstance(per_problem_scores, (list, tuple)) and selected_indices:
+                proxy_values = [float(per_problem_scores[idx]) for idx in selected_indices]
+                result["full_benchmark_score"] = float(result.get("score", 0.0))
+                result["score"] = sum(proxy_values) / len(proxy_values)
+                program["score"] = result["score"]
+            program["result"] = result
+
+            artifact = self.artifact_adapter.make_program(
+                program["content"],
+                metadata={"primary_score": program["score"]},
+            )
+            behavior = extractor.extract(artifact, result)
+            program["behavior"] = behavior
+            behavior_vectors.append(np.array([behavior[f] for f in extractor.features]))
+
+        return behavior_vectors
+
+    def _write_proxy_benchmark_artifact(
+        self,
+        discovery_programs: list[dict],
+        score_matrix: np.ndarray,
+        selection,
+    ) -> None:
+        output_dir = self.config.output_dir
+        if not output_dir:
+            return
+
+        path = Path(output_dir)
+        path.mkdir(parents=True, exist_ok=True)
+        artifact_path = path / "proxy_benchmark.json"
+        problems = []
+        selected_indices = set(selection.selected_indices)
+        for idx, item in enumerate(self.config.proxy_benchmark.discovery_inputs):
+            problems.append(
+                {
+                    "index": idx,
+                    "id": self._problem_identifier(item, idx),
+                    "selected": idx in selected_indices,
+                }
+            )
+
+        prompts = []
+        matrix_key = self.config.proxy_benchmark.matrix_key
+        for program, row in zip(discovery_programs, score_matrix.tolist()):
+            result = program.get("result", {})
+            prompts.append(
+                {
+                    "init_order": int(program.get("init_order", -1)),
+                    "init_source": program.get("init_source", "unknown"),
+                    "proxy_score": float(program.get("score", 0.0)),
+                    "full_score": float(result.get("full_benchmark_score", program.get("score", 0.0))),
+                    "content": program["content"],
+                    matrix_key: row,
+                }
+            )
+
+        artifact = {
+            "matrix_key": matrix_key,
+            "prompt_count": len(prompts),
+            "problem_count": int(score_matrix.shape[1]),
+            **selection.as_dict(),
+            "problems": problems,
+            "prompts": prompts,
+        }
+        artifact_path.write_text(json.dumps(artifact, indent=2))
+
+    def _problem_identifier(self, item: object, fallback_index: int) -> str:
+        if isinstance(item, dict):
+            for key in ("id", "problem_id", "name"):
+                value = item.get(key)
+                if value is not None:
+                    return str(value)
+            problem = item.get("problem")
+            if isinstance(problem, str) and problem:
+                return problem[:80]
+        return f"problem_{fallback_index}"
+
+    def _log_proxy_discovery_matrix(self, discovery_programs: list[dict], score_matrix: np.ndarray) -> None:
+        logger.info(
+            "[Init Proxy] Discovery matrix shape: prompts=%d problems=%d metric=%s",
+            score_matrix.shape[0],
+            score_matrix.shape[1],
+            self.config.proxy_benchmark.matrix_key,
+        )
+        for row_idx, program in enumerate(discovery_programs):
+            logger.info(
+                "[Init Proxy] Row %02d | init_order=%s source=%s full_score=%.4f preview=%s",
+                row_idx,
+                program.get("init_order", -1),
+                program.get("init_source", "unknown"),
+                float(program.get("score", 0.0)),
+                self._content_preview(program["content"]),
+            )
+
+    def _log_proxy_selection(self, selection) -> None:
+        logger.info(
+            "[Init Proxy] Final selected indices: %s | final ranking agreement=%.4f",
+            selection.selected_indices,
+            selection.final_ranking_score,
+        )
+        for step in selection.step_traces:
+            chosen_id = self._problem_identifier(
+                self.config.proxy_benchmark.discovery_inputs[step.chosen.problem_index],
+                step.chosen.problem_index,
+            )
+            logger.info(
+                "[Init Proxy] Step %02d chose #%d (%s) | obj=%.4f sep=%.4f rank=%.4f red=%.4f",
+                step.step_number,
+                step.chosen.problem_index,
+                chosen_id,
+                step.chosen.objective,
+                step.chosen.separation_score,
+                step.chosen.ranking_score,
+                step.chosen.redundancy_penalty,
+            )
+            for candidate in step.top_candidates:
+                candidate_id = self._problem_identifier(
+                    self.config.proxy_benchmark.discovery_inputs[candidate.problem_index],
+                    candidate.problem_index,
+                )
+                logger.info(
+                    "[Init Proxy]   cand #%d (%s) | obj=%.4f sep=%.4f rank=%.4f red=%.4f",
+                    candidate.problem_index,
+                    candidate_id,
+                    candidate.objective,
+                    candidate.separation_score,
+                    candidate.ranking_score,
+                    candidate.redundancy_penalty,
+                )
+
+    def _log_proxy_prompt_scores(self, valid_programs: list[dict]) -> None:
+        ordered = sorted(valid_programs, key=lambda item: (item.get("init_order", 10**9), item.get("init_source", "")))
+        for program in ordered:
+            result = program.get("result", {})
+            logger.info(
+                "[Init Proxy] Prompt init_order=%s source=%s | full_score=%.4f proxy_score=%.4f",
+                program.get("init_order", -1),
+                program.get("init_source", "unknown"),
+                float(result.get("full_benchmark_score", program.get("score", 0.0))),
+                float(program.get("score", 0.0)),
+            )
+
+    def _content_preview(self, content: str, limit: int = 80) -> str:
+        compact = " ".join(content.strip().split())
+        if len(compact) <= limit:
+            return compact
+        return compact[: limit - 3] + "..."
 
     async def _backfill_quick_scores(self, programs: list[dict]) -> None:
         """Compute quick_scores for programs that don't have one yet.

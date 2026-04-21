@@ -13,6 +13,7 @@ from .models import (
     MetaAdviceConfig,
     PipelineConfig,
     PromptOptConfig,
+    ProxyBenchmarkConfig,
     PunctuatedEquilibriumConfig,
     SamplerModelPair,
 )
@@ -28,6 +29,7 @@ __all__ = [
     "PipelineConfig",
     "PunctuatedEquilibriumConfig",
     "PromptOptConfig",
+    "ProxyBenchmarkConfig",
     "LeviConfig",
     "LeviResult",
 ]

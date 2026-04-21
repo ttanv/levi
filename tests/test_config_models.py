@@ -148,6 +148,28 @@ class TestLeviConfig:
         )
         assert cfg.prompt_overrides == overrides
 
+    def test_proxy_benchmark_defaults_to_disabled(self):
+        cfg = LeviConfig(**_minimal_config_kwargs())
+
+        assert cfg.proxy_benchmark.enabled is False
+        assert cfg.proxy_benchmark.selected_indices == []
+
+    def test_proxy_benchmark_config_is_preserved(self):
+        cfg = LeviConfig(
+            **_minimal_config_kwargs(),
+            proxy_benchmark={
+                "enabled": True,
+                "discovery_inputs": ["p0", "p1"],
+                "matrix_key": "correctness",
+                "subset_size": 1,
+            },
+        )
+
+        assert cfg.proxy_benchmark.enabled is True
+        assert cfg.proxy_benchmark.discovery_inputs == ["p0", "p1"]
+        assert cfg.proxy_benchmark.matrix_key == "correctness"
+        assert cfg.proxy_benchmark.subset_size == 1
+
     def test_client_model_spec_is_preserved(self):
         local_client = LM(
             "Qwen/Qwen3-30B",

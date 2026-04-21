@@ -113,6 +113,18 @@ class PromptOptConfig(BaseModel):
     model_config = {"arbitrary_types_allowed": True}
 
 
+class ProxyBenchmarkConfig(BaseModel):
+    """Learn a smaller evaluation subset from init-stage per-problem scores."""
+
+    enabled: bool = False
+    discovery_inputs: list[Any] = Field(default_factory=list)
+    matrix_key: str = "problem_scores"
+    subset_size: int = 15
+    selected_indices: list[int] = Field(default_factory=list)
+    debug_logging: bool = False
+    debug_top_k: int = 5
+
+
 class PipelineConfig(BaseModel):
     n_llm_workers: int = 4
     n_eval_processes: int = 4
@@ -150,6 +162,7 @@ class LeviConfig(BaseModel):
     cascade: CascadeConfig = Field(default_factory=CascadeConfig)
     punctuated_equilibrium: PunctuatedEquilibriumConfig = Field(default_factory=PunctuatedEquilibriumConfig)
     prompt_opt: PromptOptConfig = Field(default_factory=PromptOptConfig)
+    proxy_benchmark: ProxyBenchmarkConfig = Field(default_factory=ProxyBenchmarkConfig)
 
     output_dir: Optional[str] = None  # Directory for snapshots
 

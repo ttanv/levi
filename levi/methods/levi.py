@@ -103,6 +103,34 @@ def _restore_from_snapshot(
     return resumed_cost
 
 
+def _activate_proxy_benchmark_discovery_inputs(config: LeviConfig) -> None:
+    proxy_cfg = config.proxy_benchmark
+    if proxy_cfg.enabled and proxy_cfg.discovery_inputs:
+        config.inputs = list(proxy_cfg.discovery_inputs)
+
+
+def _restore_proxy_benchmark_state(config: LeviConfig, snapshot: dict | None = None) -> None:
+    proxy_cfg = config.proxy_benchmark
+    if not (proxy_cfg.enabled and proxy_cfg.discovery_inputs):
+        return
+
+    snapshot_metadata = ((snapshot or {}).get("metadata") or {}).get("proxy_benchmark") or {}
+    raw_indices = snapshot_metadata.get("selected_indices") or proxy_cfg.selected_indices
+    if not raw_indices:
+        config.inputs = list(proxy_cfg.discovery_inputs)
+        return
+
+    selected_indices = []
+    for raw_index in raw_indices:
+        idx = int(raw_index)
+        if idx < 0 or idx >= len(proxy_cfg.discovery_inputs):
+            raise RuntimeError(f"Invalid proxy benchmark index in snapshot: {idx}")
+        selected_indices.append(idx)
+
+    proxy_cfg.selected_indices = selected_indices
+    config.inputs = [proxy_cfg.discovery_inputs[idx] for idx in selected_indices]
+
+
 def _build_config(
     problem_description: str,
     function_signature: str,
@@ -379,8 +407,8 @@ async def _evaluate_seed(
     executor: ResilientProcessPool,
     state: PipelineState,
     artifact_adapter: ArtifactAdapter,
-) -> dict:
-    """Evaluate the seed program and return its result dict."""
+) -> dict | None:
+    """Evaluate the seed program and return its result dict when successful."""
     logger.info("[Levi] Evaluating seed program")
 
     if not await state.try_start_evaluation():
@@ -389,14 +417,20 @@ async def _evaluate_seed(
     try:
         seed_result = await artifact_adapter.evaluate(executor, config.seed_program or "")
     except Exception as e:
-        logger.error(f"[Levi] Failed to evaluate seed: {e}")
-        raise RuntimeError(f"Seed program evaluation failed: {e}")
+        error_message = f"Seed program evaluation failed: {e}"
+        state.record_error(error_message)
+        logger.warning("[Levi] %s", error_message)
+        logger.warning("[Levi] Continuing without a scored seed program")
+        return None
     finally:
         await state.finish_evaluation()
 
     if "error" in seed_result:
-        state.record_error(str(seed_result["error"]))
-        raise RuntimeError(f"Seed program evaluation error: {seed_result['error']}")
+        error_message = f"Seed program evaluation error: {seed_result['error']}"
+        state.record_error(error_message)
+        logger.warning("[Levi] %s", error_message)
+        logger.warning("[Levi] Continuing without a scored seed program")
+        return None
 
     seed_score = seed_result.get("score", 0.0)
     state.record_accept()
@@ -430,6 +464,8 @@ async def _run_async(
     logger.info(f"[Levi] Budget: {config.budget}")
     logger.info(f"[Levi] Sampler-model pairs: {len(config.sampler_model_pairs)}")
     artifact_adapter = artifact_adapter or CodeAdapter(config)
+    if artifact_adapter.artifact_type == "prompt":
+        _activate_proxy_benchmark_discovery_inputs(config)
 
     # Run prompt optimization if enabled.
     if artifact_adapter.artifact_type == "code" and config.prompt_opt.enabled and not config.prompt_overrides:
@@ -469,6 +505,8 @@ async def _run_async(
         init_score_history = []
         if resume_snapshot is not None:
             init_cost = _restore_from_snapshot(pool, extractor, resume_snapshot, artifact_adapter=artifact_adapter)
+            if artifact_adapter.artifact_type == "prompt":
+                _restore_proxy_benchmark_state(config, resume_snapshot)
             state.total_cost = coerce_finite_float(init_cost, default=0.0)
         else:
             logger.info("[Levi] Running init phase")

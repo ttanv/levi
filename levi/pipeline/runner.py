@@ -357,6 +357,14 @@ class PipelineRunner:
             "best_score": self.state.best_score_so_far,
         }
 
+        if self.config.proxy_benchmark.enabled:
+            snapshot["metadata"]["proxy_benchmark"] = {
+                "enabled": True,
+                "matrix_key": self.config.proxy_benchmark.matrix_key,
+                "subset_size": self.config.proxy_benchmark.subset_size,
+                "selected_indices": list(self.config.proxy_benchmark.selected_indices),
+            }
+
         # Add score history
         snapshot["score_history"] = [
             {

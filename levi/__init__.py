@@ -43,6 +43,7 @@ from .config import (
     MetaAdviceConfig,
     PipelineConfig,
     PromptOptConfig,
+    ProxyBenchmarkConfig,
     PunctuatedEquilibriumConfig,
     SamplerModelPair,
 )
@@ -99,6 +100,7 @@ __all__ = [
     "PipelineConfig",
     "PunctuatedEquilibriumConfig",
     "PromptOptConfig",
+    "ProxyBenchmarkConfig",
     # Methods
     "evolve_code",
     "evolve_prompts",

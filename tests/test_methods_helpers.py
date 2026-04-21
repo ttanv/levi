@@ -10,7 +10,12 @@ from levi.behavior import BehaviorExtractor
 from levi.config.models import BudgetConfig, InitConfig, LeviConfig
 from levi.core import EvaluationResult, Program
 from levi.init.diversifier import Diversifier
-from levi.methods.levi import _restore_from_snapshot
+from levi.methods.levi import (
+    _activate_proxy_benchmark_discovery_inputs,
+    _evaluate_seed,
+    _restore_from_snapshot,
+    _restore_proxy_benchmark_state,
+)
 from levi.pipeline.state import PipelineState
 from levi.utils import evaluate_code, evaluate_prompt, extract_fn_name
 
@@ -125,6 +130,14 @@ class TestEvaluatePrompt:
         result = evaluate_prompt("Be more explicit.", evaluator, None)
 
         assert result == {"score": 17.0}
+
+    def test_preserves_per_problem_prompt_metrics(self):
+        def evaluator(prompt):
+            return {"score": len(prompt) / 10.0, "correctness": [1.0, 0.0, 1.0]}
+
+        result = evaluate_prompt("Be precise.", evaluator, None)
+
+        assert result == {"score": 1.1, "correctness": [1.0, 0.0, 1.0]}
 
     def test_behavior_extractor_supports_score_only_for_non_code_content(self):
         extractor = BehaviorExtractor(ast_features=[], score_keys=["score"])
@@ -253,6 +266,37 @@ class TestExtractFnName:
         assert extract_fn_name("schedule_txns(txns, budget)") == "solve"
 
 
+class TestProxyBenchmarkState:
+    def test_activate_proxy_benchmark_discovery_inputs_overrides_runtime_inputs(self):
+        config = LeviConfig(
+            problem_description="Test problem",
+            function_signature="def solve(x):",
+            score_fn=_dummy_score_fn,
+            budget=BudgetConfig(evaluations=10),
+            inputs=["small"],
+            proxy_benchmark={"enabled": True, "discovery_inputs": ["full_a", "full_b"]},
+        )
+
+        _activate_proxy_benchmark_discovery_inputs(config)
+
+        assert config.inputs == ["full_a", "full_b"]
+
+    def test_restore_proxy_benchmark_state_applies_selected_indices(self):
+        config = LeviConfig(
+            problem_description="Test problem",
+            function_signature="def solve(x):",
+            score_fn=_dummy_score_fn,
+            budget=BudgetConfig(evaluations=10),
+            proxy_benchmark={"enabled": True, "discovery_inputs": ["p0", "p1", "p2"]},
+        )
+        snapshot = {"metadata": {"proxy_benchmark": {"selected_indices": [2, 0]}}}
+
+        _restore_proxy_benchmark_state(config, snapshot)
+
+        assert config.proxy_benchmark.selected_indices == [2, 0]
+        assert config.inputs == ["p2", "p0"]
+
+
 def _dummy_score_fn(_fn, _inputs=None):
     return {"score": 1.0}
 
@@ -275,6 +319,57 @@ class _AsyncExecutor:
     async def run(self, *_args, **_kwargs):
         self.calls += 1
         return dict(self.result)
+
+
+class _AsyncArtifactAdapter:
+    artifact_type = "prompt"
+
+    def __init__(self, *, result: dict | None = None, exc: Exception | None = None):
+        self.result = result or {"score": 1.0}
+        self.exc = exc
+        self.calls = 0
+
+    async def evaluate(self, _executor, _content, **_kwargs):
+        self.calls += 1
+        if self.exc is not None:
+            raise self.exc
+        return dict(self.result)
+
+
+class TestSeedEvaluation:
+    def test_evaluate_seed_returns_none_on_error_result(self):
+        config = LeviConfig(
+            problem_description="Test problem",
+            function_signature="def solve(x):",
+            score_fn=_dummy_score_fn,
+            seed_program="seed prompt",
+            budget=BudgetConfig(evaluations=10),
+        )
+        state = PipelineState(config.budget)
+        adapter = _AsyncArtifactAdapter(result={"error": "transient api failure"})
+
+        result = asyncio.run(_evaluate_seed(config, object(), state, adapter))
+
+        assert result is None
+        assert adapter.calls == 1
+        assert state.error_count == 1
+
+    def test_evaluate_seed_returns_none_on_exception(self):
+        config = LeviConfig(
+            problem_description="Test problem",
+            function_signature="def solve(x):",
+            score_fn=_dummy_score_fn,
+            seed_program="seed prompt",
+            budget=BudgetConfig(evaluations=10),
+        )
+        state = PipelineState(config.budget)
+        adapter = _AsyncArtifactAdapter(exc=RuntimeError("boom"))
+
+        result = asyncio.run(_evaluate_seed(config, object(), state, adapter))
+
+        assert result is None
+        assert adapter.calls == 1
+        assert state.error_count == 1
 
 
 class TestDiversifier:
