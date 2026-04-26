@@ -34,12 +34,37 @@ example-viz = [
 example-cloudcast = [
     "networkx>=3.0",
 ]
+example-ifbench = [
+    "nltk>=3.9",
+    "datasets>=3.0",
+    "litellm>=1.50",
+    "spacy>=3.7",
+    "emoji>=2.0",
+    "syllapy>=0.7",
+    "langdetect>=1.0.9",
+    "immutabledict>=4.0",
+    "packaging>=24.0",
+]
 examples = [
     "torch>=2.9.1",
     "pandas>=2.3.3",
     "graphviz>=0.21",
     "matplotlib>=3.10.8",
     "networkx>=3.0",
+    "nltk>=3.9",
+    "datasets>=3.0",
+    "litellm>=1.50",
+    "spacy>=3.7",
+    "emoji>=2.0",
+    "syllapy>=0.7",
+    "langdetect>=1.0.9",
+    "immutabledict>=4.0",
+    "packaging>=24.0",
+]
+example-hover = [
+    "bm25s>=0.3.6",
+    "datasets<4",
+    "pystemmer>=3.0.0",
 ]
 
 [tool.hatch.build.targets.wheel]
