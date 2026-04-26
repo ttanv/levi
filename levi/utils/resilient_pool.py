@@ -3,6 +3,7 @@
 import asyncio
 import atexit
 import multiprocessing as mp
+import queue as _queue
 import signal
 import threading
 import time
@@ -51,18 +52,31 @@ class ResilientProcessPool:
 
         try:
             start = time.monotonic()
+            payload: tuple | None = None
+
+            # Drain the result queue concurrently with the alive-check.
+            # mp.Queue uses a background feeder thread that blocks once the
+            # underlying pipe buffer fills (~16-64KB on macOS); if we wait for
+            # the worker to exit before reading, large results deadlock the
+            # feeder and the worker can never finish shutting down.
             while time.monotonic() - start < timeout:
+                try:
+                    payload = result_queue.get_nowait()
+                    break
+                except _queue.Empty:
+                    pass
                 if not proc.is_alive():
+                    try:
+                        payload = result_queue.get(timeout=2.0)
+                    except _queue.Empty:
+                        payload = None
                     break
                 await asyncio.sleep(0.1)
 
-            if proc.is_alive():
-                self._terminate_process(proc)
-                raise TimeoutError(f"Process exceeded {timeout}s timeout")
-
-            try:
-                status, value = result_queue.get(timeout=2.0)
-            except Exception:
+            if payload is None:
+                if proc.is_alive():
+                    self._terminate_process(proc)
+                    raise TimeoutError(f"Process exceeded {timeout}s timeout")
                 exitcode = proc.exitcode
                 if exitcode is not None and exitcode < 0:
                     try:
@@ -72,6 +86,7 @@ class ResilientProcessPool:
                         raise RuntimeError(f"Process killed by signal {-exitcode}")
                 raise RuntimeError(f"Process exited with code {exitcode}, no result")
 
+            status, value = payload
             if status == "error":
                 raise RuntimeError(value)
             return value
