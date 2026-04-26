@@ -54,6 +54,7 @@ from .prompts import (
     OutputMode,
     ProgramWithScore,
     PromptBuilder,
+    PromptBundle,
 )
 
 # Methods
@@ -61,6 +62,15 @@ from .methods import evolve_code, evolve_prompts
 
 # Protocols and pools
 from .pool import CVTMAPElitesPool, ProgramPool, SampleResult
+
+# Selection
+from .selection import (
+    ComponentSelector,
+    RoundRobinComponentSelector,
+    StagnationComponentSelector,
+    UCBComponentSelector,
+    make_component_selector,
+)
 
 __version__ = "0.1.0"
 
@@ -84,6 +94,13 @@ __all__ = [
     "PromptBuilder",
     "ProgramWithScore",
     "OutputMode",
+    "PromptBundle",
+    # Selection
+    "ComponentSelector",
+    "UCBComponentSelector",
+    "RoundRobinComponentSelector",
+    "StagnationComponentSelector",
+    "make_component_selector",
     # Behavior
     "BehaviorExtractor",
     "FeatureVector",

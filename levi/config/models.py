@@ -94,6 +94,8 @@ class PunctuatedEquilibriumConfig(BaseModel):
     variant_models: Optional[list[ClientSpec]] = None
     temperature: Optional[float] = None
     reasoning_effort: Optional[str] = None
+    component_selector: Any = "stagnation"
+    share_main_selector_stats: bool = True
 
     model_config = {"arbitrary_types_allowed": True}
 
@@ -169,6 +171,10 @@ class LeviConfig(BaseModel):
     # Prompt overrides from DSPy optimization
     prompt_overrides: dict[str, Any] = Field(default_factory=dict)
 
+    # Per-component mutation selector for prompt bundles. String key
+    # ("ucb", "round_robin", "stagnation") or a ComponentSelector instance.
+    component_selector: Any = "ucb"
+
     model_config = {"arbitrary_types_allowed": True}
 
     @model_validator(mode="after")
@@ -233,9 +239,22 @@ class LeviResult(BaseModel):
     archive_size: int
     runtime_seconds: float
     score_history: Optional[list[float]] = None
+    component_selector_stats: Optional[dict] = None
+    pe_component_selector_stats: Optional[dict] = None
 
     model_config = {"arbitrary_types_allowed": True}
 
     @property
     def best_prompt(self) -> str:
         return self.best_program
+
+    @property
+    def best_bundle(self) -> Optional[dict[str, str]]:
+        """Return best prompt as a component dict when it's a bundle payload."""
+        from ..prompts import PromptBundle
+
+        if not self.best_program:
+            return None
+        if not PromptBundle.is_bundle_payload(self.best_program):
+            return None
+        return PromptBundle.from_serialized(self.best_program).as_dict()

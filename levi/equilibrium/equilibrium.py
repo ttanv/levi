@@ -19,6 +19,8 @@ from ..core import EvaluationResult
 from ..pipeline.state import BudgetLimitReached, PipelineState, coerce_finite_float
 from ..pool import CVTMAPElitesPool
 from ..pool.cvt_map_elites import Elite
+from ..prompts import PromptBundle
+from ..selection import ComponentSelector, make_component_selector
 from ..utils import ResilientProcessPool, coerce_score
 
 logger = logging.getLogger(__name__)
@@ -44,6 +46,7 @@ class PunctuatedEquilibrium:
         artifact_adapter: ArtifactAdapter,
         archive_lock: asyncio.Lock,
         state: PipelineState,
+        main_component_selector: ComponentSelector | None = None,
     ):
         self.config = config
         self.pool = pool
@@ -52,6 +55,12 @@ class PunctuatedEquilibrium:
         self.archive_lock = archive_lock
         self.state = state
         self.pe_config = config.punctuated_equilibrium
+        self.main_component_selector = main_component_selector
+
+        self.pe_component_selector: ComponentSelector | None = None
+        self._is_bundle = getattr(artifact_adapter, "is_bundle_artifact", False)
+        if self._is_bundle:
+            self.pe_component_selector = make_component_selector(self.pe_config.component_selector)
 
     def _cluster_occupied_centroids(self) -> dict[int, list[int]]:
         """
@@ -117,24 +126,44 @@ class PunctuatedEquilibrium:
         representatives: list[tuple[int, Elite]],
         n_evaluations: int,
         budget_progress: float = 0.0,
+        target: str | None = None,
     ) -> str:
-        """Build prompt for paradigm shift generation.
-
-        Args:
-            representatives: Cluster representatives (cluster_id, elite) pairs.
-            n_evaluations: Current evaluation count.
-            budget_progress: Fraction of budget consumed (0-1). Controls prompt
-                aggressiveness: early budget = radical shifts, late = refinement.
-        """
+        if target is not None and self._is_bundle:
+            return self.artifact_adapter.build_component_paradigm_shift_prompt(
+                target,
+                representatives,
+                n_evaluations=n_evaluations,
+                budget_progress=budget_progress,
+            )
         return self.artifact_adapter.build_paradigm_shift_prompt(
             representatives,
             n_evaluations=n_evaluations,
             budget_progress=budget_progress,
         )
 
-    def _build_variant_prompt(self, base_code: str, base_score: float) -> str:
-        """Build prompt for variant generation."""
+    def _build_variant_prompt(
+        self,
+        base_code: str,
+        base_score: float,
+        target: str | None = None,
+    ) -> str:
+        if target is not None and self._is_bundle:
+            base_bundle = PromptBundle.deserialize_loose(base_code)
+            return self.artifact_adapter.build_component_variant_prompt(target, base_bundle, base_score)
         return self.artifact_adapter.build_variant_prompt(base_code, base_score)
+
+    def _pick_pe_component(self) -> str | None:
+        if not self._is_bundle or self.pe_component_selector is None:
+            return None
+        seed_bundle = getattr(self.artifact_adapter, "seed_bundle", None)
+        if seed_bundle is None:
+            return None
+        context: dict = {}
+        if self.pe_config.share_main_selector_stats and self.main_component_selector is not None:
+            context["main_stats"] = self.main_component_selector.stats()
+        return self.pe_component_selector.select(
+            list(seed_bundle.editable_targets), context=context or None
+        )
 
     async def _evaluate(self, code: str) -> dict:
         """Evaluate code using the executor."""
@@ -208,7 +237,13 @@ class PunctuatedEquilibrium:
             heavy_models = [self.config.sampler_model_pairs[0].model]
         heavy_model = random.choice(heavy_models)
 
-        prompt = self._build_paradigm_shift_prompt(representatives, n_evaluations, budget_progress)
+        pe_target = self._pick_pe_component()
+        if pe_target is not None:
+            logger.info(f"[PE] Selected component for paradigm shift: {pe_target}")
+            stats["pe_target"] = pe_target
+        prompt = self._build_paradigm_shift_prompt(
+            representatives, n_evaluations, budget_progress, target=pe_target
+        )
 
         try:
             extras = {}
@@ -240,7 +275,15 @@ class PunctuatedEquilibrium:
             logger.warning(f"[PE] Paradigm shift generation failed: {e}")
             return stats
 
-        paradigm_code = self.artifact_adapter.extract_candidate(content)
+        if pe_target is not None and representatives:
+            anchor_elite = max(representatives, key=lambda item: item[1].result.primary_score)[1]
+            paradigm_code = self.artifact_adapter.extract_candidate(
+                content,
+                parent_content=anchor_elite.program.content,
+                target=pe_target,
+            )
+        else:
+            paradigm_code = self.artifact_adapter.extract_candidate(content)
         if not paradigm_code:
             logger.warning("[PE] Failed to extract paradigm shift code")
             return stats
@@ -297,6 +340,8 @@ class PunctuatedEquilibrium:
 
             stats["paradigm_accepted"] = accepted
             stats["paradigm_cell"] = cell_idx
+            if pe_target is not None and self.pe_component_selector is not None:
+                self.pe_component_selector.update(pe_target, accepted=accepted)
             stats["evaluations"].append(
                 {
                     "source": "paradigm_shift",
@@ -336,7 +381,9 @@ class PunctuatedEquilibrium:
                 f"{[client_name(model) for model in variant_models[:3]]}..."
             )
 
-            variant_prompt = self._build_variant_prompt(paradigm_code, stats["paradigm_score"])
+            variant_prompt = self._build_variant_prompt(
+                paradigm_code, stats["paradigm_score"], target=pe_target
+            )
 
             async def generate_variant(model, idx: int):
                 try:
@@ -374,7 +421,14 @@ class PunctuatedEquilibrium:
 
                 stats["total_cost"] += vr["cost"]
 
-                variant_code = self.artifact_adapter.extract_candidate(vr["content"])
+                if pe_target is not None:
+                    variant_code = self.artifact_adapter.extract_candidate(
+                        vr["content"],
+                        parent_content=paradigm_code,
+                        target=pe_target,
+                    )
+                else:
+                    variant_code = self.artifact_adapter.extract_candidate(vr["content"])
                 if not variant_code:
                     logger.warning(f"[PE] Variant {vr['idx']} code extraction failed ({vr.get('model', '?')})")
                     continue
@@ -428,6 +482,8 @@ class PunctuatedEquilibrium:
                     if accepted:
                         stats["variants_accepted"] += 1
                         stats["variant_cells"].append(cell_idx)
+                    if pe_target is not None and self.pe_component_selector is not None:
+                        self.pe_component_selector.update(pe_target, accepted=accepted)
                     stats["evaluations"].append(
                         {
                             "source": "variant",

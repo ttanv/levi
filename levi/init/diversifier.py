@@ -15,7 +15,7 @@ from ..config import LeviConfig
 from ..core import EvaluationResult
 from ..pipeline.state import BudgetLimitReached, PipelineState, ScoreHistoryEntry
 from ..pool import CVTMAPElitesPool
-from ..prompts import ProgramWithScore
+from ..prompts import ProgramWithScore, PromptBundle
 from ..utils import ResilientProcessPool
 from .proxy_benchmark import build_problem_score_matrix, select_inputs_by_index, select_proxy_problem_subset
 
@@ -105,11 +105,18 @@ class Diversifier:
             if self.state.eval_count == 0:
                 self._record_score(seed_score, sampler="init_seed")
 
-        # Phase 1: Generate diverse seeds
-        diverse_seeds = await self._generate_diverse_seeds(seed_program, seed_result)
+        is_bundle = getattr(self.artifact_adapter, "is_bundle_artifact", False)
 
-        # Phase 2: Generate variants
-        valid_programs, behavior_vectors = await self._generate_variants(diverse_seeds, extractor)
+        if is_bundle:
+            valid_programs, behavior_vectors = await self._run_bundle_init(
+                seed_program, seed_result, extractor
+            )
+        else:
+            # Phase 1: Generate diverse seeds
+            diverse_seeds = await self._generate_diverse_seeds(seed_program, seed_result)
+
+            # Phase 2: Generate variants
+            valid_programs, behavior_vectors = await self._generate_variants(diverse_seeds, extractor)
 
         # Phase 2.5: Learn a proxy benchmark from init-stage prompt evaluations.
         behavior_vectors = self._maybe_configure_proxy_benchmark(valid_programs, extractor, behavior_vectors)
@@ -363,6 +370,190 @@ class Diversifier:
                 logger.info(f"  - {error_msg[:100]}")
                 logger.info(f"    Content: {code_preview}...")
         return valid_programs, behavior_vectors
+
+    async def _run_bundle_init(
+        self,
+        seed_program: str | None,
+        seed_result: dict | None,
+        extractor: BehaviorExtractor,
+    ) -> tuple[list[dict], list[np.ndarray]]:
+        """Per-component bundle init: iterate editable targets, run diversify + variants per component."""
+        seed_bundle: PromptBundle = self.artifact_adapter.seed_bundle
+        editable = list(seed_bundle.editable_targets)
+        n_seeds = self.config.init.n_diverse_seeds
+        n_variants = self.config.init.n_variants_per_seed
+        diversity_model = self.config.init.diversity_model or "gpt-4"
+        variant_models = self.config.init.variant_models or ["gpt-4o-mini"]
+
+        logger.info(
+            f"[Init Bundle] Running per-component init over {len(editable)} components, "
+            f"n_seeds={n_seeds}, n_variants={n_variants}"
+        )
+
+        all_valid: list[dict] = []
+        all_behavior: list[np.ndarray] = []
+        init_order = 0
+
+        # Seed bundle baseline (evaluated upstream as seed).
+        if seed_program is not None and seed_result is not None and "error" not in seed_result:
+            seed_score = seed_result.get("score", 0.0)
+            program = self.artifact_adapter.make_program(
+                seed_program, metadata={"primary_score": seed_score}
+            )
+            behavior = extractor.extract(program, seed_result)
+            all_valid.append(
+                {
+                    "content": seed_program,
+                    "score": seed_score,
+                    "result": seed_result,
+                    "behavior": behavior,
+                    "init_order": init_order,
+                    "init_source": "seed",
+                }
+            )
+            all_behavior.append(np.array([behavior[f] for f in extractor.features]))
+            init_order += 1
+
+        for component in editable:
+            if self.state.budget_exhausted:
+                logger.info(f"[Init Bundle] Stopping at component {component} (budget exhausted)")
+                break
+
+            logger.info(f"[Init Bundle] Component `{component}` — generating {n_seeds} seeds")
+            # Phase 1: per-component diverse seeds.
+            component_candidates: list[tuple[str, float, dict]] = []  # (new_text, score, result)
+            seed_text = seed_bundle.get(component)
+            for i in range(n_seeds):
+                if self.state.budget_exhausted:
+                    break
+                existing = [(text, score) for text, score, _ in component_candidates]
+                prompt = self.artifact_adapter.build_component_diversity_prompt(
+                    component, seed_bundle, existing
+                )
+                try:
+                    response = await self._acompletion(
+                        model=diversity_model,
+                        prompt=[{"role": "user", "content": prompt}],
+                        temperature=self.config.init.temperature,
+                        max_tokens=16384,
+                        timeout=300,
+                        **self.config.init.diversity_llm_kwargs,
+                    )
+                    self.total_cost += response.cost
+                except BudgetLimitReached:
+                    break
+                except Exception as e:
+                    logger.warning(f"[Init Bundle] {component} seed {i + 1} gen error: {e}")
+                    continue
+
+                candidate_json = self.artifact_adapter.extract_candidate(
+                    response.text,
+                    parent_content=seed_bundle.serialize(),
+                    target=component,
+                )
+                if not candidate_json:
+                    continue
+
+                if not await self.state.try_start_evaluation():
+                    break
+                try:
+                    result = await self._cascade_eval(candidate_json)
+                    if "error" in result:
+                        self.state.record_error(str(result.get("error", "unknown")))
+                        continue
+                    score = result.get("score", 0.0)
+                    component_candidates.append((candidate_json, score, result))
+                    logger.info(f"[Init Bundle] {component} seed {i + 1} OK score={score:.4f}")
+                finally:
+                    await self.state.finish_evaluation()
+
+            # Phase 2: variants over each diverse seed of this component.
+            logger.info(
+                f"[Init Bundle] Component `{component}` — generating {n_variants} variants "
+                f"per seed (×{len(component_candidates)})"
+            )
+            variant_prompts = []
+            for base_json, base_score, _ in component_candidates:
+                base_bundle = PromptBundle.deserialize_loose(base_json)
+                for _ in range(n_variants):
+                    variant_prompts.append(
+                        (
+                            base_json,
+                            self.artifact_adapter.build_component_variant_prompt(
+                                component, base_bundle, base_score
+                            ),
+                        )
+                    )
+
+            async def _gen_variant(idx: int, parent_json: str, prompt_text: str) -> dict:
+                model = variant_models[idx % len(variant_models)]
+                try:
+                    response = await self._acompletion(
+                        model=model,
+                        prompt=[{"role": "user", "content": prompt_text}],
+                        temperature=self.config.init.temperature,
+                        max_tokens=4096,
+                        timeout=300,
+                    )
+                    return {
+                        "idx": idx,
+                        "parent": parent_json,
+                        "text": response.text,
+                        "cost": response.cost,
+                    }
+                except BudgetLimitReached:
+                    return {"idx": idx, "error": "budget"}
+                except Exception as e:
+                    return {"idx": idx, "error": str(e)}
+
+            gen_tasks = [
+                _gen_variant(i, parent_json, prompt_text)
+                for i, (parent_json, prompt_text) in enumerate(variant_prompts)
+            ]
+            gen_results = await asyncio.gather(*gen_tasks)
+
+            for vr in gen_results:
+                if "error" in vr:
+                    continue
+                self.total_cost += vr["cost"]
+                candidate_json = self.artifact_adapter.extract_candidate(
+                    vr["text"], parent_content=vr["parent"], target=component
+                )
+                if not candidate_json:
+                    continue
+                if not await self.state.try_start_evaluation():
+                    break
+                try:
+                    result = await self._cascade_eval(candidate_json)
+                    if "error" in result:
+                        self.state.record_error(str(result.get("error", "unknown")))
+                        continue
+                    score = result.get("score", 0.0)
+                    component_candidates.append((candidate_json, score, result))
+                finally:
+                    await self.state.finish_evaluation()
+
+            # Collect into valid_programs for this component.
+            for content_json, score, result in component_candidates:
+                program = self.artifact_adapter.make_program(
+                    content_json, metadata={"primary_score": score}
+                )
+                behavior = extractor.extract(program, result)
+                all_valid.append(
+                    {
+                        "content": content_json,
+                        "score": score,
+                        "result": result,
+                        "behavior": behavior,
+                        "init_order": init_order,
+                        "init_source": f"component:{component}",
+                    }
+                )
+                all_behavior.append(np.array([behavior[f] for f in extractor.features]))
+                init_order += 1
+
+        logger.info(f"[Init Bundle] Collected {len(all_valid)} total bundles across components")
+        return all_valid, all_behavior
 
     def _should_bypass_cascade_for_proxy_discovery(self) -> bool:
         proxy_cfg = self.config.proxy_benchmark

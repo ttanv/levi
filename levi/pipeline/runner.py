@@ -13,6 +13,7 @@ from ..clients.base import short_client_name
 from ..config import LeviConfig, LeviResult
 from ..equilibrium import PunctuatedEquilibrium
 from ..pool import CVTMAPElitesPool
+from ..selection import ComponentSelector, make_component_selector
 from ..utils import ResilientProcessPool
 from .consumer import eval_consumer
 from .producer import llm_producer
@@ -62,6 +63,11 @@ class PipelineRunner:
             self.output_dir = Path(output_dir)
             self.output_dir.mkdir(parents=True, exist_ok=True)
 
+        # Per-component selector for bundle-aware artifacts.
+        self.component_selector: Optional[ComponentSelector] = None
+        if getattr(artifact_adapter, "is_bundle_artifact", False):
+            self.component_selector = make_component_selector(config.component_selector)
+
         # Initialize Punctuated Equilibrium if enabled
         self.pe: Optional[PunctuatedEquilibrium] = None
         if config.punctuated_equilibrium.enabled:
@@ -72,6 +78,7 @@ class PipelineRunner:
                 artifact_adapter=artifact_adapter,
                 archive_lock=self.archive_lock,
                 state=self.state,
+                main_component_selector=self.component_selector,
             )
 
     async def run(self) -> LeviResult:
@@ -91,6 +98,7 @@ class PipelineRunner:
                     artifact_adapter=self.artifact_adapter,
                     state=self.state,
                     stop_event=self.stop_event,
+                    component_selector=self.component_selector,
                 )
             )
             for i in range(self.config.pipeline.n_llm_workers)
@@ -109,6 +117,7 @@ class PipelineRunner:
                     state=self.state,
                     stop_event=self.stop_event,
                     snapshot_callback=self.save_snapshot if self.output_dir else None,
+                    component_selector=self.component_selector,
                 )
             )
             for i in range(self.config.pipeline.n_eval_processes)
@@ -414,4 +423,12 @@ class PipelineRunner:
             archive_size=self.pool.size(),
             runtime_seconds=self.state.elapsed_seconds,
             score_history=self.state.get_score_history_list(),
+            component_selector_stats=(
+                self.component_selector.stats() if self.component_selector is not None else None
+            ),
+            pe_component_selector_stats=(
+                self.pe.pe_component_selector.stats()
+                if self.pe is not None and getattr(self.pe, "pe_component_selector", None) is not None
+                else None
+            ),
         )

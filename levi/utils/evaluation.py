@@ -103,6 +103,36 @@ def evaluate_prompt(prompt: str, score_fn: Callable[..., Any], inputs: Optional[
     return normalize_prompt_result(result)
 
 
+def evaluate_bundle(
+    bundle: dict[str, str], score_fn: Callable[..., Any], inputs: Optional[list]
+) -> dict:
+    """Runs in subprocess: score a prompt bundle dict directly."""
+    try:
+        accepts_1 = _accepts_n_positional_args(score_fn, 1)
+        accepts_2 = _accepts_n_positional_args(score_fn, 2)
+
+        if inputs is None:
+            if accepts_1 is True:
+                result = score_fn(bundle)
+            elif accepts_2 is True:
+                result = score_fn(bundle, [])
+            else:
+                result = score_fn(bundle)
+        else:
+            if accepts_2 is True:
+                result = score_fn(bundle, inputs)
+            elif accepts_1 is True:
+                result = score_fn(bundle)
+            else:
+                result = score_fn(bundle, inputs)
+    except MemoryError:
+        return {"error": "MemoryError during scoring"}
+    except Exception as e:
+        return {"error": f"Scoring error: {e}"}
+
+    return normalize_prompt_result(result)
+
+
 def normalize_prompt_result(result: Any) -> dict:
     """Normalize prompt-evaluator outputs into Levi's metric dict shape."""
     if isinstance(result, (int, float)):

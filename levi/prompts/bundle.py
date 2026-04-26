@@ -91,6 +91,27 @@ class PromptBundle:
         """Deserialize a prompt bundle from JSON."""
         return PromptBundle.from_payload(json.loads(serialized))
 
+    @staticmethod
+    def is_bundle_payload(serialized: str) -> bool:
+        """Return True if the string looks like a serialized PromptBundle payload."""
+        stripped = serialized.lstrip()
+        if not stripped.startswith("{"):
+            return False
+        try:
+            payload = json.loads(serialized)
+        except (ValueError, TypeError):
+            return False
+        if not isinstance(payload, dict):
+            return False
+        return "prompts" in payload and isinstance(payload["prompts"], dict)
+
+    @staticmethod
+    def deserialize_loose(serialized: str) -> "PromptBundle":
+        """Deserialize a bundle; wrap raw prompt strings into single-target bundles."""
+        if PromptBundle.is_bundle_payload(serialized):
+            return PromptBundle.from_serialized(serialized)
+        return PromptBundle.single(serialized)
+
     @property
     def target_names(self) -> tuple[str, ...]:
         return tuple(self.prompts.keys())

@@ -16,6 +16,7 @@ from ..init import Diversifier
 from ..pipeline import PipelineRunner
 from ..pipeline.state import PipelineState, coerce_finite_float
 from ..pool import CVTMAPElitesPool
+from ..prompts import PromptBundle
 from ..utils import ResilientProcessPool
 
 logger = logging.getLogger(__name__)
@@ -215,7 +216,7 @@ def _build_config(
 
 def _build_prompt_config(
     problem_description: str,
-    seed_prompt: str | None,
+    seed_prompt: "str | dict[str, str] | PromptBundle | None",
     evaluator: Callable[..., dict],
     inputs: list[Any] | None,
     model: ClientSpec | list[ClientSpec] | None,
@@ -255,10 +256,21 @@ def _build_prompt_config(
         target_score=target_score,
     )
 
+    # Normalize seed_prompt. Single string keeps legacy (content is raw text);
+    # dict / PromptBundle switches on bundle mode (content is serialized JSON).
+    seed_bundle: PromptBundle | None = None
+    if seed_prompt is None:
+        seed_program = None
+    elif isinstance(seed_prompt, str):
+        seed_program = seed_prompt
+    else:
+        seed_bundle = PromptBundle.from_value(seed_prompt)
+        seed_program = seed_bundle.serialize()
+
     config_dict: dict[str, Any] = {
         "problem_description": problem_description,
         "function_signature": "def prompt_artifact():",
-        "seed_program": seed_prompt,
+        "seed_program": seed_program,
         "score_fn": evaluator,
         "paradigm_models": resolved_paradigm,
         "mutation_models": resolved_mutation,
@@ -270,7 +282,7 @@ def _build_prompt_config(
         config_dict["inputs"] = inputs
 
     config_dict.update(kwargs)
-    return LeviConfig(**config_dict)
+    return LeviConfig(**config_dict), seed_bundle
 
 
 def evolve_code(
@@ -372,7 +384,7 @@ def evolve_prompts(
     problem_description: str,
     *,
     evaluator: Callable[..., dict],
-    seed_prompt: str | None = None,
+    seed_prompt: "str | dict[str, str] | PromptBundle | None" = None,
     inputs: list[Any] | None = None,
     model: ClientSpec | list[ClientSpec] | None = None,
     paradigm_model: ClientSpec | list[ClientSpec] | None = None,
@@ -384,8 +396,12 @@ def evolve_prompts(
     resume_snapshot: dict | None = None,
     **kwargs: Any,
 ) -> LeviResult:
-    """Run Levi evolutionary prompt optimization for a single prompt."""
-    config = _build_prompt_config(
+    """Run Levi evolutionary prompt optimization.
+
+    `seed_prompt` may be a raw string (single-prompt evolution, backward compatible),
+    a `dict[str, str]`, or a `PromptBundle` to evolve multiple named components.
+    """
+    config, seed_bundle = _build_prompt_config(
         problem_description=problem_description,
         seed_prompt=seed_prompt,
         evaluator=evaluator,
@@ -399,7 +415,8 @@ def evolve_prompts(
         target_score=target_score,
         **kwargs,
     )
-    return asyncio.run(_run_async(config, resume_snapshot=resume_snapshot, artifact_adapter=PromptAdapter(config)))
+    adapter = PromptAdapter(config, seed_bundle=seed_bundle)
+    return asyncio.run(_run_async(config, resume_snapshot=resume_snapshot, artifact_adapter=adapter))
 
 
 async def _evaluate_seed(
@@ -497,18 +514,18 @@ async def _run_async(
     executor = ResilientProcessPool(max_workers=config.pipeline.n_eval_processes)
 
     try:
-        # Evaluate seed program (if provided)
-        seed_result = await _evaluate_seed(config, executor, state, artifact_adapter) if config.seed_program else None
-
         # Resume from snapshot or run init
         init_cost = 0.0
         init_score_history = []
         if resume_snapshot is not None:
+            # Skip seed eval on resume — init phase is skipped and the
+            # archive already contains the seed (with its scores).
             init_cost = _restore_from_snapshot(pool, extractor, resume_snapshot, artifact_adapter=artifact_adapter)
             if artifact_adapter.artifact_type == "prompt":
                 _restore_proxy_benchmark_state(config, resume_snapshot)
             state.total_cost = coerce_finite_float(init_cost, default=0.0)
         else:
+            seed_result = await _evaluate_seed(config, executor, state, artifact_adapter) if config.seed_program else None
             logger.info("[Levi] Running init phase")
             diversifier = Diversifier(config, executor, artifact_adapter, state)
             init_cost, init_score_history = await diversifier.run(pool, config.seed_program, seed_result, extractor)

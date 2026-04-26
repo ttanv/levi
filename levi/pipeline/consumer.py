@@ -10,6 +10,7 @@ from ..clients.base import client_name, short_client_name
 from ..config import LeviConfig
 from ..core import EvaluationResult
 from ..pool import CVTMAPElitesPool
+from ..selection import ComponentSelector
 from ..utils import ResilientProcessPool, coerce_score
 from .state import BudgetLimitReached, PipelineState
 
@@ -78,6 +79,7 @@ async def eval_consumer(
     state: PipelineState,
     stop_event: asyncio.Event,
     snapshot_callback: Optional[Callable[[], None]] = None,
+    component_selector: Optional[ComponentSelector] = None,
 ) -> None:
     while not stop_event.is_set() or not code_queue.empty():
         try:
@@ -136,6 +138,8 @@ async def eval_consumer(
                 if "cascade_rejected" in result:
                     pool.update_sampler(item["sampler"], item["source_cell"], success=False)
                     state.record_reject()
+                    if component_selector is not None and item.get("target") is not None:
+                        component_selector.update(item["target"], accepted=False)
                     label = _model_label(item)
                     logger.info(
                         f"[Eval #{state.eval_count}] {label:30s} "
@@ -161,6 +165,9 @@ async def eval_consumer(
                         )
                         accepted, cell_index = pool.add(program, eval_result)
                         pool.update_sampler(item["sampler"], item["source_cell"], success=accepted)
+
+                        if component_selector is not None and item.get("target") is not None:
+                            component_selector.update(item["target"], accepted=accepted)
 
                         if accepted:
                             state.record_accept()
