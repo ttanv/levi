@@ -17,7 +17,7 @@ from ..pipeline import PipelineRunner
 from ..pipeline.state import PipelineState, coerce_finite_float
 from ..pool import CVTMAPElitesPool
 from ..prompts import PromptBundle
-from ..utils import ResilientProcessPool
+from ..utils import ResilientProcessPool, check_api_keys
 
 logger = logging.getLogger(__name__)
 
@@ -468,6 +468,8 @@ async def _run_async(
     artifact_adapter: ArtifactAdapter | None = None,
 ) -> LeviResult:
     """Internal async implementation."""
+    check_api_keys([*config.paradigm_models, *config.mutation_models])
+
     run_start_time = time.time()
     _setup_logging()
     state = PipelineState(config.budget, start_time=run_start_time)
