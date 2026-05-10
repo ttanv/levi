@@ -1,34 +1,45 @@
 # Examples
 
-Start with `examples/circle_packing/` if you are new to LEVI. It is the
-smallest end-to-end example in the repo.
+The examples are grouped by how much setup they need.
 
-## Circle Packing
+## Quickstart — one file, runs in minutes
 
-Self-contained optimization example with no external dataset:
+[`examples/quickstart/`](quickstart/) has three minimal single-file examples:
 
-- Setup: `uv sync`
-- Path: `examples/circle_packing/`
-- Run: `cd examples/circle_packing && uv run python run.py`
+| File                                                | What it evolves | Needs                                  |
+| --------------------------------------------------- | --------------- | -------------------------------------- |
+| [`quickstart_api.py`](quickstart/quickstart_api.py) | code            | `OPENAI_API_KEY` (or other provider)   |
+| [`quickstart_claude.py`](quickstart/quickstart_claude.py) | code       | `claude` CLI signed in                 |
+| [`quickstart_prompts.py`](quickstart/quickstart_prompts.py) | a prompt | `OPENAI_API_KEY`                       |
 
-The example assumes the local Qwen endpoint is `http://localhost:8000/v1`.
-If your local server uses a different port or you want a smaller budget, edit
-the `levi.LM(...)`, `paradigm_model`, `mutation_model`, or `budget_dollars`
-lines in `run.py`.
+Start here if you've never run LEVI before.
 
-## ADRS Examples
+## Circle Packing — non-toy single-file problem
 
-Additional ADRS benchmark examples live under:
+- Path: [`examples/circle_packing/`](circle_packing/)
+- Self-contained (no external dataset), n=26 circles in a unit square.
+- `run.py` defaults to OpenRouter + a local Qwen endpoint at `http://localhost:8000/v1`. Swap the `levi.LM(...)` for a hosted model id (e.g. `"openai/gpt-4o-mini"`) if you don't have a local server.
+- `run_claude.py` runs the same problem via the Claude Code CLI.
 
-- `examples/ADRS/`
+## ADRS — paper benchmarks
 
-Each example directory uses `run.py` as its entrypoint.
-Install the repo first with `uv sync`.
+[`examples/ADRS/`](ADRS/) contains the seven ADRS Leaderboard problems used in the LEVI paper. Each has a `run.py` configured for a small proposer model + a stronger paradigm-shift model.
 
 Suggested picks:
 
-- `examples/ADRS/prism/` or `examples/ADRS/llm_sql/` for a simpler ADRS-style run
-- `examples/ADRS/cant_be_late/` if you want to try `prompt_opt`
-- `examples/ADRS/cant_be_late_multi/` if you want the most feature-complete example with custom `init`, punctuated equilibrium, and `prompt_opt`
+- `ADRS/prism/` or `ADRS/llm_sql/` — simpler ADRS-style runs (no local server needed; `prism/` uses OpenRouter throughout).
+- `ADRS/cant_be_late/` — exercises the `prompt_opt` sub-feature.
+- `ADRS/cant_be_late_multi/` — full feature surface: custom `init`, punctuated equilibrium, `prompt_opt`.
 
-See `examples/ADRS/README.md` for ADRS-specific setup and dataset requirements.
+See [`ADRS/README.md`](ADRS/README.md) for ADRS-specific setup and dataset requirements.
+
+## Prompt-evolution benchmarks
+
+Larger, dataset-backed prompt-evolution setups — closer in shape to GEPA's experimental harness than the quickstart:
+
+- [`hotpotqa/`](hotpotqa/) — multi-hop QA (HuggingFace `hotpot_qa`).
+- [`hover/`](hover/) — multi-hop fact verification with BM25 retrieval.
+- [`pupa/`](pupa/) — privacy-preserving delegation (PAPILLON).
+- [`ifbench/`](ifbench/) — instruction-following benchmark.
+
+These pull HuggingFace datasets and assume an OpenRouter key for the proposer/judge models.

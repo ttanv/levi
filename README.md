@@ -14,7 +14,7 @@
 
 ---
 
-LEVI is an LLM-guided evolutionary framework for discovering algorithms, heuristics, and optimized code. Most frameworks in this space require expensive frontier models and large budgets to produce good results. LEVI doesn't — point it at a scoring function, set a dollar budget, and walk away.
+LEVI is an LLM-guided evolutionary framework for **code** and **prompts**. Point it at a scoring function and a budget — LEVI evolves the artifact for you, using API models, a local server, or your Claude Code / Codex CLI subscription.
 
 **$4.50 improves on what other frameworks need $15-30 and frontier models to achieve** across a [variety of problems](https://ucbskyadrs.github.io/), at a fraction of the cost.
 
@@ -40,33 +40,51 @@ cd levi
 uv sync
 ```
 
-A full LEVI program:
+Pick whichever path matches what you have access to — each is a single self-contained file under [`examples/quickstart/`](examples/quickstart/), runs in a couple of minutes, costs a few cents (or nothing on the CLI path):
+
+| You have…                             | Run                                            | Evolves   |
+| ------------------------------------- | ---------------------------------------------- | --------- |
+| an API key (OpenAI / Anthropic / …)   | `uv run python examples/quickstart/quickstart_api.py`     | code      |
+| a Claude Code / Codex CLI subscription | `uv run python examples/quickstart/quickstart_claude.py`  | code      |
+| an API key, and you want to tune prompts | `uv run python examples/quickstart/quickstart_prompts.py` | prompts   |
+
+Set `OPENAI_API_KEY` (or change `MODEL` at the top of the file to another [litellm provider](https://docs.litellm.ai/docs/providers) and set the matching key) before running the API quickstarts.
+
+A minimal LEVI program looks like this:
 
 ```python
+from collections import Counter
 import levi
 
-def score_fn(pack):
-    bins = pack([4, 8, 1, 4, 2, 1], 10)
-    wasted = sum(10 - sum(b) for b in bins)
-    return {"score": max(0.0, 100.0 - wasted)}
+def score_fn(pack, inputs):
+    scores = []
+    for items in inputs:
+        bins = pack(list(items), 10)
+        if any(sum(b) > 10 for b in bins) or Counter(x for b in bins for x in b) != Counter(items):
+            return {"score": 0.0}
+        scores.append(100.0 * sum(sum(b) for b in bins) / (len(bins) * 10))
+    return {"score": sum(scores) / len(scores)}
 
-result = levi.evolve_code(
-    "Optimize bin packing to minimize wasted space",
-    function_signature="def pack(items, bin_capacity):",
-    score_fn=score_fn,
-    model="openai/gpt-4o-mini",
-    budget_dollars=2.0,
-)
+if __name__ == "__main__":
+    result = levi.evolve_code(
+        "Pack items into bins of capacity 10, minimizing wasted space.",
+        function_signature="def pack(items: list[int], capacity: int) -> list[list[int]]:",
+        score_fn=score_fn,
+        inputs=[[4, 8, 1, 4, 2, 1], [9, 2, 3, 7, 8, 1, 4]],
+        model="openai/gpt-4o-mini",
+        budget_dollars=0.10,
+    )
+    print(result.best_score, result.best_program)
 ```
 
-Or start with `examples/circle_packing/run.py` — the simplest end-to-end example.
+The `if __name__ == "__main__":` guard matters — LEVI runs evaluations in subprocesses (`spawn` on macOS / Windows).
 
-## Suggested Starting Points
+## Going further
 
-- Start here: `examples/circle_packing/` for a self-contained local-first run.
-- First ADRS run: `examples/ADRS/prism/` or `examples/ADRS/llm_sql/` if you want to avoid cloning the ADRS dataset first.
-- Try `prompt_opt`: `examples/ADRS/cant_be_late/`
-- Try `init` + `prompt_opt` + punctuated equilibrium together: `examples/ADRS/cant_be_late_multi/`
+- `examples/quickstart/` — the three single-file starters above.
+- `examples/circle_packing/` — n=26 circle packing benchmark; the simplest non-toy problem.
+- `examples/ADRS/` — seven ADRS Leaderboard problems used in the paper. Most use a cheap proposer model via OpenRouter (or a local Qwen server) plus stronger paradigm-shift calls. See `examples/ADRS/README.md` for setup.
+- `examples/hotpotqa/`, `examples/hover/`, `examples/pupa/`, `examples/ifbench/` — prompt-evolution benchmarks comparing against GEPA.
 
 ## Results
 
