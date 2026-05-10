@@ -53,6 +53,76 @@ Optimize expert placement for MoE models. Map 64 logical experts to 288 physical
 
 ## Objective
 Maximize GPU load balancedness while keeping computation fast.
+
+## Common Pitfalls (CODE DEFENSIVELY — these all cause score=0)
+
+**1. Integer dtype on `weight`.** Input may be `int64`. Any `.mean()`,
+`.std()`, `torch.linalg.*`, `torch.matmul` on an int tensor raises
+`Expected a floating point or complex dtype`. **Always start with:**
+```python
+weight = weight.float()
+```
+
+**2. Output dtype must be `torch.int64`.** Returns must be index tensors:
+```python
+return phy2log.long(), log2phy.long(), logcnt.long()
+```
+Mixing in `.float()` or `.scatter_(...)` with a float source raises
+`result type Float can't be cast to the desired output type Long`.
+
+**3. Replica budget.** `logcnt.sum(dim=1)` must equal `num_replicas` (288),
+NOT `num_logical_experts` (64). One replica per logical expert is wrong.
+
+**4. No zero replicas.** Every logical expert needs `logcnt[layer, expert] >= 1`.
+
+**5. Index bounds.** Physical indices are `0..num_replicas-1`. NEVER index
+`logcnt` at `num_replicas` or use `range(num_replicas + 1)`.
+
+**6. No external libraries.** Only `torch` and Python stdlib. No `torch_sparse`,
+`scipy`, `sklearn`, `numpy`. Implement eigendecomposition, SVD, etc. using
+`torch` ops directly (or skip them entirely — most placement strategies
+don't need linear algebra).
+
+**7. No invented APIs.** `torch.shuffle` does NOT exist — use `torch.randperm(n)`.
+Verify any unusual `torch.foo` call exists in the docs.
+
+**8. Don't shadow `num_replicas`.** Reusing it as a loop variable breaks
+downstream code that reads the parameter.
+
+**9. Don't hardcode shapes.** Read dimensions from the input:
+`num_layers, num_logical_experts = weight.shape`. Don't assume `64` if the
+test uses a different size.
+
+## Required Output Construction
+A correct skeleton looks like this — adapt the assignment logic in the middle
+but keep the I/O construction:
+```python
+def rebalance_experts(weight, num_replicas, num_groups, num_nodes, num_gpus):
+    weight = weight.float()                          # MUST cast
+    num_layers, num_logical_experts = weight.shape
+
+    # ----- your placement strategy fills these two arrays -----
+    # phy2log[l, p] = which logical expert lives at physical slot p
+    phy2log = torch.zeros(num_layers, num_replicas, dtype=torch.int64)
+    # logcnt[l, e] = how many physical slots logical expert e occupies
+    logcnt  = torch.zeros(num_layers, num_logical_experts, dtype=torch.int64)
+    # (your algorithm here — must satisfy logcnt.sum(dim=1) == num_replicas
+    #  and logcnt > 0 everywhere)
+    # ----------------------------------------------------------
+
+    # log2phy is mechanically derivable from phy2log + logcnt:
+    max_replicas = int(logcnt.max().item())
+    log2phy = torch.full((num_layers, num_logical_experts, max_replicas),
+                         -1, dtype=torch.int64)
+    for l in range(num_layers):
+        next_slot = torch.zeros(num_logical_experts, dtype=torch.int64)
+        for p in range(num_replicas):
+            e = int(phy2log[l, p].item())
+            log2phy[l, e, next_slot[e]] = p
+            next_slot[e] += 1
+
+    return phy2log, log2phy, logcnt
+```
 """
 
 FUNCTION_SIGNATURE = """
@@ -284,26 +354,78 @@ def rebalance_experts(
     pass
 ```
 
-## You can import torch and standard library modules.
+## Available Imports
+You may import `torch` and Python standard library modules ONLY.
+Do NOT import `torch_sparse`, `scipy`, `sklearn`, `numpy`, etc. — they are
+unavailable and will fail with `ModuleNotFoundError`. Most placement
+strategies need NO linear algebra at all; favor simple sorting + counting.
 
-## Your Task: ALGORITHMIC DIVERSITY
+## Hard Constraints (violations = score 0)
+Every solution MUST:
+1. Start with `weight = weight.float()` (input may be int64).
+2. Read sizes from input: `num_layers, num_logical_experts = weight.shape`.
+   Do NOT hardcode `64` — accept any logical-expert count.
+3. Return `(phy2log, log2phy, logcnt)` all with `dtype=torch.int64`
+   (use `.long()`).
+4. `logcnt.sum(dim=1) == num_replicas` for every layer (288 total replicas,
+   NOT 64).
+5. `logcnt[l, e] >= 1` for every (layer, expert) — no zero replicas.
+6. Physical indices in `phy2log` and `log2phy` are in `[0, num_replicas - 1]`.
+7. Use only `torch` + stdlib. No `torch.shuffle` (use `torch.randperm`).
 
-Design a solution using a **FUNDAMENTALLY DIFFERENT ALGORITHM** than the existing seeds.
+## Your Task: STRATEGIC DIVERSITY (not algorithmic novelty)
 
-**DO NOT:**
-- Make minor variations or parameter tweaks
-- Use the same core algorithm with different constants
+Pick ONE of these strategic approaches and implement it CORRECTLY. A SIMPLE
+working solution is far more valuable than an EXOTIC broken one. Avoid
+spectral methods, eigendecomposition, custom power iteration, etc. — they
+are nearly always implemented incorrectly.
 
-**DO:**
-- Analyze what paradigm each existing seed uses
-- Design from first principles using a different strategy
-- Consider what information the existing seeds are NOT using
+**Strategy A — Greedy load balancing**
+Replicate experts in proportion to load: `replicas_e = round(load_e / mean * num_replicas / num_logical)`,
+clamp to >=1 and rescale so the sum equals `num_replicas`. Then assign
+physical slots round-robin or by largest-remainder.
+
+**Strategy B — Longest-processing-time (LPT) packing**
+Sort logical experts by load descending. For each, assign one replica to the
+GPU with the lowest current total load. Repeat until all `num_replicas`
+slots are filled.
+
+**Strategy C — Water-filling**
+Iteratively give one extra replica to the highest-load expert (in
+load-per-replica terms) until all `num_replicas` slots are used. Then pack
+across GPUs by lowest-current-load.
+
+**Strategy D — Two-stage: replicate then pack**
+Stage 1: decide how many replicas each logical expert gets (any monotone
+function of load). Stage 2: pack the resulting `num_replicas` physical
+experts into `num_gpus` groups via greedy LPT or first-fit-decreasing.
+
+**Strategy E — Random + local-improvement**
+Start with a uniform random replica count (rescaled to sum to `num_replicas`,
+floor>=1). Then apply N=200 swap moves: pick the heaviest GPU and the
+lightest, move one replica between them if it reduces max load.
+
+Pick ONE. Stay close to the strategy. Do NOT mix in spectral analysis,
+eigendecomposition, or other heavy machinery — they break.
 
 ## Existing Seeds:
 {existing_seeds}
 
+## Self-Check Before Submitting
+Mentally walk through your code with `weight.shape == (10, 64)`,
+`num_replicas == 288`, `num_gpus == 32`. Confirm:
+- [ ] `weight = weight.float()` is the first line of `rebalance_experts`
+- [ ] All three returned tensors have `dtype=torch.int64`
+- [ ] `logcnt.sum(dim=1)` equals 288 for every layer
+- [ ] No `logcnt` value is 0
+- [ ] No `for ... in range(num_replicas + 1)` and no shadowing of
+      `num_replicas`
+- [ ] No imports beyond `torch` + stdlib
+- [ ] No invented APIs (search docs if unsure)
+
 ## Output
-Output ONLY the complete Python code in a ```python block.
+Output ONLY the complete Python code in a ```python block. The function MUST
+be runnable end-to-end without modification.
 """
 
 META_ADVISOR_PROMPT = """You are a lessons-learned advisor for an evolutionary code optimization system.
