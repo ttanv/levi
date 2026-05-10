@@ -26,10 +26,9 @@ Cheap models handle the bulk of mutation work. A behavioral archive keeps struct
 
 
 <p align="center">
-  <img src="assets/plots/txn_scheduling.png" width="49%" />
-  <img src="assets/plots/cant_be_late.png" width="49%" />
+  <img src="assets/plots/figure_front_page.png" width="100%" alt="LEVI vs baselines on code and prompt optimization" />
 </p>
-<p align="center"><em>LEVI converges faster and scores higher than baselines on controlled equal-budget comparisons (same model, 750 evals).</em></p>
+<p align="center"><em>LEVI on code optimization (left, transaction scheduling — exceeds every baseline's final score within ~50 evaluations) and prompt optimization (right, HotpotQA with Qwen3-8B — outperforms GEPA at less than half the rollouts).</em></p>
 
 ## Quickstart
 
