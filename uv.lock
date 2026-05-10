@@ -951,6 +951,13 @@ examples = [
     { name = "torch" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "matplotlib" },
+    { name = "scikit-learn" },
+    { name = "scipy" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "bm25s", marker = "extra == 'example-hover'", specifier = ">=0.3.6" },
@@ -993,6 +1000,13 @@ requires-dist = [
     { name = "torch", marker = "extra == 'examples'", specifier = ">=2.9.1" },
 ]
 provides-extras = ["dev", "example-eplb", "example-llm-sql", "example-viz", "example-cloudcast", "example-ifbench", "examples", "example-hover"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "matplotlib", specifier = ">=3.10.8" },
+    { name = "scikit-learn", specifier = ">=1.8.0" },
+    { name = "scipy", specifier = ">=1.16.3" },
+]
 
 [[package]]
 name = "litellm"

@@ -88,3 +88,10 @@ ignore = ["UP045", "E501"]
 
 [tool.ruff.format]
 quote-style = "double"
+
+[dependency-groups]
+dev = [
+    "matplotlib>=3.10.8",
+    "scikit-learn>=1.8.0",
+    "scipy>=1.16.3",
+]
